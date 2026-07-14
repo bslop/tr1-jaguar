@@ -1,0 +1,115 @@
+; gpu_spanfill.gas - Tom drains a 68k-built span list, drives the Blitter.
+;
+; The 68k transforms/edge-walks and APPENDS precomputed span records to
+; a DRAM list; this kernel programs the Blitter for each span from SRAM
+; (fast register access, no 68k MMIO wait-states or spin). Same Blitter
+; usage as blit.c's blit_span, so pixels are identical.
+;
+; params $F03F00: [0]=span list ptr, [1]=mailbox, [2]=span count,
+;                 [3]=framebuffer base.
+; span record (3 longs, precomputed by the 68k):
+;   [0] A1_PIXEL = (y<<16)|x0
+;   [1] B_SRCD   = (color<<16)|color
+;   [2] B_COUNT  = (1<<16)|n     (n = x1-x0+1)
+; Hazards: 2 nops after load; forward branch via movei+jump (no fwd jr).
+
+PARAMS      .equ    $F03F00
+MAGIC_HELLO .equ    $0A3D0001
+MAGIC_DONE  .equ    $0A3DD05E
+
+A1_BASE  .equ $F02200
+A1_FLAGS .equ $F02204
+A1_PIXEL .equ $F0220C
+B_CMD    .equ $F02238
+B_COUNT  .equ $F0223C
+B_SRCD   .equ $F02240
+B_SRCD1  .equ $F02244
+
+A1F_VAL   .equ $00014220     ; PIX16 | WID320 | XADDPIX  (== blit.c flags)
+BCMD_SPAN .equ $01800000     ; LFU = source (B_SRCD)
+
+	.gpu
+	.org	$F03000
+
+start:
+	movei	#PARAMS,r1
+	nop
+	load	(r1),r4			; r4 = span list ptr
+	addq	#4,r1
+	load	(r1),r30		; r30 = mailbox
+	addq	#4,r1
+	nop
+	load	(r1),r5			; r5 = span count
+	addq	#4,r1
+	load	(r1),r6			; r6 = framebuffer base
+	nop
+	nop
+
+	; A1_BASE = fb, A1_FLAGS = A1F_VAL (set once)
+	movei	#A1_BASE,r7
+	store	r6,(r7)
+	movei	#A1_FLAGS,r7
+	movei	#A1F_VAL,r8
+	store	r8,(r7)
+
+	; mailbox[1] = hello
+	movei	#MAGIC_HELLO,r0
+	move	r30,r1
+	addq	#4,r1
+	store	r0,(r1)
+
+	; cache Blitter register addresses + command
+	movei	#A1_PIXEL,r20
+	movei	#B_SRCD,r21
+	movei	#B_SRCD1,r25
+	movei	#B_COUNT,r22
+	movei	#B_CMD,r23
+	movei	#BCMD_SPAN,r24
+	movei	#done,r19		; forward-branch target (movei resolves)
+	movei	#.loop,r18		; loop-back target (out of jr range)
+
+.loop:
+	cmpq	#0,r5
+	jump	EQ,(r19)		; count exhausted -> done (no forward jr)
+	nop
+	nop
+
+.wait:
+	load	(r23),r9		; B_CMD status
+	nop
+	nop
+	btst	#0,r9			; bit0 = idle
+	jr	EQ,.wait		; clear => busy => wait (backward jr ok)
+	nop
+	nop
+
+	load	(r4),r10		; A1_PIXEL value
+	addq	#4,r4
+	load	(r4),r11		; B_SRCD value
+	addq	#4,r4
+	load	(r4),r12		; B_COUNT value
+	addq	#4,r4
+	nop
+	nop
+
+	store	r10,(r20)		; A1_PIXEL
+	store	r11,(r21)		; B_SRCD
+	store	r11,(r25)		; B_SRCD1
+	store	r12,(r22)		; B_COUNT
+	store	r24,(r23)		; B_CMD -> start blit
+
+	subq	#1,r5
+	jump	T,(r18)			; back to .loop (beyond jr range)
+	nop
+	nop
+
+done:
+	movei	#MAGIC_DONE,r0
+	store	r0,(r30)
+	nop
+	nop
+.halt:
+	nop
+	jr	T,.halt
+	nop
+	nop

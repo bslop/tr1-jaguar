@@ -1,0 +1,45 @@
+# ── Copyrighted game data: NEVER committed ─────────────────────────────
+# All extracted/derived Tomb Raider assets are build products generated
+# from the user's own disc image (see README). Keep every byte of them
+# out of the repository.
+assets
+assets/
+*.bin
+*.cof
+*.rom
+MUSIC.PCM
+OPENLARA.COF
+
+# generated headers (emitted by tools/ from the game data)
+mrt.h
+mrt_lara.h
+mrt_spawn.h
+gym.h
+gym_lara.h
+gym_spawn.h
+sfx.h
+pass.h
+photo.h
+room0_tex.h
+textures.h
+
+# ── Build products ─────────────────────────────────────────────────────
+build/
+
+# ── Development attic (WIP/backup variants kept locally, not in git) ───
+*_pre*.c
+*_pre*.das
+*_pre*.gas
+*_WIP*.gas
+*_BROKEN*.gas
+*_dietonly.gas
+*_surgeries.gas
+*_halfA.gas
+*.bak
+__pycache__/
+*.pyc
+
+# converter output (SD-card payload)
+GameDrive_SD/
+TombRaider-Jaguar/
+music_variants/

@@ -1,0 +1,1935 @@
+; gpu_geotex.gas - Tom GPU reads TEXTURED room geometry from DRAM, transforms /
+; projects / culls every face ON TOM (the 68000 does NO per-vertex work), and
+; BLITTER-hardware-texture-maps the spans.  This is the doctrine-pure textured
+; endpoint: it COMBINES two HW-verified kernels, reusing their proven code:
+;
+;   * gpu_geomdirect.gas  -> the per-polygon TRANSFORM + PROJECT + NEAR-CULL +
+;                            screen-area BACKFACE-CULL front-end (render_pkt's
+;                            vloop + backface test), plus stage_vert's RVert
+;                            lookup and the shared chain_step / imul32.
+;   * gpu_bltex.gas       -> the two-chain edge-walk that carries (u,v) as a
+;                            16.16 DDA per chain (uv_edge), and the per-span
+;                            BLITTER textured fill (A1 = fractional texture
+;                            sampler, A2 = fb dest, DSTA2).  BYTE-IDENTICAL to
+;                            gpu_bltex - the proven textured span.
+;
+; HOW THE PIECES FUSE
+;   read geometry (verts + per-face UVs from DRAM)
+;     -> stage each face's verts as WORLD (x+offX<<8, y, z+offZ<<8) into WBUF
+;        AND copy the face's per-vertex (u,v) UNCHANGED into U_BUF/V_BUF
+;     -> render_pkt: TRANSFORM+PROJECT each world vert to screen (sx,sy) in
+;        SX_BUF/SY_BUF, near-cull, backface-cull   [gpu_geomdirect]
+;     -> edge-walk interpolating BOTH x (chain_step) AND (u,v) (uv_edge) down
+;        the two chains, then per span program the Blitter texture-map [gpu_bltex]
+;
+;   >>> UVs ARE NEVER TRANSFORMED. <<<  They come straight from the geometry
+;   (atlas texel units), land in U_BUF/V_BUF as the (u,v) for that SCREEN vertex,
+;   and flow verbatim through uv_edge -> the per-span du/dv -> A1_PIXEL/FPIXEL/
+;   INC/FINC.  render_pkt only touches SX_BUF/SY_BUF; U_BUF/V_BUF survive it.
+;
+; ===================================================================
+; INPUT GEOMETRY: room0_tex.bin  (single room, BIG-ENDIAN; see room0_tex.h)
+; ===================================================================
+;   HEADER (16 bytes):
+;     +0  u16 vcount   +2  u16 qcount  +4  u16 tcount
+;     +6  u16 atlasW   +8  u16 atlasH
+;     +10 s16 offX     +12 s16 offY(0) +14 s16 offZ   (offX/offZ PACKED >>8)
+;   VERTS  (vcount*8):  +0 s16 x, +2 s16 y, +4 s16 z, +6 u16 shade(IGNORED)
+;   QUADS  (qcount*24): +0 u16 v0,v1,v2,v3  then +8 u16 u0,v0,u1,v1,u2,v2,u3,v3
+;   TRIS   (tcount*18): +0 u16 v0,v1,v2     then +6 u16 u0,v0,u1,v1,u2,v2
+;   World vertex = (x + (offX<<8), y, z + (offZ<<8)).   offY=0 -> no Y offset.
+;   UVs are already per-vertex, in atlas texel units (0..atlasW-1 / 0..atlasH-1);
+;   passed straight to the edge-walk as the (u,v) for that screen vertex.
+;   NB: quad/tri record size = 2*n (indices) + 4*n (uv pairs) = 6*n bytes
+;       (quad=24, tri=18).  All fields are 2-byte -> read with LOADW.
+;
+; ===================================================================
+; PARAM BLOCK  (68000 side, $F03F00, big-endian, 7 longs)
+; ===================================================================
+;   [0] = room0_tex base ptr  (DRAM; the kernel reads vcount/qcount/tcount/
+;                              offX/offZ from the blob's own 16-byte header)
+;   [1] = mailbox    (DRAM: [0]=done magic, [1]=hello magic)
+;   [2] = UNUSED     (counts live in the room0_tex header, not here)
+;   [3] = framebuffer base   (8bpp indexed, 320 wide, PHRASE-aligned)
+;   [4] = camera-block ptr   (7 s32: cY4,sY4,cP4,sP4,camx,camy,camz)
+;   [5] = atlas base         (8bpp indexed texel atlas, PHRASE-aligned)
+;   [6] = atlas_width        (raw texel stride; encoded into the A1 WID flag
+;                             here - MUST be a Blitter-encodable width, 256 ideal)
+;   mailbox (DRAM): [0]=done magic $0A3DD05E, [1]=hello magic $0A3D0001.
+;
+; DESIGN CHOICE - READ VERTS PER-FACE (not buffer all).
+;   vcount can be up to 311 (room 0); buffering all transformed screen verts
+;   would need >2.4KB of the 256-byte scratch band.  Instead, like gpu_geomdirect,
+;   each face STAGES its 3-4 world verts into WBUF and render_pkt transforms just
+;   those (SX/SY/U/V stay at 4 entries).  Shared verts are re-transformed per
+;   face - the doctrine-simple, scratch-cheap, proven path.
+;
+; ===================================================================
+; SRAM MAP  (code $F03000.., scratch band $F03E00.., params $F03F00)
+;   packed so all borrowed code stays VERBATIM (buffers are referenced by
+;   symbol, so tightening the .equ addresses touches no instruction).
+; ===================================================================
+;   SX_BUF  $F03E00  4 longs  screen x (int)      ] render_pkt writes these;
+;   SY_BUF  $F03E10  4 longs  screen y (int)      ] edge-walk reads them
+;   U_BUF   $F03E20  4 longs  per-vertex u (int)  ] staging writes these,
+;   V_BUF   $F03E30  4 longs  per-vertex v (int)  ] uv_edge reads them
+;   AU..AVSL $F03E40 4 longs  chain A u/v DDA  (AU,AUSL,AV,AVSL 16.16)
+;   BU..BVSL $F03E50 4 longs  chain B u/v DDA  (BU,BUSL,BV,BVSL 16.16)
+;   WBUF    $F03E60  13 longs staged packet: hdr(n<<16) + 4*3 world s32
+;   CAM_BUF $F03E98  7 longs  cY4,sY4,cP4,sP4,camx,camy,camz
+;   RVBASE  $F03EB4  verts base ptr   (= room + 16)
+;   QBASE   $F03EB8  quads base ptr   (= RVBASE + vcount*8)
+;   TBASE   $F03EBC  tris  base ptr   (= QBASE + qcount*24)
+;   QCNT    $F03EC0  quad count       TCNT $F03EC4 tri count
+;   OFFXW   $F03EC8  offX<<8 (s32)    OFFZW $F03ECC offZ<<8 (s32)
+;   FACE_LEFT $F03ED0  faces remaining in current quad/tri phase
+;   FACE_CUR  $F03ED4  DRAM cursor into current quad/tri table
+;   FACE_N    $F03ED8  vertices this phase (4 quads / 3 tris)
+;   RET_PHASE $F03EE0  where to go when a phase's FACE_LEFT hits 0
+;   (highest byte used $F03EE3 < $F03F00 params.  Code must end < $F03E00.)
+;
+; ===================================================================
+; DIV MODES (G_DIVCTRL, scoreboarded div; toggled exactly as the sources do)
+;   * transform PROJECTION divides (sx=rx*FOCAL/rz2, sy=ry*FOCAL_Y/rz2):
+;       INTEGER mode (=0), signed-numerator abs/neg dance   [gpu_geomdirect]
+;   * edge-slope divides (chain_step x-slope, uv_edge u/v-slope):
+;       16.16 mode (=1)                                     [both kernels]
+;   * per-span du/dv gradient (uR-uL)/denom, (vR-vL)/denom:
+;       INTEGER mode (=0) then RESTORED to 16.16            [gpu_bltex verbatim]
+;
+; ===================================================================
+; BLITTER TEXTURE PROGRAM  == gpu_bltex, BYTE-IDENTICAL (the proven part):
+;   A1 = TEXTURE source, XADDINC (fractional affine sampler; A1_PIXEL=(v<<16)|u,
+;        A1_FPIXEL fraction, A1_INC=(dv_int<<16)|du_int, A1_FINC fraction).
+;   A2 = SCREEN dest, XADDPIX (+1 dest pixel/step).
+;   B_CMD = SRCEN|LFU_REPLACE|DSTA2 = $01800801  (DSTA2 -> A2 written, A1 read).
+;   atlas_width -> A1 WID field encoded at startup (e=floor(log2 w); m=(w>>(e-2))
+;   &3; field=((e<<2)|m)<<9).  No SRCSHADE/GOURD: they would corrupt an 8bpp
+;   palette INDEX.  Both A1 U and V step & carry per dest pixel -> full affine.
+;
+; ===================================================================
+; HAZARD DISCIPLINE (identical to both sources): assembled at true SRAM origin
+;   so `movei #label` resolves; >=2 instrs after a load before using it; 2 nops
+;   after MULT before reading the product (imul32); DIV scoreboarded (result not
+;   read until ready); only MI/PL/EQ/NE/T/CS conditions; forward/long branches
+;   via movei #label,rN ; jump cc,(rN) ; nop ; nop.  Backward jr only for halt.
+;   Blitter regs are LONG (32-bit) accesses.
+; ===================================================================
+
+G_DIVCTRL	.equ	$F0211C
+
+; Blitter registers (JAGUAR.INC, base $F02200) - same set gpu_bltex uses
+A1_BASE		.equ	$F02200
+A1_FLAGS	.equ	$F02204
+A1_PIXEL	.equ	$F0220C
+A1_FPIXEL	.equ	$F02218
+A1_INC		.equ	$F0221C
+A1_FINC		.equ	$F02220
+A2_BASE		.equ	$F02224
+A2_FLAGS	.equ	$F02228
+A2_PIXEL	.equ	$F02230
+B_CMD		.equ	$F02238
+B_COUNT		.equ	$F0223C
+
+; A1/A2 flag pieces (gpu_bltex verbatim)
+A1_FIXED	.equ	$00030018	; PIXEL8 | XADDINC (WID OR'd in at startup)
+A2_FLAGS_VAL	.equ	$00014218	; PITCH1|PIXEL8|WID320|XADDPIX
+BCMD_TEX	.equ	$01800801	; SRCEN|LFU_REPLACE|DSTA2
+BLIT_GUARD	.equ	200000		; bounded wait-for-idle spins
+
+MAGIC_HELLO	.equ	$0A3D0001
+MAGIC_DONE	.equ	$0A3DD05E
+
+; projection constants (LOWRES-aware, exactly like gpu_geomdirect).  X never
+; scaled; the OP hardware scaler stretches a 320x120 fb 2x vertically in LOWRES,
+; so only CENTER_Y/FOCAL_Y/YMAX change.  rmac has no .ifdef -> LOWRES is ALWAYS
+; passed as 0 or 1 (Makefile LOWRES_DEF := -dLOWRES=0/1).
+	.if	LOWRES
+RENDER_H	.equ	120
+CENTER_Y	.equ	60		; RENDER_H/2
+FOCAL_Y		.equ	95		; FOCAL/2 (vertical axis compressed 2x)
+	.else
+RENDER_H	.equ	240
+CENTER_Y	.equ	120
+FOCAL_Y		.equ	190		; = FOCAL (no vertical scaling)
+	.endif
+YMAX		.equ	(RENDER_H-1)	; edge-walk bottom clamp
+CENTER_X	.equ	160
+FOCAL		.equ	190		; TR1's ~80-degree FOV (160 was 90:
+					; too wide -> world read as too far)
+NEAR		.equ	64		; raised 32->64: shrinks the near-face SMEAR
+					; zone (must match dsp_pose RX_NEAR + main.c)
+
+; SRAM layout (packed; see header comment)
+PARAMS		.equ	$F03F00
+SX_BUF		.equ	$F03E00
+SY_BUF		.equ	$F03E10
+U_BUF		.equ	$F03E20
+V_BUF		.equ	$F03E30
+; chain A u/v DDA state
+AU		.equ	$F03E40
+AUSL		.equ	$F03E44
+AV		.equ	$F03E48
+AVSL		.equ	$F03E4C
+; chain B u/v DDA state
+BU		.equ	$F03E50
+BUSL		.equ	$F03E54
+BV		.equ	$F03E58
+BVSL		.equ	$F03E5C
+; staged world packet + camera + iterator state
+WBUF		.equ	$F03E60		; hdr + 4*3 world = 13 longs
+CAM_BUF		.equ	$F03E98		; 7 longs
+RVBASE		.equ	$F03EB4
+QBASE		.equ	$F03EB8
+TBASE		.equ	$F03EBC
+QCNT		.equ	$F03EC0
+TCNT		.equ	$F03EC4
+OFFXW		.equ	$F03EC8
+OFFZW		.equ	$F03ECC
+FACE_LEFT	.equ	$F03ED0
+FACE_CUR	.equ	$F03ED4
+FACE_N		.equ	$F03ED8
+RET_PHASE	.equ	$F03EE0
+; per-poly cached affine gradient (du/dv identical on every scanline of an
+; affine poly -> compute on the first wide span, reuse for the rest)
+GRDF		.equ	$F03EE4		; 1 = GDU/GDV valid for this poly
+GDU		.equ	$F03EE8
+GDV		.equ	$F03EEC
+RUNC		.equ	$F03F40		; scanline-run countdown (rows to next
+					; chain event; chains checked per RUN)
+BEHINDF		.equ	$F03F48		; any-staged-vert-behind flag (per face)
+VCACHE_PRM	.equ	$F03F08		; params[2] = vertex-cache DRAM base
+RSAVE		.equ	$F03F4C		; r15 (byend) stash during span section
+; PORTAL-WINDOW CLIP RECT (68k-written before each kick; full screen when
+; unused). Spans clamp to [CLIPX0..CLIPX1], faces to [CLIPY0..CLIPY1].
+; SINGLE-DISPATCH room list (params[7]): count, then per room
+; {room_ptr, (clipx0<<16)|clipx1, (clipy0<<16)|clipy1}. One kick renders
+; them all -> one 68k sync instead of one per room.
+DISPCUR		.equ	$F03F60
+DISPCNT		.equ	$F03F64
+LISTMODE	.equ	$F03F68
+VCDEF		.equ	$F03F6C		; params[2] default vertex-cache base
+VCPTR		.equ	$F03F70		; this room's cache (0 = self-transform);
+					; JERRY-filled caches carry a flag at -4
+CLIPX0		.equ	$F03F50
+CLIPX1		.equ	$F03F54
+CLIPY0		.equ	$F03F58
+CLIPY1		.equ	$F03F5C
+; VC-timebase section profiling (halflines, ~31.8us each; 68k reads + clears)
+TS0V		.equ	$F03EF0		; VC at section start
+TACC_X		.equ	$F03EF4		; accumulated transform/setup halflines
+TACC_R		.equ	$F03EF8		; accumulated raster (yloop) halflines
+NSCAN		.equ	$F03EFC		; scanline (yloop iteration) counter
+VC_REG		.equ	$F00006
+
+	.gpu
+	.org	$F03000
+
+start:
+	movei	#PARAMS,r1
+	nop
+	load	(r1),r4			; [0] room0_tex base ptr
+	addq	#4,r1
+	load	(r1),r30		; [1] mailbox
+	addq	#4,r1
+	; LISTMODE must be 0 BEFORE the self-test guard can jump to done: the
+	; boot self-test reads it there UNINITIALIZED and a garbage value walked
+	; the dispatch loop into a garbage room pointer (GPU bus-wedge at boot)
+	movei	#LISTMODE,r0
+	moveq	#0,r2
+	store	r2,(r0)
+	; --- self-test guard ---------------------------------------------------
+	; gpu_init() self-tests EVERY kernel via gpu_spanfill(G_SRAM,0,..), which
+	; passes params[0]=$F03000 (this GPU's own SRAM) as the "room".  That is
+	; never a real room0_tex pointer (room data lives in ROM/DRAM), so parsing
+	; it would read the kernel's own code as a garbage 16k-face header and
+	; wedge the self-test -> gpu_ok=0 -> the real kick never fires -> black.
+	; Detect the sentinel and round-trip immediately (r30 = mailbox is set).
+	movei	#$F03000,r0
+	cmp	r0,r4			; room - G_SRAM
+	movei	#done,r22
+	jump	EQ,(r22)		; room == $F03000 -> self-test, just report done
+	nop
+	nop
+	; -----------------------------------------------------------------------
+	; (waitstate benchmark DELETED - banked: ~1.3 cyc/instr)
+bench_done:
+	addq	#4,r1			; skip [2] unused -> at [3]
+	load	(r1),r0			; [3] framebuffer base (8bpp)
+	addq	#4,r1
+	nop
+	nop
+	movei	#A2_BASE,r2		; A2_BASE = framebuffer (dest)
+	store	r0,(r2)
+	load	(r1),r7			; [4] camera-block ptr
+	addq	#4,r1			; -> [5]
+	nop
+	nop
+	; copy 7 camera longs into CAM_BUF (r7 = source cursor)
+	movei	#CAM_BUF,r2
+	moveq	#7,r3
+cam_cpy:
+	load	(r7),r8
+	addq	#4,r7
+	nop
+	nop
+	store	r8,(r2)
+	addq	#4,r2
+	subq	#1,r3
+	movei	#cam_cpy,r22
+	jump	NE,(r22)
+	nop
+	nop
+	load	(r1),r8			; [5] atlas base
+	addq	#4,r1			; -> [6]
+	nop
+	nop
+	movei	#A1_BASE,r2		; A1_BASE = atlas (texture source)
+	store	r8,(r2)
+	load	(r1),r0			; [6] atlas_width
+	nop
+	nop
+
+;---------------------------------------------------------------------
+; Encode atlas_width (r0) into the A1 WID flag (gpu_bltex verbatim).
+;   e = floor(log2 w); m = (w >> (e-2)) & 3; field = ((e<<2)|m) << 9.
+;---------------------------------------------------------------------
+	moveq	#1,r3			; const 1
+	move	r0,r1			; t = w
+	moveq	#0,r2			; e = 0
+wid_e:
+	cmp	r3,r1			; t - 1
+	movei	#wid_e_done,r22
+	jump	EQ,(r22)		; t == 1 -> e = floor(log2 w)
+	nop
+	nop
+	jump	MI,(r22)		; t == 0 guard
+	nop
+	nop
+	shrq	#1,r1
+	addq	#1,r2			; e++
+	movei	#wid_e,r22
+	jump	T,(r22)
+	nop
+	nop
+wid_e_done:
+	move	r2,r8			; e
+	subq	#2,r8			; e - 2
+	move	r0,r9			; w
+wid_m:
+	cmpq	#0,r8
+	movei	#wid_m_done,r22
+	jump	EQ,(r22)
+	nop
+	nop
+	jump	MI,(r22)		; guard e < 2
+	nop
+	nop
+	shrq	#1,r9
+	subq	#1,r8
+	movei	#wid_m,r22
+	jump	T,(r22)
+	nop
+	nop
+wid_m_done:
+	moveq	#3,r3
+	and	r3,r9			; m = (w>>(e-2)) & 3
+	shlq	#2,r2			; e << 2
+	or	r9,r2			; (e<<2) | m
+	shlq	#9,r2			; << 9 -> WID field (bits 9-14)
+	movei	#A1_FIXED,r3		; PIXEL8 | XADDINC
+	or	r3,r2			; A1_FLAGS = PIXEL8|WID|XADDINC
+	movei	#A1_FLAGS,r1
+	store	r2,(r1)
+	movei	#A2_FLAGS_VAL,r2
+	movei	#A2_FLAGS,r1
+	store	r2,(r1)			; A2_FLAGS = PITCH1|PIXEL8|WID320|XADDPIX
+
+;---------------------------------------------------------------------
+; SINGLE-DISPATCH init: params[7] = room list (0 = legacy single room)
+;---------------------------------------------------------------------
+	movei	#PARAMS,r1
+	movei	#28,r0
+	add	r0,r1
+	load	(r1),r0			; list ptr
+	movei	#LISTMODE,r1
+	moveq	#0,r2
+	store	r2,(r1)			; default legacy
+	movei	#VCPTR,r1
+	store	r2,(r1)			; legacy: self-transform
+	; stash the default cache base (params[2]) for self-transform rooms
+	movei	#VCACHE_PRM,r1
+	load	(r1),r2
+	movei	#VCDEF,r1
+	nop
+	store	r2,(r1)
+	cmpq	#0,r0
+	movei	#hdr_parse,r22
+	jump	EQ,(r22)		; no list -> legacy single-room path
+	nop
+	nop
+	moveq	#1,r2
+	movei	#LISTMODE,r1		; (r1 drifted to VCDEF via the stash inserts:
+					;  storing 1 into VCDEF bus-wedged every
+					;  list-mode kick -- reload the address!)
+	store	r2,(r1)			; LISTMODE = 1
+	load	(r0),r2			; count
+	addq	#4,r0
+	movei	#DISPCUR,r1
+	store	r0,(r1)
+	movei	#DISPCNT,r1
+	store	r2,(r1)
+room_next:
+	movei	#DISPCNT,r1
+	load	(r1),r2
+	nop
+	nop
+	cmpq	#0,r2
+	movei	#alldone,r22
+	jump	EQ,(r22)		; list exhausted
+	nop
+	nop
+	subq	#1,r2
+	store	r2,(r1)
+	movei	#DISPCUR,r1
+	load	(r1),r0
+	nop
+	nop
+	load	(r0),r4			; room ptr
+	addq	#4,r0
+	load	(r0),r2			; packed clip x
+	addq	#4,r0
+	load	(r0),r3			; packed clip y
+	addq	#4,r0
+	load	(r0),r21		; cache ptr (0 = self-transform)
+	addq	#4,r0
+	store	r0,(r1)			; advance cursor (r1 = DISPCUR)
+	movei	#VCPTR,r1
+	store	r21,(r1)
+	move	r2,r5
+	shrq	#16,r5
+	movei	#CLIPX0,r1
+	store	r5,(r1)
+	movei	#$FFFF,r5
+	and	r5,r2
+	movei	#CLIPX1,r1
+	store	r2,(r1)
+	move	r3,r5
+	shrq	#16,r5
+	movei	#CLIPY0,r1
+	store	r5,(r1)
+	movei	#$FFFF,r5
+	and	r5,r3
+	movei	#CLIPY1,r1
+	store	r3,(r1)
+hdr_parse:
+;---------------------------------------------------------------------
+; Parse the room0_tex 16-byte header (r4 = room base) into iterator state.
+;   VERTS base = room+16 ; QUADS base = +vcount*8 ; TRIS base = +qcount*24.
+;   offX/offZ are s16 (sign-extend) then <<8 (PACKED >>8 world units).
+;---------------------------------------------------------------------
+	move	r4,r6			; header cursor
+	loadw	(r6),r5			; vcount @ +0
+	addq	#2,r6
+	loadw	(r6),r7			; qcount @ +2
+	addq	#2,r6
+	loadw	(r6),r8			; tcount @ +4
+	addq	#6,r6			; skip atlasW(+6),atlasH(+8) -> +10
+	loadw	(r6),r9			; offX @ +10 (s16)
+	addq	#4,r6			; skip offY(+12) -> +14
+	loadw	(r6),r10		; offZ @ +14 (s16)
+	nop
+	nop
+	; VERTS base = room + 16
+	move	r4,r0
+	addq	#16,r0			; r0 = RVBASE
+	; QUADS base = RVBASE + vcount*8
+	move	r5,r1
+	shlq	#3,r1			; vcount*8
+	move	r0,r2
+	add	r1,r2			; r2 = QBASE
+	; TRIS base = QBASE + qcount*24  (24 = q*16 + q*8)
+	move	r7,r3
+	shlq	#4,r3			; q*16
+	move	r7,r12
+	shlq	#3,r12			; q*8
+	add	r12,r3			; q*24
+	move	r2,r13
+	add	r3,r13			; r13 = TBASE
+	; offX<<8 (sign-correct), offZ<<8
+	shlq	#16,r9
+	sharq	#16,r9			; sign-extend offX
+	shlq	#8,r9			; offX<<8
+	shlq	#16,r10
+	sharq	#16,r10			; sign-extend offZ
+	shlq	#8,r10			; offZ<<8
+	; store iterator state
+	movei	#RVBASE,r14
+	store	r0,(r14)
+	movei	#QBASE,r14
+	store	r2,(r14)
+	movei	#TBASE,r14
+	store	r13,(r14)
+	movei	#QCNT,r14
+	store	r7,(r14)
+	movei	#TCNT,r14
+	store	r8,(r14)
+	movei	#OFFXW,r14
+	store	r9,(r14)
+	movei	#OFFZW,r14
+	store	r10,(r14)
+
+	; mailbox[1] = hello
+	movei	#MAGIC_HELLO,r0
+	move	r30,r1
+	addq	#4,r1
+	store	r0,(r1)
+
+	; ============ PER-ROOM VERTEX TRANSFORM CACHE (pre-pass) ============
+	; JERRY CO-TRANSFORM gate: VCPTR != 0 -> Jerry owns this room's cache.
+	; Poll its done-flag (cacheptr-4 == 2) with a bounded guard; on success
+	; point VCACHE_PRM at Jerry's cache and SKIP the whole pre-pass. Guard
+	; exhausted -> fall through to self-transform (never hangs, only slows).
+	movei	#VCPTR,r0
+	load	(r0),r18
+	nop
+	nop
+	cmpq	#0,r18
+	movei	#vc_self,r22
+	jump	EQ,(r22)		; self-transform room
+	nop
+	nop
+	move	r18,r1
+	subq	#4,r1			; flag address
+	movei	#5000,r2		; poll guard: ~3ms cap — self-transform
+					; costs about that, so never wait longer
+					; (2M guard pinned Tom for 100s of ms at
+					; full-level scale while STARVING Jerry)
+vc_jwait:
+	load	(r1),r0
+	; register-free backoff (r3 was NOT free here — the counter loop
+	; clobbered live state -> stale-looking geometry on polled rooms)
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	subq	#1,r2
+	cmpq	#2,r0
+	jr	EQ,vc_jok		; Jerry done -> use his cache
+	nop
+	cmpq	#0,r2
+	jr	NE,vc_jwait
+	nop
+	movei	#vc_self,r22		; guard exhausted -> self-transform
+	jump	T,(r22)
+	nop
+	nop
+vc_jok:
+	movei	#VCACHE_PRM,r0
+	store	r18,(r0)		; faces read Jerry's cache
+	movei	#vc_done,r22
+	jump	T,(r22)			; skip the whole pre-pass
+	nop
+	nop
+vc_self:
+	movei	#VCDEF,r0
+	load	(r0),r18
+	movei	#VCACHE_PRM,r1
+	nop
+	store	r18,(r1)		; faces read the default cache
+	movei	#VCACHE_PRM,r0
+	load	(r0),r18		; cache write ptr
+	movei	#CAM_BUF,r0
+	load	(r0),r11		; cY4
+	addq	#4,r0
+	load	(r0),r12		; sY4
+	addq	#4,r0
+	load	(r0),r13		; cP4
+	addq	#4,r0
+	load	(r0),r14		; sP4
+	addq	#4,r0
+	load	(r0),r15		; camx
+	addq	#4,r0
+	load	(r0),r16		; camy
+	addq	#4,r0
+	load	(r0),r17		; camz
+	movei	#G_DIVCTRL,r0
+	moveq	#0,r1
+	store	r1,(r0)			; integer divide mode (projection)
+	movei	#RVBASE,r0
+	load	(r0),r10		; vert cursor
+	move	r5,r31			; vert counter (r5 = vcount, still live)
+	cmpq	#0,r31
+	movei	#vc_done,r22
+	jump	EQ,(r22)
+	nop
+	nop
+vc_loop:
+	loadw	(r10),r8		; x
+	addq	#2,r10
+	loadw	(r10),r9		; y
+	addq	#2,r10
+	loadw	(r10),r20		; z
+	addq	#4,r10			; +4 -> next RVert (z@+4, stride 8)
+	shlq	#16,r8
+	sharq	#16,r8
+	shlq	#16,r9
+	sharq	#16,r9
+	shlq	#16,r20
+	sharq	#16,r20
+	movei	#OFFXW,r0
+	load	(r0),r1
+	movei	#OFFZW,r0
+	load	(r0),r2
+	nop
+	add	r1,r8			; wx
+	add	r2,r20			; wz
+	sub	r15,r8			; dx
+	sub	r16,r9			; dy
+	sub	r17,r20			; dz
+	move	r8,r0
+	move	r11,r1
+	movei	#vcf1,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+vcf1:
+	move	r0,r21
+	move	r20,r0
+	move	r12,r1
+	movei	#vcf2,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+vcf2:
+	sub	r0,r21
+	sharq	#12,r21			; rx
+	move	r8,r0
+	move	r12,r1
+	movei	#vcf3,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+vcf3:
+	move	r0,r23
+	move	r20,r0
+	move	r11,r1
+	movei	#vcf4,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+vcf4:
+	add	r0,r23
+	sharq	#12,r23			; rz
+	move	r9,r0
+	move	r13,r1
+	movei	#vcf5,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+vcf5:
+	move	r0,r24
+	move	r23,r0
+	move	r14,r1
+	movei	#vcf6,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+vcf6:
+	sub	r0,r24
+	sharq	#12,r24			; ry
+	move	r9,r0
+	move	r14,r1
+	movei	#vcf7,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+vcf7:
+	move	r0,r25
+	move	r23,r0
+	move	r13,r1
+	movei	#vcf8,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+vcf8:
+	add	r0,r25
+	sharq	#12,r25			; rz2
+	; NEAR-SNAP REVERTED (task 19 postponed): every clamp variant drew
+	; wrong-but-on-screen geometry (ceiling flashes / smear plates /
+	; stretch, all HW-seen 2026-07-11). Pop-in (clean cull) is the
+	; lesser artifact. Real fix = true edge clipping; needs kernel bytes.
+	movei	#NEAR,r0
+	cmp	r0,r25
+	movei	#vc_behind,r22
+	jump	MI,(r22)
+	nop
+	nop
+	move	r21,r0
+	movei	#FOCAL,r1
+	movei	#vcf9,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+vcf9:
+	move	r0,r29
+	abs	r0
+	div	r25,r0
+	cmpq	#0,r29
+	jr	PL,vc_sxp
+	nop
+	nop
+	neg	r0
+vc_sxp:
+	movei	#CENTER_X,r1
+	add	r1,r0
+	store	r0,(r18)		; cache sx
+	move	r24,r0
+	movei	#FOCAL_Y,r1
+	movei	#vcf10,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+vcf10:
+	move	r0,r29
+	abs	r0
+	div	r25,r0
+	cmpq	#0,r29
+	jr	PL,vc_syp
+	nop
+	nop
+	neg	r0
+vc_syp:
+	movei	#CENTER_Y,r1
+	add	r1,r0
+	addq	#4,r18
+	store	r0,(r18)		; cache sy
+	addq	#4,r18
+	movei	#vc_next,r22
+	jump	T,(r22)
+	nop
+	nop
+vc_behind:
+	movei	#$07FFFFFF,r0
+	store	r0,(r18)		; behind sentinel
+	addq	#8,r18
+vc_next:
+	subq	#1,r31
+	movei	#vc_loop,r22
+	jump	NE,(r22)
+	nop
+	nop
+vc_done:
+	; fall into quad_setup
+
+;=====================================================================
+; PHASE SETUP: quads (n=4) then tris (n=3).  Each sets FACE_LEFT / FACE_CUR /
+; FACE_N and RET_PHASE (where to go when this phase's faces are exhausted),
+; then enters the unified face_loop.
+;=====================================================================
+quad_setup:
+	movei	#QCNT,r0
+	load	(r0),r8			; quad count
+	movei	#QBASE,r0
+	load	(r0),r9			; quad base
+	nop
+	nop
+	movei	#FACE_LEFT,r0
+	store	r8,(r0)
+	movei	#FACE_CUR,r0
+	store	r9,(r0)
+	moveq	#4,r8
+	movei	#FACE_N,r0
+	store	r8,(r0)			; n = 4
+	movei	#tri_setup,r8
+	movei	#RET_PHASE,r0
+	store	r8,(r0)			; quads done -> tri_setup
+	movei	#face_loop,r22
+	jump	T,(r22)
+	nop
+	nop
+
+tri_setup:
+	movei	#TCNT,r0
+	load	(r0),r8			; tri count
+	movei	#TBASE,r0
+	load	(r0),r9			; tri base
+	nop
+	nop
+	movei	#FACE_LEFT,r0
+	store	r8,(r0)
+	movei	#FACE_CUR,r0
+	store	r9,(r0)
+	moveq	#3,r8
+	movei	#FACE_N,r0
+	store	r8,(r0)			; n = 3
+	movei	#done,r8
+	movei	#RET_PHASE,r0
+	store	r8,(r0)			; tris done -> done
+	movei	#face_loop,r22
+	jump	T,(r22)
+	nop
+	nop
+
+;=====================================================================
+; face_loop: stage ONE face (world verts -> WBUF, UVs -> U_BUF/V_BUF) then
+; hand it to render_pkt.  render_pkt returns to face_loop via pkt_done.
+;=====================================================================
+face_loop:
+	; --- section profile: TACC_S += (VC now) - TS0V is handled at render_pkt;
+	; here we just stamp TS0V so [face fetch + stage_vert DRAM staging] is
+	; the section closed by render_pkt's existing TACC accounting. ---
+	.if PROFGPU=1
+	movei	#VC_REG,r0
+	loadw	(r0),r1
+	movei	#TS0V,r0
+	nop
+	store	r1,(r0)
+	.endif
+	movei	#FACE_LEFT,r0
+	load	(r0),r5
+	nop
+	nop
+	cmpq	#0,r5
+	movei	#fl_go,r22
+	jump	NE,(r22)		; faces remain -> process
+	nop
+	nop
+	; phase exhausted -> jump RET_PHASE (tri_setup or done)
+	movei	#RET_PHASE,r0
+	load	(r0),r1
+	nop
+	nop
+	jump	T,(r1)
+	nop
+	nop
+fl_go:
+	; geometry constants for stage_vert
+	movei	#RVBASE,r0
+	load	(r0),r10		; VERTS base
+	movei	#OFFXW,r0
+	load	(r0),r11		; offX<<8
+	movei	#OFFZW,r0
+	load	(r0),r13		; offZ<<8
+	moveq	#0,r12			; yTopD = 0 (offY=0)
+	movei	#FACE_N,r0
+	load	(r0),r21		; n
+	movei	#FACE_CUR,r0
+	load	(r0),r20		; face record ptr
+	nop
+	nop
+	; header (n<<16) -> WBUF ; r14 = WBUF+4 (world write ptr)
+	move	r21,r0
+	shlq	#16,r0
+	movei	#WBUF,r14
+	store	r0,(r14)
+	addq	#4,r14
+	; uvbase = rec + 2*n  (start of the UV block) -> r7 (stage_vert preserves it)
+	move	r21,r7
+	shlq	#1,r7
+	add	r20,r7
+	movei	#BEHINDF,r0
+	moveq	#0,r1
+	store	r1,(r0)			; no behind verts staged yet
+	moveq	#0,r6			; j = 0
+stage_loop:
+	cmp	r21,r6			; j - n
+	movei	#stage_done,r22
+	jump	EQ,(r22)
+	nop
+	nop
+	; idx = loadw(rec + 2*j)
+	move	r6,r0
+	shlq	#1,r0
+	add	r20,r0
+	loadw	(r0),r1			; vertex index (u16)
+	; stage_vert(index r1) -> 3 world longs at r14, r14+=12
+	movei	#sv_ret,r8
+	movei	#stage_vert,r22
+	jump	T,(r22)
+	nop
+	nop
+sv_ret:
+	; per-vertex (u,v) = loadw(uvbase + 4*j) - passed straight through, untransformed
+	move	r6,r0
+	shlq	#2,r0
+	add	r7,r0			; &u[j]
+	loadw	(r0),r2			; u (int atlas texel col)
+	addq	#2,r0
+	loadw	(r0),r3			; v (int atlas texel row)
+	move	r6,r1
+	shlq	#2,r1			; j*4
+	movei	#U_BUF,r0
+	add	r1,r0
+	store	r2,(r0)			; U_BUF[j] = u
+	movei	#V_BUF,r0
+	add	r1,r0
+	store	r3,(r0)			; V_BUF[j] = v
+	addq	#1,r6			; j++
+	movei	#stage_loop,r22
+	jump	T,(r22)
+	nop
+	nop
+stage_done:
+	; FACE_CUR += 6*n  (record size); FACE_LEFT--
+	movei	#FACE_CUR,r0
+	load	(r0),r1
+	move	r21,r2
+	shlq	#2,r2			; 4n
+	move	r21,r3
+	shlq	#1,r3			; 2n
+	add	r3,r2			; 6n
+	add	r2,r1			; FACE_CUR + 6n
+	store	r1,(r0)
+	movei	#FACE_LEFT,r0
+	load	(r0),r1
+	nop
+	nop
+	subq	#1,r1
+	store	r1,(r0)
+	; render this face; render_pkt returns to face_loop (pkt_done)
+	movei	#WBUF,r4
+	movei	#render_pkt,r22
+	jump	T,(r22)
+	nop
+	nop
+
+;=====================================================================
+; render_pkt : gpu_geomdirect per-polygon TRANSFORM+PROJECT+CULL front-end,
+;   VERBATIM, spliced to the gpu_bltex TEXTURED edge-walk.
+;   in:  r4 = WBUF ([0]=(n<<16), then n*3 s32 world coords), r30 = mailbox,
+;        CAM_BUF holds camera, U_BUF/V_BUF hold this face's per-vertex (u,v).
+;   completion / any skip -> pkt_done -> face_loop.
+;=====================================================================
+render_pkt:
+	; --- section profile: close STAGING section (face fetch + stage_vert
+	; DRAM reads) into GDV, then stamp TS0V for the TRANSFORM section ---
+	.if PROFGPU=1
+	movei	#VC_REG,r1
+	loadw	(r1),r0
+	movei	#TS0V,r1
+	nop
+	load	(r1),r2
+	movei	#GDV,r22
+	nop
+	sub	r2,r0
+	cmpq	#0,r0
+	jr	PL,vcs_ok
+	nop
+	nop
+	movei	#525,r2
+	add	r2,r0
+vcs_ok:
+	load	(r22),r1
+	nop
+	nop
+	add	r0,r1
+	store	r1,(r22)		; TACC_S += staging delta
+	movei	#VC_REG,r1
+	loadw	(r1),r0
+	movei	#TS0V,r1
+	nop
+	store	r0,(r1)			; transform section starts
+	.endif
+	; header = (n<<16) | color-slot (color unused for textured fill)
+	load	(r4),r0
+	addq	#4,r4
+	nop
+	nop
+	move	r0,r6
+	shrq	#16,r6			; r6 = n
+	movei	#$FFFF,r1
+	and	r1,r0			; low 16 (ignored)
+	move	r0,r7
+	shlq	#16,r7
+	or	r0,r7			; r7 = replicated low16 (unused by textured span)
+
+	; VERTEX CACHE: SX/SY filled during staging; transform vloop GONE.
+	movei	#BEHINDF,r0
+	load	(r0),r19
+	nop
+	nop
+	; any vertex behind -> skip whole poly
+	cmpq	#0,r19
+	movei	#pkt_done,r22
+	jump	NE,(r22)
+	nop
+	nop
+
+	; ---- backface cull: ar = (sx1-sx0)*(sy2-sy0)-(sx2-sx0)*(sy1-sy0) ----
+	movei	#SX_BUF,r0
+	load	(r0),r8			; sx0
+	addq	#4,r0
+	load	(r0),r9			; sx1
+	addq	#4,r0
+	load	(r0),r20		; sx2
+	movei	#SY_BUF,r0
+	load	(r0),r21		; sy0
+	addq	#4,r0
+	load	(r0),r23		; sy1
+	addq	#4,r0
+	load	(r0),r24		; sy2
+	sub	r8,r9			; sx1 - sx0
+	sub	r8,r20			; sx2 - sx0
+	sub	r21,r23			; sy1 - sy0
+	sub	r21,r24			; sy2 - sy0
+	move	r9,r0
+	move	r24,r1
+	movei	#bc1,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+bc1:
+	move	r0,r25			; p1 = (sx1-sx0)*(sy2-sy0)
+	move	r20,r0
+	move	r23,r1
+	movei	#bc2,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+bc2:
+	sub	r0,r25			; ar = p1 - p2
+	cmpq	#0,r25
+	movei	#pkt_done,r22
+	jump	MI,(r22)		; ar < 0 -> backface, skip
+	nop				;  *** FLIP CULL SENSE: change MI<->PL here if room0_tex
+	nop				;      winding turns rooms inside-out ***
+	jump	EQ,(r22)		; ar == 0 -> degenerate, skip
+	nop
+	nop
+
+	; 16.16 divide mode for the edge-walk slope divides (chain_step + uv_edge)
+	movei	#G_DIVCTRL,r0
+	moveq	#1,r1
+	store	r1,(r0)
+
+;---------------------------------------------------------------------
+; TEXTURED EDGE-WALK (gpu_bltex, VERBATIM): screen coords in SX/SY, per-vertex
+; (u,v) in U/V; two-chain walk carries x AND (u,v) as 16.16 DDA; per span the
+; Blitter affinely texture-maps.  (bltex's next_poly targets become pkt_done.)
+;---------------------------------------------------------------------
+	; itop = first strict-min sy; ymin; ymax
+	movei	#SY_BUF,r0
+	load	(r0),r1			; sy[0]
+	moveq	#0,r20			; itop = 0
+	nop
+	move	r1,r2			; ymin
+	move	r1,r3			; ymax
+	moveq	#1,r24			; i = 1
+scan_loop:
+	cmp	r6,r24			; i - n
+	movei	#scan_done,r22
+	jump	EQ,(r22)
+	nop
+	nop
+	move	r24,r0
+	shlq	#2,r0
+	movei	#SY_BUF,r1
+	add	r1,r0
+	load	(r0),r1			; sy[i]
+	nop
+	nop
+	cmp	r2,r1			; sy[i] - ymin
+	jr	PL,not_min		; >= ymin -> keep first min
+	nop
+	nop
+	move	r1,r2			; ymin = sy[i]
+	move	r24,r20			; itop = i
+not_min:
+	cmp	r3,r1			; sy[i] - ymax
+	jr	MI,not_max		; < ymax
+	nop
+	nop
+	jr	EQ,not_max		; == ymax
+	nop
+	nop
+	move	r1,r3			; ymax = sy[i]
+not_max:
+	addq	#1,r24
+	movei	#scan_loop,r22
+	jump	T,(r22)
+	nop
+	nop
+scan_done:
+	; y0 = max(ymin,CLIPY0) -> r10 ; y1 = min(ymax,CLIPY1) -> r11
+	move	r2,r10			; y = ymin
+	movei	#CLIPY0,r0
+	load	(r0),r1
+	nop
+	nop
+	cmp	r1,r10			; ymin - clipy0
+	jr	PL,y0_ok
+	nop
+	nop
+	move	r1,r10
+y0_ok:
+	move	r3,r11			; y1 = ymax
+	; bottom EXCLUSIVE (fill convention): on the ymax scanline the chain
+	; walker steps PAST the bottom vertex (gw_flat jumps x to an unrelated
+	; vertex, slope 0) -> occasional full-width 1px streaks at poly bottoms
+	subq	#1,r11
+	movei	#CLIPY1,r0
+	load	(r0),r0
+	nop
+	nop
+	cmp	r0,r11			; ymax - clipy1
+	jr	MI,y1_ok		; < clipy1 keep
+	nop
+	nop
+	jr	EQ,y1_ok		; == clipy1 keep
+	nop
+	nop
+	move	r0,r11			; y1 = clipy1
+y1_ok:
+	; reject empty: y1 < y0
+	cmp	r10,r11			; y1 - y0
+	movei	#pkt_done,r22
+	jump	MI,(r22)
+	nop
+	nop
+
+	; init chains: aci=bci=itop; ayend=byend=ymin(r2); ax=bx=aslope=bslope=0
+	move	r20,r12			; aci
+	move	r20,r13			; bci
+	move	r2,r14			; ayend
+	move	r2,r15			; byend
+	moveq	#0,r16			; ax
+	moveq	#0,r17			; bx
+	moveq	#0,r18			; aslope
+	moveq	#0,r19			; bslope
+
+	; init chain u/v DDA state to 0 (recomputed on first edge step)
+	moveq	#0,r0
+	movei	#AU,r1
+	store	r0,(r1)
+	movei	#AUSL,r1
+	store	r0,(r1)
+	movei	#AV,r1
+	store	r0,(r1)
+	movei	#AVSL,r1
+	store	r0,(r1)
+	movei	#BU,r1
+	store	r0,(r1)
+	movei	#BUSL,r1
+	store	r0,(r1)
+	movei	#BV,r1
+	store	r0,(r1)
+	movei	#BVSL,r1
+	store	r0,(r1)
+	; --- section profile: close TRANSFORM, open RASTER ---
+	.if PROFGPU=1
+	movei	#VC_REG,r1
+	loadw	(r1),r0
+	movei	#TS0V,r1
+	nop
+	load	(r1),r2
+	movei	#TACC_X,r22
+	nop
+	sub	r2,r0
+	cmpq	#0,r0
+	jr	PL,vcx_ok
+	nop
+	nop
+	movei	#525,r2
+	add	r2,r0
+vcx_ok:
+	load	(r22),r1
+	nop
+	nop
+	add	r0,r1
+	store	r1,(r22)
+	movei	#VC_REG,r1
+	loadw	(r1),r0
+	movei	#TS0V,r1
+	nop
+	store	r0,(r1)
+	.endif
+
+;---------------------------------------------------------------------
+yloop:
+	; --- section profile: count scanlines (raster_hl / NSCAN = cost/line) ---
+	.if PROFGPU=1
+	movei	#NSCAN,r0
+	load	(r0),r1
+	nop
+	nop
+	addq	#1,r1
+	store	r1,(r0)
+	.endif
+	; ---- chain A: while (y >= ayend && guardA++ <= n)  dir +1 ----
+	moveq	#0,r21			; guardA
+lchain:
+	cmp	r14,r10			; y - ayend
+	movei	#lchain_done,r22
+	jump	MI,(r22)		; y < ayend -> stop
+	nop
+	nop
+	cmp	r6,r21			; guard - n
+	jr	EQ,lchain_cont		; guard == n -> allowed
+	nop
+	nop
+	movei	#lchain_done,r22
+	jump	PL,(r22)		; guard > n -> stop
+	nop
+	nop
+lchain_cont:
+	addq	#1,r21			; guard++
+	move	r12,r24			; cur = aci
+	moveq	#1,r9			; dir +1
+	movei	#lc_ret,r8
+	movei	#chain_step,r22
+	jump	T,(r22)
+	nop
+	nop
+lc_ret:
+	move	r29,r14			; ayend = sy[ni]
+	move	r25,r16			; ax    = x
+	move	r23,r18			; aslope
+	move	r12,r0			; cur   = old aci
+	move	r24,r1			; ni
+	move	r24,r12			; aci = ni  (uv_edge reads cur/ni from r0/r1)
+	movei	#AU,r7			; chain A u/v block
+	movei	#lc_uv,r20		; return addr
+	movei	#uv_edge,r22
+	jump	T,(r22)
+	nop
+	nop
+lc_uv:
+	movei	#lchain,r22
+	jump	T,(r22)
+	nop
+	nop
+lchain_done:
+
+	; ---- chain B: while (y >= byend && guardB++ <= n)  dir -1 ----
+	moveq	#0,r21			; guardB
+rchain:
+	cmp	r15,r10			; y - byend
+	movei	#rchain_done,r22
+	jump	MI,(r22)
+	nop
+	nop
+	cmp	r6,r21
+	jr	EQ,rchain_cont
+	nop
+	nop
+	movei	#rchain_done,r22
+	jump	PL,(r22)
+	nop
+	nop
+rchain_cont:
+	addq	#1,r21
+	move	r13,r24			; cur = bci
+	movei	#-1,r9			; dir -1
+	movei	#rc_ret,r8
+	movei	#chain_step,r22
+	jump	T,(r22)
+	nop
+	nop
+rc_ret:
+	move	r29,r15			; byend = sy[ni]
+	move	r25,r17			; bx    = x
+	move	r23,r19			; bslope
+	move	r13,r0			; cur = old bci
+	move	r24,r1			; ni
+	move	r24,r13			; bci = ni
+	movei	#BU,r7			; chain B u/v block
+	movei	#rc_uv,r20		; return addr
+	movei	#uv_edge,r22
+	jump	T,(r22)
+	nop
+	nop
+rc_uv:
+	movei	#rchain,r22
+	jump	T,(r22)
+	nop
+	nop
+rchain_done:
+	; SCANLINE-RUN BATCH: rows until the next chain event (or bottom+1).
+	; The inner loop below runs spans WITHOUT chain checks or the r14/r15
+	; borrow-restore until this many rows are done. (~25 cyc/scanline off.)
+	move	r14,r0			; ayend
+	cmp	r15,r0			; ayend - byend
+	jr	MI,rb_amin		; ayend smaller -> keep
+	nop
+	nop
+	move	r15,r0
+rb_amin:
+	move	r11,r1			; y1
+	addq	#1,r1
+	cmp	r1,r0
+	jr	MI,rb_ymin
+	nop
+	nop
+	move	r1,r0
+rb_ymin:
+	sub	r10,r0			; nrun = min(ayend,byend,y1+1) - y  (>=1)
+	movei	#RUNC,r1
+	store	r0,(r1)
+
+;---------------------------------------------------------------------
+; SPAN: choose left/right chain, build affine (u,v) gradient, Blitter fill
+;---------------------------------------------------------------------
+	; SPAN SECTION register borrow (UNIFIED): r14 (ayend) = DDA base AU..BVSL,
+	; r15 (byend) = blitter reg base — both dormant until next scanline's
+	; chain checks. Kills 16 movei per scanline vs the address-per-access form.
+	movei	#GDU,r0
+	store	r14,(r0)
+	movei	#RSAVE,r0
+	store	r15,(r0)
+	movei	#AU,r14
+	movei	#$F02200,r15
+sp_run:
+	move	r16,r0
+	sharq	#16,r0			; xa
+	move	r17,r1
+	sharq	#16,r1			; xb
+	cmp	r1,r0			; xa - xb
+	movei	#sp_bleft,r22
+	jump	PL,(r22)		; xa >= xb -> chain B is LEFT
+	nop
+	nop
+	; --- chain A is LEFT ---
+	move	r0,r2			; xl_raw = xa
+	move	r1,r3			; xr_raw = xb
+	load	(r14),r24		; uL = AU
+	load	(r14+2),r25		; vL = AV
+	load	(r14+4),r26		; uR = BU
+	load	(r14+6),r27		; vR = BV
+	movei	#sp_have,r22
+	jump	T,(r22)
+	nop
+	nop
+sp_bleft:
+	; --- chain B is LEFT ---
+	move	r1,r2			; xl_raw = xb
+	move	r0,r3			; xr_raw = xa
+	load	(r14+4),r24		; uL = BU
+	load	(r14+6),r25		; vL = BV
+	load	(r14),r26		; uR = AU
+	load	(r14+2),r27		; vR = AV
+sp_have:
+	; (per-poly gradient cache REVERTED: projection is perspective, so du/dv
+	; varies per scanline — caching the first span's gradient sheared textures.)
+	; denom = xr_raw - xl_raw  (>= 0)
+	move	r3,r7
+	sub	r2,r7			; r7 = denom
+	; integer divide mode for the per-span du/dv divide
+	movei	#G_DIVCTRL,r0
+	moveq	#0,r1
+	store	r1,(r0)
+	; (denom==0 single-column spans flow through: div-by-zero returns
+	;  garbage du/dv, which one-pixel spans never consume)
+	; du = (uR - uL) / denom   (16.16)
+	move	r26,r0
+	sub	r24,r0			; uR - uL
+	move	r0,r8			; keep sign
+	abs	r0
+	div	r7,r0			; |num| / denom  (integer mode; COOKS while
+					;  the clamps below run - div-hide, minimal)
+	; xl = max(xl_raw,CLIPX0) -> r29   (r5 scratch; r0 is the div dest)
+	move	r2,r29
+	movei	#CLIPX0,r5
+	load	(r5),r5
+	nop
+	nop
+	cmp	r5,r29
+	jr	PL,sp_xlok
+	nop
+	nop
+	move	r5,r29
+sp_xlok:
+	; xr = min(xr_raw,CLIPX1) -> r23
+	move	r3,r23
+	movei	#CLIPX1,r5
+	load	(r5),r5
+	nop
+	nop
+	cmp	r5,r23
+	jr	MI,sp_xrok
+	nop
+	nop
+	jr	EQ,sp_xrok
+	nop
+	nop
+	move	r5,r23
+sp_xrok:
+	cmpq	#0,r8
+	jr	PL,sp_dup		; short fwd branch (jr saves the movei)
+	nop
+	nop
+	neg	r0
+sp_dup:
+	move	r0,r8			; du -> r8
+	; dv = (vR - vL) / denom
+	move	r27,r0
+	sub	r25,r0
+	move	r0,r9			; keep sign
+	abs	r0
+	div	r7,r0
+	cmpq	#0,r9
+	jr	PL,sp_dvp		; short fwd branch
+	nop
+	nop
+	neg	r0
+sp_dvp:
+	move	r0,r9			; dv -> r9
+	; (dead jr-to-next deleted for near-band bytes; the alignment-luck
+	;  argument died when the band code re-rolled the layout anyway)
+sp_clamp:
+	; restore 16.16 divide mode for the next scanline's edge slopes
+	movei	#G_DIVCTRL,r0
+	moveq	#1,r1
+	store	r1,(r0)
+	; (x clamps hoisted between the du issue and read - div-hide)
+	; if xr < xl -> skip span
+	cmp	r29,r23			; xr - xl
+	movei	#sp_skip,r22
+	jump	MI,(r22)
+	nop
+	nop
+
+	; off = xl - xl_raw  (>=0; advance the gradient over any left clamp)
+	move	r29,r1
+	sub	r2,r1			; off (kept in r1; imul32 preserves r1)
+	; FAST PATH: off == 0 for every span that doesn't cross the left screen
+	; edge (nearly all) -> u0/v0 are just uL/vL; skip BOTH imul32 calls.
+	cmpq	#0,r1
+	jr	NE,sp_off1		; off != 0 -> full multiply path
+	nop
+	nop
+	move	r24,r7			; u0 = uL
+	move	r25,r20			; v0 = vL
+	movei	#sp_fill,r22
+	jump	T,(r22)
+	nop
+	nop
+sp_off1:
+	; u0 = uL + du*off
+	move	r8,r0			; du
+	movei	#sp_u0,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+sp_u0:
+	add	r24,r0			; u0 = uL + du*off
+	move	r0,r7			; u0 (16.16) -> r7
+	; v0 = vL + dv*off   (r1 still = off)
+	move	r9,r0			; dv
+	movei	#sp_v0,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+sp_v0:
+	add	r25,r0			; v0 = vL + dv*off
+	move	r0,r20			; v0 (16.16) -> r20
+sp_fill:
+
+;---- Blitter textured-span fill (gpu_bltex, BYTE-IDENTICAL) -----------
+; live: r29=xl r23=xr r10=y  r7=u0(16.16) r20=v0(16.16) r8=du(16.16) r9=dv(16.16)
+	movei	#BLIT_GUARD,r2
+bwait:
+	; TIGHT spin (measured 21k spins/frame; the old fat loop cost ~25cyc/spin
+	; while stealing bus from the blitter it waits on). 9 slots/iteration.
+	load	(r15+14),r0		; B_CMD status
+	subq	#1,r2			; guard--
+	nop
+	btst	#0,r0			; idle? (bit0 set = idle)
+	jr	NE,bwait_done		; idle -> proceed
+	nop
+	cmpq	#0,r2
+	jr	NE,bwait		; guard remaining -> spin again
+	nop
+bwait_done:
+	; A1_PIXEL = (v0 & $FFFF0000) | (u0 >> 16)   integer texel start (v<<16)|u
+	move	r20,r0
+	movei	#$FFFF0000,r1
+	and	r1,r0			; v0 integer part in bits 16-31
+	move	r7,r2
+	shrq	#16,r2			; u0 integer part in bits 0-15
+	or	r2,r0
+	store	r0,(r15+3)
+	; A1_FPIXEL = (v0 << 16) | (u0 & $FFFF)      fractional texel start
+	move	r20,r0
+	shlq	#16,r0			; v0 fraction in bits 16-31
+	move	r7,r2
+	movei	#$0000FFFF,r3
+	and	r3,r2			; u0 fraction in bits 0-15
+	or	r2,r0
+	store	r0,(r15+6)
+	; A1_INC = (dv & $FFFF0000) | (du >> 16)     integer per-pixel U:V step
+	move	r9,r0
+	movei	#$FFFF0000,r1
+	and	r1,r0			; dv integer step in bits 16-31
+	move	r8,r2
+	shrq	#16,r2			; du integer step in bits 0-15
+	or	r2,r0
+	store	r0,(r15+7)
+	; A1_FINC = (dv << 16) | (du & $FFFF)        fractional per-pixel step
+	move	r9,r0
+	shlq	#16,r0			; dv fraction step in bits 16-31
+	move	r8,r2
+	movei	#$0000FFFF,r3
+	and	r3,r2			; du fraction step in bits 0-15
+	or	r2,r0
+	store	r0,(r15+8)
+	; A2_PIXEL = (y<<16) | xl                    dest span start
+	move	r10,r0
+	shlq	#16,r0
+	or	r29,r0
+	store	r0,(r15+12)
+	; B_COUNT = (1<<16) | (xr - xl + 1)          1 line, span-width pixels
+	move	r23,r0
+	sub	r29,r0
+	addq	#1,r0			; npix = xr-xl+1
+	movei	#$00010000,r1
+	or	r1,r0
+	store	r0,(r15+15)
+	; B_CMD = SRCEN|LFU_REPLACE|DSTA2 -> LAUNCH
+	.if NOFILL=0
+	; EXPERIMENT HALFSPAN: launch only even scanlines (timing probe)
+	.if HALFSPAN=1
+	btst	#0,r10
+	jr	NE,sp_nolaunch
+	nop
+	nop
+	.endif
+	movei	#BCMD_TEX,r0
+	store	r0,(r15+14)
+sp_nolaunch:
+	.endif
+
+sp_skip:
+sp_tail:
+	; advance the two x DDAs ...
+	add	r18,r16			; ax += aslope
+	add	r19,r17			; bx += bslope
+	; ... and the four u/v DDAs via r14-INDEXED addressing (AU..BVSL are 8
+	; consecutive longs). r14 (ayend) is dormant between chain updates;
+	; stashed in the dead GDU slot for the duration.
+	load	(r14),r0		; AU (r14 = AU base since span entry)
+	load	(r14+1),r1		; AUSL
+	load	(r14+2),r2		; AV
+	load	(r14+3),r3		; AVSL
+	add	r1,r0
+	store	r0,(r14)		; AU += AUSL
+	add	r3,r2
+	store	r2,(r14+2)		; AV += AVSL
+	load	(r14+4),r0		; BU
+	load	(r14+5),r1		; BUSL
+	load	(r14+6),r2		; BV
+	load	(r14+7),r3		; BVSL
+	add	r1,r0
+	store	r0,(r14+4)		; BU += BUSL
+	add	r3,r2
+	store	r2,(r14+6)		; BV += BVSL
+	; y++ and the RUN countdown: stay in the tight span loop (r14 = AU,
+	; r15 = blitter base persist) until the next chain event row
+	addq	#1,r10			; y++
+	movei	#RUNC,r0
+	load	(r0),r1
+	nop
+	nop
+	subq	#1,r1
+	store	r1,(r0)
+	cmpq	#0,r1
+	movei	#sp_run,r22
+	jump	NE,(r22)		; rows left in this run -> next span
+	nop
+	nop
+	; run ended: restore ayend/byend for the chain checks
+	movei	#GDU,r0
+	load	(r0),r14		; restore ayend
+	movei	#RSAVE,r0
+	load	(r0),r15		; restore byend
+	nop
+	nop
+	cmp	r11,r10			; y - y1
+	movei	#yloop,r22
+	jump	MI,(r22)		; y < y1 -> chains again
+	nop
+	nop
+	jump	EQ,(r22)		; y == y1 -> last line
+	nop
+	nop
+	; fall through to pkt_done
+
+;---------------------------------------------------------------------
+; pkt_done: face rendered (or skipped) -> back to the face iterator.
+pkt_done:
+	; --- section profile: close RASTER section ---
+	.if PROFGPU=1
+	movei	#VC_REG,r1
+	loadw	(r1),r0
+	movei	#TS0V,r1
+	nop
+	load	(r1),r2
+	movei	#TACC_R,r22
+	nop
+	sub	r2,r0
+	cmpq	#0,r0
+	jr	PL,vcr_ok
+	nop
+	nop
+	movei	#525,r2
+	add	r2,r0
+vcr_ok:
+	load	(r22),r1
+	nop
+	nop
+	add	r0,r1
+	store	r1,(r22)
+	.endif
+	movei	#face_loop,r22
+	jump	T,(r22)
+	nop
+	nop
+
+;=====================================================================
+; uv_edge: compute the (u,v) DDA state for one edge cur->ni into the chain
+;   block.  gpu_bltex VERBATIM.
+;   in:  r0 = cur index, r1 = ni index, r10 = y, r7 = block ptr
+;        (block: +0 U(16.16), +4 USL, +8 V, +12 VSL), r20 = return addr.
+;   out: block[+0..+12] written.  Preserves r10-r21, r4-r6, r30.  DIV 16.16.
+;   clobbers r0-r3, r8, r9, r22-r29.
+;=====================================================================
+uv_edge:
+	move	r0,r24
+	shlq	#2,r24			; cur*4
+	move	r1,r25
+	shlq	#2,r25			; ni*4
+	movei	#SY_BUF,r2
+	add	r24,r2
+	load	(r2),r26		; sy[cur]
+	movei	#SY_BUF,r3
+	add	r25,r3
+	load	(r3),r27		; sy[ni]
+	nop
+	nop
+	move	r27,r0
+	sub	r26,r0			; dy = sy[ni]-sy[cur]
+	move	r10,r1
+	sub	r26,r1			; delta = y - sy[cur]
+	move	r0,r23			; dy    (persist)
+	move	r1,r29			; delta (persist)
+	cmpq	#0,r0
+	movei	#uve_flat,r22
+	jump	MI,(r22)		; dy < 0
+	nop
+	nop
+	jump	EQ,(r22)		; dy == 0
+	nop
+	nop
+	; ---- dy > 0: U ----
+	movei	#U_BUF,r2
+	add	r24,r2
+	load	(r2),r9			; u[cur]
+	movei	#U_BUF,r3
+	add	r25,r3
+	load	(r3),r0			; u[ni]
+	nop
+	nop
+	move	r0,r8
+	sub	r9,r8			; duint = u[ni]-u[cur]
+	shlq	#16,r9			; ubase = u[cur]<<16 (persist)
+	move	r8,r1
+	abs	r1
+	div	r23,r1			; (|duint|<<16)/dy
+	cmpq	#0,r8
+	movei	#uve_us_pos,r22
+	jump	PL,(r22)
+	nop
+	nop
+	neg	r1
+uve_us_pos:
+	move	r7,r2
+	addq	#4,r2
+	store	r1,(r2)			; USL = uslope
+	move	r1,r0			; uslope
+	move	r29,r1			; delta
+	movei	#uve_u_ret,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+uve_u_ret:
+	add	r9,r0			; u = u[cur]<<16 + uslope*delta
+	store	r0,(r7)			; U
+	; ---- dy > 0: V ----
+	movei	#V_BUF,r2
+	add	r24,r2
+	load	(r2),r9			; v[cur]
+	movei	#V_BUF,r3
+	add	r25,r3
+	load	(r3),r0			; v[ni]
+	nop
+	nop
+	move	r0,r8
+	sub	r9,r8			; dvint
+	shlq	#16,r9			; vbase = v[cur]<<16
+	move	r8,r1
+	abs	r1
+	div	r23,r1			; (|dvint|<<16)/dy
+	cmpq	#0,r8
+	movei	#uve_vs_pos,r22
+	jump	PL,(r22)
+	nop
+	nop
+	neg	r1
+uve_vs_pos:
+	move	r7,r2
+	addq	#12,r2
+	store	r1,(r2)			; VSL = vslope
+	move	r1,r0			; vslope
+	move	r29,r1			; delta
+	movei	#uve_v_ret,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+uve_v_ret:
+	add	r9,r0			; v = v[cur]<<16 + vslope*delta
+	move	r7,r2
+	addq	#8,r2
+	store	r0,(r2)			; V
+	jump	T,(r20)
+	nop
+	nop
+uve_flat:
+	; dy <= 0: slopes 0, u/v snap to the ni endpoint (matches gw_flat for x)
+	moveq	#0,r0
+	move	r7,r2
+	addq	#4,r2
+	store	r0,(r2)			; USL = 0
+	move	r7,r2
+	addq	#12,r2
+	store	r0,(r2)			; VSL = 0
+	movei	#U_BUF,r2
+	add	r25,r2
+	load	(r2),r0			; u[ni]
+	movei	#V_BUF,r3
+	add	r25,r3
+	load	(r3),r1			; v[ni]
+	nop
+	nop
+	shlq	#16,r0			; u[ni]<<16
+	store	r0,(r7)			; U
+	shlq	#16,r1			; v[ni]<<16
+	move	r7,r2
+	addq	#8,r2
+	store	r1,(r2)			; V
+	jump	T,(r20)
+	nop
+	nop
+
+;=====================================================================
+; chain_step: advance ONE edge of a chain (VERBATIM; identical in both sources).
+;   in:  r24 = cur index, r9 = +1/-1, r10 = y, r6 = n, r8 = return address
+;   out: r24 = next index (ni), r23 = slope, r25 = x (16.16), r29 = yend
+;   clobbers r0-r3, r22, r26, r27, r28.  Preserves r10-r21.
+;=====================================================================
+chain_step:
+	move	r24,r26			; cur
+	add	r9,r24			; ni = cur + dir
+	cmpq	#0,r24
+	movei	#gw_m1,r22
+	jump	PL,(r22)
+	nop
+	nop
+	add	r6,r24			; wrapped below 0
+gw_m1:
+	cmp	r6,r24			; ni - n
+	movei	#gw_m2,r22
+	jump	MI,(r22)
+	nop
+	nop
+	sub	r6,r24			; wrapped past n-1
+gw_m2:
+	move	r26,r0
+	shlq	#2,r0			; cur*4
+	move	r24,r1
+	shlq	#2,r1			; ni*4
+	movei	#SY_BUF,r2
+	add	r0,r2
+	load	(r2),r27		; sy[cur]
+	movei	#SY_BUF,r3
+	add	r1,r3
+	load	(r3),r29		; sy[ni]  (= yend)
+	movei	#SX_BUF,r2
+	add	r0,r2
+	load	(r2),r25		; sx[cur]
+	movei	#SX_BUF,r3
+	add	r1,r3
+	load	(r3),r23		; sx[ni]
+	move	r29,r0
+	sub	r27,r0			; dy = sy[ni]-sy[cur]
+	cmpq	#0,r0
+	movei	#gw_flat,r22
+	jump	MI,(r22)		; dy < 0
+	nop
+	nop
+	jump	EQ,(r22)		; dy == 0
+	nop
+	nop
+	; --- dy > 0: slope = ((sx[ni]-sx[cur])<<16)/dy ---
+	move	r23,r1
+	sub	r25,r1			; dx (signed)
+	move	r1,r2			; keep dx sign
+	abs	r1			; ua = |dx|
+	move	r1,r3
+	shrq	#16,r3			; ua>>16
+	cmp	r0,r3			; (ua>>16) - dy
+	movei	#gw_div,r26
+	jump	CS,(r26)		; (ua>>16) < dy -> divide
+	nop
+	nop
+	movei	#$7FFFFFFF,r1		; saturate (only if dx would overflow)
+	movei	#gw_sign,r26
+	jump	T,(r26)
+	nop
+	nop
+gw_div:
+	div	r0,r1			; (ua<<16)/dy  [16.16]
+gw_sign:
+	cmpq	#0,r2			; dx < 0 ?
+	movei	#gw_pos,r26
+	jump	PL,(r26)
+	nop
+	nop
+	neg	r1
+gw_pos:
+	move	r1,r23			; slope
+	shlq	#16,r25			; sx[cur]<<16 (survivor)
+	move	r10,r1
+	sub	r27,r1			; delta = y - sy[cur]
+	move	r23,r0			; slope
+	movei	#gw_xret,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+gw_xret:
+	add	r25,r0			; x = sx[cur]<<16 + slope*delta
+	move	r0,r25			; output x
+	jump	T,(r8)
+	nop
+	nop
+gw_flat:
+	move	r23,r25
+	shlq	#16,r25			; x = sx[ni]<<16
+	moveq	#0,r23			; slope = 0
+	jump	T,(r8)
+	nop
+	nop
+
+;=====================================================================
+; imul32: r0 = low32(r0 * r1).  VERBATIM (identical in both sources).
+;   clobbers r2,r3,r26,r27.  return: jump (r28).  Preserves r1,r4-r25,r29.
+;=====================================================================
+imul32:
+	move	r0,r2			; aLo
+	move	r1,r3			; bLo
+	move	r0,r26
+	shrq	#16,r26			; aHi
+	move	r1,r27
+	shrq	#16,r27			; bHi
+	mult	r3,r2			; aLo*bLo
+	mult	r27,r0			; aLo*bHi
+	mult	r1,r26			; aHi*bLo
+	nop
+	nop
+	add	r26,r0			; cross
+	shlq	#16,r0
+	add	r2,r0			; low32
+	jump	T,(r28)
+	nop
+	nop
+
+;=====================================================================
+; stage_vert: look up an RVert, add the room offset, append WORLD (x,y,z) as
+;   3 longs at r14.  gpu_geomdirect VERBATIM.
+;   in:  r1 = vertex index (unsigned), r10 = VERTS base, r11 = offX<<8,
+;        r12 = yTopD(=0), r13 = offZ<<8, r14 = write ptr, r8 = return addr.
+;   out: 3 world longs stored, r14 += 12.
+;   clobbers r0,r1,r2,r3,r9.  Preserves r6,r7,r10-r14,r20,r21,r23.
+;=====================================================================
+stage_vert:
+	; VERTEX CACHE lookup (pre-pass transformed every vert once)
+	shlq	#3,r1			; idx*8 (cache stride)
+	movei	#VCACHE_PRM,r0
+	load	(r0),r2
+	nop
+	nop
+	add	r2,r1			; &cache[idx]
+	load	(r1),r2			; sx (or $07FFFFFF behind)
+	addq	#4,r1
+	load	(r1),r3			; sy
+	move	r6,r9			; j (preserved by convention)
+	shlq	#2,r9
+	movei	#SX_BUF,r0
+	add	r9,r0
+	store	r2,(r0)
+	movei	#SY_BUF,r0
+	add	r9,r0
+	store	r3,(r0)
+	movei	#$07FFFFFF,r0
+	cmp	r0,r2
+	jr	NE,sv_ok
+	nop
+	nop
+	movei	#BEHINDF,r0
+	moveq	#1,r2
+	store	r2,(r0)
+sv_ok:
+	jump	T,(r8)
+	nop
+	nop
+
+;=====================================================================
+done:
+	; DISPATCH: more rooms queued? -> render the next one
+	movei	#LISTMODE,r0
+	load	(r0),r1
+	nop
+	nop
+	cmpq	#0,r1
+	movei	#room_next,r22
+	jump	NE,(r22)
+	nop
+	nop
+alldone:
+	movei	#MAGIC_DONE,r0
+	store	r0,(r30)		; mailbox[0] = done
+	nop
+	nop
+	; raise a 68k CPU interrupt (G_CTRL CPUINT, bit1; keep GPUGO bit0) so the
+	; 68k can sleep in STOP during the whole GPU run instead of bus-polling
+	; (68k polling steals DRAM cycles from GPU+Blitter — measured bottleneck).
+	movei	#$F02114,r1		; G_CTRL
+	moveq	#3,r0			; GPUGO | CPUINT
+	store	r0,(r1)
+	nop
+	nop
+halt:
+	nop
+	jr	T,halt
+	nop
+	nop

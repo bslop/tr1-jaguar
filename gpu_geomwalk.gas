@@ -1,0 +1,550 @@
+; gpu_geomwalk.gas - Tom GPU convex-polygon edge-walker + per-span Blitter.
+;
+; The 68000 has already transformed/projected/sorted the scene into a DRAM
+; poly list of SCREEN-SPACE convex polygons.  This kernel reproduces the
+; two-chain DDA of main.c's fill_convex() EXACTLY (find top vertex by min
+; sy; chain A walks index +1, chain B walks -1; per scanline advance each
+; chain while y >= chain_yend, computing slope = ((sx[ni]-sx[cur])<<16)/dy
+; once per edge and x = sx[cur]<<16 + slope*(y-sy[cur]) on entry, then
+; x += slope per scanline; span = [min,max] clamped to [0,319]; y walked
+; over [max(ymin,0), min(ymax,239)]) and programs the Blitter per span -
+; moving the per-scanline edge-walk off the 68000 onto Tom.
+;
+; NOTE vs main.c: this kernel does the straightforward 1-LINE-per-scanline
+; walk over the full y range (main.c currently steps 2 lines for half-res).
+; Everything else - the guard-limited while loops, the integer slope divide,
+; the integer slope*(y-sy) product, the min/max/clamp span logic - matches
+; fill_convex() line for line.
+;
+; ---- Input packet (68000, big-endian longs in DRAM) --------------------
+; params $F03F00: [0]=poly-list pointer, [1]=mailbox addr, [2]=poly count,
+;                 [3]=framebuffer base.
+; poly list = `count` records.  Each record:
+;   [0] = (n<<16)|color        n = 3 or 4, color = RGB16 in low 16
+;   then n longs, each (sx<<16)|(sy & 0xFFFF), sx/sy SIGNED screen coords
+;   (may be off-screen/negative; both halves are sign-extended here).
+; mailbox (DRAM): [0]=done magic $0A3DD05E, [1]=hello magic $0A3D0001.
+;
+; ---- Hazard rules honoured ---------------------------------------------
+; assembled at true SRAM origin so `movei #label` resolves; >=2 instrs
+; after a load before using the result; 2 nops after MULT before reading
+; the product; DIV dest is scoreboarded (no nop) but UNSIGNED so we do the
+; abs/sign dance; only MI/PL/EQ/NE/T (+ carry CS/CC) condition codes used -
+; no LT/LE; no forward jr - forward/long branches go through
+; movei #label,rN; jump cc,(rN); nop; nop.  Backward jr only (blitter
+; wait, halt) and within +-16 words.
+
+G_DIVCTRL	.equ	$F0211C
+A1_BASE		.equ	$F02200
+A1_FLAGS	.equ	$F02204
+A1_PIXEL	.equ	$F0220C
+B_CMD		.equ	$F02238
+B_COUNT		.equ	$F0223C
+B_SRCD		.equ	$F02240
+B_SRCD1		.equ	$F02244
+
+A1F_VAL		.equ	$00014220	; PIX16 | WID320 | XADDPIX
+BCMD_SPAN	.equ	$01800000	; LFU = source (B_SRCD)
+
+MAGIC_HELLO	.equ	$0A3D0001
+MAGIC_DONE	.equ	$0A3DD05E
+
+; SRAM layout: code $F03000-..., scratch $F03E00+, params $F03F00.
+PARAMS		.equ	$F03F00
+SX_BUF		.equ	$F03E00		; up to 4 screen x (sign-extended int)
+SY_BUF		.equ	$F03E20		; up to 4 screen y (sign-extended int)
+
+; register plan (persistent across a polygon)
+;  r4  poly-list pointer     r5  polygons remaining
+;  r6  n (vertex count)      r7  color32 = (color<<16)|color
+;  r30 mailbox
+; walk state (during yloop):
+;  r10 y      r11 y1        r12 aci   r13 bci
+;  r14 ayend  r15 byend     r16 ax    r17 bx
+;  r18 aslope r19 bslope    r20 itop  r21 guard
+; chain_step / imul32 / sub_fmul scratch: r0-r3, r22-r29, r9(dir), r8(ret)
+
+	.gpu
+	.org	$F03000
+
+start:
+	movei	#PARAMS,r1
+	nop
+	load	(r1),r4			; [0] poly-list pointer
+	addq	#4,r1
+	load	(r1),r30		; [1] mailbox
+	addq	#4,r1
+	nop
+	load	(r1),r5			; [2] poly count
+	addq	#4,r1
+	load	(r1),r6			; [3] framebuffer base
+	nop
+	nop
+
+	; A1_BASE = fb, A1_FLAGS = A1F_VAL (pixel mode; set once)
+	movei	#A1_BASE,r7
+	store	r6,(r7)
+	movei	#A1_FLAGS,r7
+	movei	#A1F_VAL,r8
+	store	r8,(r7)
+
+	; G_DIVCTRL = 1 -> 16.16 divide mode, kept for the whole run
+	movei	#G_DIVCTRL,r7
+	moveq	#1,r8
+	store	r8,(r7)
+
+	; mailbox[1] = hello
+	movei	#MAGIC_HELLO,r0
+	move	r30,r1
+	addq	#4,r1
+	store	r0,(r1)
+
+;---------------------------------------------------------------------
+poly_loop:
+	cmpq	#0,r5
+	movei	#done,r22
+	jump	EQ,(r22)
+	nop
+	nop
+
+	; header = (n<<16)|color
+	load	(r4),r0
+	addq	#4,r4
+	nop
+	nop
+	move	r0,r6
+	shrq	#16,r6			; r6 = n
+	movei	#$FFFF,r1
+	and	r1,r0			; r0 = color (low 16)
+	move	r0,r7
+	shlq	#16,r7
+	or	r0,r7			; r7 = color32
+
+	; read n verts into SX_BUF / SY_BUF, sign-extending both halves
+	movei	#SX_BUF,r12
+	movei	#SY_BUF,r13
+	move	r6,r15			; counter
+rd_v:
+	load	(r4),r0			; (sx<<16)|(sy & FFFF)
+	addq	#4,r4
+	nop
+	nop
+	move	r0,r1
+	sharq	#16,r1			; sx = sign-extend high 16
+	shlq	#16,r0
+	sharq	#16,r0			; sy = sign-extend low 16
+	store	r1,(r12)
+	store	r0,(r13)
+	addq	#4,r12
+	addq	#4,r13
+	subq	#1,r15
+	movei	#rd_v,r22
+	jump	NE,(r22)
+	nop
+	nop
+
+	; itop = first strict-min sy; ymin = sy[itop]; ymax = max sy
+	movei	#SY_BUF,r0
+	load	(r0),r1			; sy[0]
+	moveq	#0,r20			; itop = 0
+	nop
+	move	r1,r2			; ymin
+	move	r1,r3			; ymax
+	moveq	#1,r24			; i = 1
+scan_loop:
+	cmp	r6,r24			; i - n
+	movei	#scan_done,r22
+	jump	EQ,(r22)
+	nop
+	nop
+	move	r24,r0
+	shlq	#2,r0
+	movei	#SY_BUF,r1
+	add	r1,r0
+	load	(r0),r1			; sy[i]
+	nop
+	nop
+	cmp	r2,r1			; sy[i] - ymin
+	movei	#not_min,r22
+	jump	PL,(r22)		; >= ymin -> keep first min
+	nop
+	nop
+	move	r1,r2			; ymin = sy[i]
+	move	r24,r20			; itop = i
+not_min:
+	cmp	r3,r1			; sy[i] - ymax
+	movei	#not_max,r22
+	jump	MI,(r22)		; < ymax
+	nop
+	nop
+	jump	EQ,(r22)		; == ymax
+	nop
+	nop
+	move	r1,r3			; ymax = sy[i]
+not_max:
+	addq	#1,r24
+	movei	#scan_loop,r22
+	jump	T,(r22)
+	nop
+	nop
+scan_done:
+	; y0 = max(ymin,0) -> r10 ; y1 = min(ymax,239) -> r11
+	move	r2,r10			; y = ymin
+	cmpq	#0,r10
+	movei	#y0_ok,r22
+	jump	PL,(r22)
+	nop
+	nop
+	moveq	#0,r10
+y0_ok:
+	move	r3,r11			; y1 = ymax
+	movei	#239,r0
+	cmp	r0,r11			; ymax - 239
+	movei	#y1_ok,r22
+	jump	MI,(r22)		; < 239 keep
+	nop
+	nop
+	jump	EQ,(r22)		; == 239 keep
+	nop
+	nop
+	move	r0,r11			; y1 = 239
+y1_ok:
+	; reject empty: y1 < y0  (covers ymin>=240 and ymax<0)
+	cmp	r10,r11			; y1 - y0
+	movei	#next_poly,r22
+	jump	MI,(r22)
+	nop
+	nop
+
+	; init chains: aci=bci=itop; ayend=byend=sy[itop]=ymin(r2);
+	; ax=bx=aslope=bslope=0
+	move	r20,r12			; aci
+	move	r20,r13			; bci
+	move	r2,r14			; ayend
+	move	r2,r15			; byend
+	moveq	#0,r16			; ax
+	moveq	#0,r17			; bx
+	moveq	#0,r18			; aslope
+	moveq	#0,r19			; bslope
+
+	; set this polygon's fill colour once (wait blitter idle first)
+	movei	#B_CMD,r22
+pc_wait:
+	load	(r22),r0
+	nop
+	nop
+	btst	#0,r0
+	jr	EQ,pc_wait
+	nop
+	nop
+	movei	#B_SRCD,r22
+	store	r7,(r22)
+	movei	#B_SRCD1,r22
+	store	r7,(r22)
+
+;---------------------------------------------------------------------
+yloop:
+	; ---- chain A: while (y >= ayend && guardA++ <= n)  dir +1 ----
+	moveq	#0,r21			; guardA
+lchain:
+	cmp	r14,r10			; y - ayend
+	movei	#lchain_done,r22
+	jump	MI,(r22)		; y < ayend -> stop
+	nop
+	nop
+	cmp	r6,r21			; guard - n
+	movei	#lchain_cont,r22
+	jump	EQ,(r22)		; guard == n -> allowed
+	nop
+	nop
+	movei	#lchain_done,r22
+	jump	PL,(r22)		; guard > n -> stop
+	nop
+	nop
+lchain_cont:
+	addq	#1,r21			; guard++
+	move	r12,r24			; cur = aci
+	moveq	#1,r9			; dir +1
+	movei	#lc_ret,r8
+	movei	#chain_step,r22
+	jump	T,(r22)
+	nop
+	nop
+lc_ret:
+	move	r24,r12			; aci  = ni
+	move	r29,r14			; ayend= sy[ni]
+	move	r25,r16			; ax   = x
+	move	r23,r18			; aslope
+	movei	#lchain,r22
+	jump	T,(r22)
+	nop
+	nop
+lchain_done:
+
+	; ---- chain B: while (y >= byend && guardB++ <= n)  dir -1 ----
+	moveq	#0,r21			; guardB
+rchain:
+	cmp	r15,r10			; y - byend
+	movei	#rchain_done,r22
+	jump	MI,(r22)
+	nop
+	nop
+	cmp	r6,r21
+	movei	#rchain_cont,r22
+	jump	EQ,(r22)
+	nop
+	nop
+	movei	#rchain_done,r22
+	jump	PL,(r22)
+	nop
+	nop
+rchain_cont:
+	addq	#1,r21
+	move	r13,r24			; cur = bci
+	movei	#-1,r9			; dir -1
+	movei	#rc_ret,r8
+	movei	#chain_step,r22
+	jump	T,(r22)
+	nop
+	nop
+rc_ret:
+	move	r24,r13			; bci  = ni
+	move	r29,r15			; byend
+	move	r25,r17			; bx
+	move	r23,r19			; bslope
+	movei	#rchain,r22
+	jump	T,(r22)
+	nop
+	nop
+rchain_done:
+
+	; ---- span: xa=ax>>16, xb=bx>>16; xl=min, xr=max ----
+	move	r16,r24
+	sharq	#16,r24			; xa
+	move	r17,r25
+	sharq	#16,r25			; xb
+	cmp	r25,r24			; xa - xb
+	movei	#no_swap,r22
+	jump	MI,(r22)		; xa < xb -> xl=xa already
+	nop
+	nop
+	jump	EQ,(r22)
+	nop
+	nop
+	move	r24,r0			; swap so r24=xl, r25=xr
+	move	r25,r24
+	move	r0,r25
+no_swap:
+	; if (xl < 0) xl = 0
+	cmpq	#0,r24
+	movei	#xl_ok,r22
+	jump	PL,(r22)
+	nop
+	nop
+	moveq	#0,r24
+xl_ok:
+	; if (xr > 319) xr = 319
+	movei	#319,r0
+	cmp	r0,r25			; xr - 319
+	movei	#xr_ok,r22
+	jump	MI,(r22)
+	nop
+	nop
+	jump	EQ,(r22)
+	nop
+	nop
+	move	r0,r25
+xr_ok:
+	; if (xr < xl) skip
+	cmp	r24,r25			; xr - xl
+	movei	#span_skip,r22
+	jump	MI,(r22)
+	nop
+	nop
+
+	; ---- blit the span (y already in [0,239]) ----
+	movei	#B_CMD,r22
+sp_wait:
+	load	(r22),r0
+	nop
+	nop
+	btst	#0,r0
+	jr	EQ,sp_wait
+	nop
+	nop
+	; A1_PIXEL = (y<<16)|xl
+	move	r10,r0
+	shlq	#16,r0
+	or	r24,r0
+	movei	#A1_PIXEL,r1
+	store	r0,(r1)
+	; B_COUNT = (1<<16)|(xr-xl+1)
+	move	r25,r0
+	sub	r24,r0
+	addq	#1,r0			; width
+	movei	#$10000,r1
+	add	r1,r0
+	movei	#B_COUNT,r1
+	store	r0,(r1)
+	; B_SRCD/B_SRCD1 already carry color; launch
+	movei	#BCMD_SPAN,r0
+	movei	#B_CMD,r1
+	store	r0,(r1)
+span_skip:
+	add	r18,r16			; ax += aslope
+	add	r19,r17			; bx += bslope
+	addq	#1,r10			; y++
+	cmp	r11,r10			; y - y1
+	movei	#yloop,r22
+	jump	MI,(r22)		; y < y1 -> continue
+	nop
+	nop
+	jump	EQ,(r22)		; y == y1 -> last line
+	nop
+	nop
+
+;---------------------------------------------------------------------
+next_poly:
+	subq	#1,r5
+	movei	#poly_loop,r22
+	jump	T,(r22)
+	nop
+	nop
+
+;---------------------------------------------------------------------
+; chain_step: advance ONE edge of a chain (fill_convex inner arithmetic).
+;   in:  r24 = cur index, r9 = +1 (right) / -1 (left), r10 = y, r6 = n,
+;        r8 = return address
+;   out: r24 = next index (ni), r23 = slope, r25 = x (16.16), r29 = yend
+;   clobbers r0-r3, r22, r26, r27, r28.  Preserves r10-r21.
+chain_step:
+	move	r24,r26			; cur
+	add	r9,r24			; ni = cur + dir
+	cmpq	#0,r24
+	movei	#gw_m1,r22
+	jump	PL,(r22)
+	nop
+	nop
+	add	r6,r24			; wrapped below 0 (left)
+gw_m1:
+	cmp	r6,r24			; ni - n
+	movei	#gw_m2,r22
+	jump	MI,(r22)
+	nop
+	nop
+	sub	r6,r24			; wrapped past n-1 (right)
+gw_m2:
+	move	r26,r0
+	shlq	#2,r0			; cur*4
+	move	r24,r1
+	shlq	#2,r1			; ni*4
+	movei	#SY_BUF,r2
+	add	r0,r2
+	load	(r2),r27		; sy[cur]
+	movei	#SY_BUF,r3
+	add	r1,r3
+	load	(r3),r29		; sy[ni]  (= yend)
+	movei	#SX_BUF,r2
+	add	r0,r2
+	load	(r2),r25		; sx[cur]
+	movei	#SX_BUF,r3
+	add	r1,r3
+	load	(r3),r23		; sx[ni]
+	; dy = sy[ni] - sy[cur]
+	move	r29,r0
+	sub	r27,r0			; r0 = dy
+	cmpq	#0,r0
+	movei	#gw_flat,r22
+	jump	MI,(r22)		; dy < 0
+	nop
+	nop
+	jump	EQ,(r22)		; dy == 0
+	nop
+	nop
+	; --- dy > 0: slope = ((sx[ni]-sx[cur])<<16)/dy ---
+	move	r23,r1
+	sub	r25,r1			; dx = sx[ni]-sx[cur] (signed)
+	move	r1,r2			; keep dx (sign)
+	abs	r1			; ua = |dx|
+	move	r1,r3
+	shrq	#16,r3			; ua>>16
+	cmp	r0,r3			; (ua>>16) - dy
+	movei	#gw_div,r26
+	jump	CS,(r26)		; (ua>>16) < dy -> divide
+	nop
+	nop
+	movei	#$7FFFFFFF,r1		; saturate (only if dx would overflow)
+	movei	#gw_sign,r26
+	jump	T,(r26)
+	nop
+	nop
+gw_div:
+	div	r0,r1			; r1 = (ua<<16)/dy  [16.16 mode]
+gw_sign:
+	cmpq	#0,r2			; dx < 0 ?
+	movei	#gw_pos,r26
+	jump	PL,(r26)
+	nop
+	nop
+	neg	r1
+gw_pos:
+	move	r1,r23			; slope (output)
+	; x = (sx[cur]<<16) + slope*(y - sy[cur])
+	shlq	#16,r25			; r25 = sx[cur]<<16 (survivor)
+	move	r10,r1
+	sub	r27,r1			; delta = y - sy[cur]
+	move	r23,r0			; slope
+	movei	#gw_xret,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+gw_xret:
+	add	r25,r0			; x = sx[cur]<<16 + slope*delta
+	move	r0,r25			; output x
+	jump	T,(r8)
+	nop
+	nop
+gw_flat:
+	; dy <= 0: x = sx[ni]<<16 ; slope = 0 ; yend = sy[ni]
+	move	r23,r25
+	shlq	#16,r25			; x = sx[ni]<<16
+	moveq	#0,r23			; slope = 0
+	jump	T,(r8)
+	nop
+	nop
+
+;---------------------------------------------------------------------
+; imul32: r0 = low32(r0 * r1).  Signed low-32 product via unsigned 16x16
+; MULT partial products (two's-complement low bits are sign-agnostic).
+; clobbers r2,r3,r26,r27.  return: jump (r28).
+imul32:
+	move	r0,r2			; a  (aLo via low 16)
+	move	r1,r3			; b  (bLo via low 16)
+	move	r0,r26
+	shrq	#16,r26			; aHi
+	move	r1,r27
+	shrq	#16,r27			; bHi
+	mult	r3,r2			; r2 = aLo * bLo
+	mult	r27,r0			; r0 = aLo * bHi
+	mult	r1,r26			; r26 = aHi * bLo
+	nop
+	nop
+	add	r26,r0			; cross = aLo*bHi + aHi*bLo
+	shlq	#16,r0
+	add	r2,r0			; low32 = aLo*bLo + (cross<<16)
+	jump	T,(r28)
+	nop
+	nop
+
+;---------------------------------------------------------------------
+done:
+	movei	#MAGIC_DONE,r0
+	store	r0,(r30)		; mailbox[0] = done
+	nop
+	nop
+halt:
+	nop
+	jr	T,halt
+	nop
+	nop

@@ -1,0 +1,1094 @@
+; gpu_bltex.gas - Tom GPU edge-walk + BLITTER-A1 affine texture-mapped fill.
+;
+; This is the perf sibling of gpu_textured.gas.  It REUSES that kernel's
+; edge-walk VERBATIM (scan_loop, chain_step, the two-chain yloop, uv_edge's
+; per-edge (u,v) DDA, imul32, and the launch/mailbox/done preamble).  What
+; changes is ONLY the per-span inner loop:
+;
+;   gpu_textured : per span, a PER-PIXEL GPU loop (loadb texel, loadw palette,
+;                  storew RGB16).  HW-verified but ~1.8 fps - the GPU touches
+;                  every texel.
+;
+;   gpu_bltex    : per span, ONE Blitter textured-blit.  The Blitter's A1
+;                  fractional address generator (XADDINC) walks the texture
+;                  atlas affinely (both U and V step per destination pixel) and
+;                  copies 8bpp indices straight into an 8bpp framebuffer.  The
+;                  GPU touches ZERO texels; it only computes per-span setup.
+;
+; =====================================================================
+; WHY A1 IS THE TEXTURE (task brief said A2 - that is INVERTED)
+; =====================================================================
+; The task brief describes "A2 = fractional texture source, A1 = dest".  On
+; real Tom that is impossible: ONLY A1 has the fractional pointer/step/inc
+; registers (A1_FPIXEL/A1_FSTEP/A1_FINC).  A2 has no fractional registers.  So
+; the canonical (official SDK poly engine, SDK-confirmed)
+; role assignment is:
+;
+;   A1 = TEXTURE source, XADDINC  -> fractionally stepped = the affine sampler
+;   A2 = SCREEN  dest,   XADDPIX  -> advances exactly 1 dest pixel per step
+;   DSTA2 (B_CMD bit 11) set      -> REVERSES roles so A2 is written, A1 read
+;
+; (blitter.md techniques note, "Role correction", lines 175-180; register-role
+; note lines 68-72: "anything that needs sub-pixel source stepping must put the
+; source on A1 + DSTA2"; JAGUAR.INC:220-232 for the register addresses.)
+;
+; =====================================================================
+; DOES THE BLITTER STEP BOTH U AND V PER DEST PIXEL?  YES.
+; =====================================================================
+; A1_PIXEL is a PACKED coordinate (v<<16)|u (the "(y<<16)|x" pixel pointer),
+; A1_FPIXEL is the packed fraction (vfrac<<16)|ufrac, A1_INC is the packed
+; per-dest-pixel integer step (dv_int<<16)|(du_int), and A1_FINC is the packed
+; fraction step (dv_frac<<16)|(du_frac).  In XADDINC mode the Blitter adds the
+; full A1_INC:A1_FINC to A1_PIXEL:A1_FPIXEL every inner-loop pixel, so U (low
+; 16, the X coord) AND V (high 16, the Y coord) BOTH advance and carry
+; independently.  The address generator then forms  base + V*atlas_w + U .
+; That is a full affine map (rotation included) - constant-V-within-a-span is
+; NOT assumed.  Packing proven by draw2_txt.inc:582-606 (INC/FINC at :582-592,
+; PIXEL/FPIXEL at :594-606) and stored at :627-640.
+;
+; =====================================================================
+; 68000-SIDE PACKET FORMAT  (big-endian, all 32-bit longs)
+; =====================================================================
+; params @ $F03F00  (7 longs) - BYTE-COMPATIBLE with gpu_textured except the
+; slots that no longer feed a palette (the OP CLUT does colour at scanout now):
+;   [0] = poly-list pointer (DRAM)
+;   [1] = mailbox address   (DRAM: [0]=done magic, [1]=hello magic)
+;   [2] = poly count
+;   [3] = framebuffer base  (8bpp indexed, 320 wide, PHRASE(8-byte)-ALIGNED)
+;   [4] = atlas_base        (DRAM ptr to 8bpp indexed texel atlas, PHRASE-ALIGNED)
+;   [5] = atlas_width       (atlas row stride in texels; see WID note below)
+;   [6] = UNUSED            (was palette_base; the OP CLUT now expands indices)
+;
+; DIFFERENCES from gpu_textured's packet (harness barely changes):
+;   * [3] framebuffer is 8bpp indexed (1 byte/pixel, stride 320), NOT RGB16.
+;   * [6] palette_base is IGNORED (the fill copies indices; OP CLUT -> colour).
+;   * [5] atlas_width must be a Blitter-encodable width (see below).  The kernel
+;     encodes it into the A1 WID flag itself, so the harness still passes the
+;     raw texel stride - no change on the 68k side.
+;
+; poly-list = `poly count` records packed back-to-back.  Each record (IDENTICAL
+; to gpu_textured):
+;   long [0] = n                 vertex count (3 or 4)
+;   then n vertices, each 4 longs:  +0 sx  +4 sy  +8 u  +12 v   (all s32)
+;       u = integer texel column (0..atlas_w-1), v = integer texel row.
+;   record size = 4 + n*16  (tri = 52, quad = 68).
+;
+; mailbox (DRAM): [0]=done magic $0A3DD05E, [1]=hello magic $0A3D0001.
+;
+; =====================================================================
+; atlas_width -> WID FLAG.  The Blitter A1 WID field (A1_FLAGS bits 9-14) is a
+; 6-bit float [4-bit exponent e][2-bit mantissa m], width = 1.mm(binary) x 2^e
+; (JAGUAR.INC:359-397; e.g. WID64=$3000, WID256=$4000, WID320=$4200).  ONLY
+; widths of the form k*2^n with k in {4,5,6,7} (i.e. every power of two, and
+; a few others) are representable.  The kernel encodes atlas_width at startup:
+;     e = floor(log2(w)),  m = (w >> (e-2)) & 3,  field = ((e<<2)|m) << 9.
+; REQUIREMENT: build the OpenLara atlas at a power-of-two width (256 is ideal:
+; WID256=$4000).  A non-encodable width silently mis-addresses texture rows.
+;
+; =====================================================================
+; SRAM LAYOUT  (code $F03000.., scratch $F03E00.., params $F03F00)
+; =====================================================================
+;   SX_BUF $F03E00  up to 4 screen x (int)   ] identical placement to the base
+;   SY_BUF $F03E20  up to 4 screen y (int)   ] kernels so the VERBATIM
+;   U_BUF  $F03E40  up to 4 per-vertex u     ]   scan_loop/chain_step/uv_edge
+;   V_BUF  $F03E60  up to 4 per-vertex v     ]   keep working unchanged.
+;   chain A u/v DDA state @ $F03E80: AU,AUSL,AV,AVSL  (16.16)
+;   chain B u/v DDA state @ $F03E90: BU,BUSL,BV,BVSL  (16.16)
+;   (Blitter A1_BASE/A1_FLAGS/A2_BASE/A2_FLAGS are programmed ONCE at startup
+;    straight into the Blitter registers - no SRAM copies needed here.)
+;
+; =====================================================================
+; BLITTER PROGRAM PER SPAN  (registers at $F02200; JAGUAR.INC:220-236)
+; =====================================================================
+;   [ONCE at startup]
+;     A1_BASE  = atlas_base
+;     A1_FLAGS = PITCH1|PIXEL8|WIDatlas|XADDINC   ($18 | WIDfield | $30000)
+;     A2_BASE  = framebuffer
+;     A2_FLAGS = PITCH1|PIXEL8|WID320 |XADDPIX    ($14218)
+;   [PER SPAN, after wait-for-idle]
+;     A1_PIXEL  = (v0_int  <<16) | u0_int          integer texel start
+;     A1_FPIXEL = (v0_frac <<16) | u0_frac         fractional texel start
+;     A1_INC    = (dv_int  <<16) | du_int          integer per-pixel U:V step
+;     A1_FINC   = (dv_frac <<16) | du_frac         fractional per-pixel step
+;     A2_PIXEL  = (y<<16) | xl                      dest span start
+;     B_COUNT   = (1<<16) | (xr-xl+1)               1 line, span-width pixels
+;     B_CMD     = SRCEN|LFU_REPLACE|DSTA2 = $01800801   -> launch
+;   B_CMD bits: SRCEN($1) reads the texture; LFU_REPLACE($01800000) writes the
+;   source index verbatim (no dst read, no logic); DSTA2($800) makes A2 the
+;   dest / A1 the read source.  NO SRCSHADE/GOURD/GOURZ: those shade CRY
+;   luminance and would corrupt an 8bpp palette INDEX.  NO UPDA1/UPDA2: the
+;   per-line steps never fire (B_COUNT is 1 line), so A1_STEP/A2_STEP are left
+;   unset.  (blitter.md recipe index line 556; UPDA/DSTA2/LFU values verified
+;   against JAGUAR.INC:261-318 and the "wrong twice" history, blitter.md 210-238.)
+;
+; =====================================================================
+; SYNC: wait-for-idle BEFORE writing Blitter regs, BOUNDED (blitter.md 513-541).
+; We spin on B_CMD bit0 (BLIT_IDLE) with a guard, so a wedged Blitter degrades
+; to a torn frame, not a freeze.  Waiting BEFORE (not after) each span keeps the
+; fill overlapping the GPU's setup of the next span = the parallelism win.
+;
+; =====================================================================
+; HAZARD RULES honoured (same discipline as the base kernels):
+;   assembled at true SRAM origin so `movei #label` resolves; >=2 instrs after
+;   a load before using the result; only MI/PL/EQ/NE/T/CS conditions; forward/
+;   long branches via movei #label,rN; jump cc,(rN); nop; nop.  Backward jr only
+;   for the halt.  Blitter regs are LONG (32-bit) accesses.
+; =====================================================================
+
+G_DIVCTRL	.equ	$F0211C
+
+; Blitter registers (JAGUAR.INC:220-236, base $F02200)
+A1_BASE		.equ	$F02200
+A1_FLAGS	.equ	$F02204
+A1_PIXEL	.equ	$F0220C
+A1_FPIXEL	.equ	$F02218
+A1_INC		.equ	$F0221C
+A1_FINC		.equ	$F02220
+A2_BASE		.equ	$F02224
+A2_FLAGS	.equ	$F02228
+A2_PIXEL	.equ	$F02230
+B_CMD		.equ	$F02238
+B_COUNT		.equ	$F0223C
+
+; A1/A2 flag pieces (JAGUAR.INC:328-405)
+;   PITCH1=$0  PIXEL8=$18  XADDPIX=$10000  XADDINC=$30000  WID320=$4200
+A1_FIXED	.equ	$00030018	; PIXEL8 | XADDINC (WID OR'd in at startup)
+A2_FLAGS_VAL	.equ	$00014218	; PITCH1|PIXEL8|WID320|XADDPIX
+; B_CMD (JAGUAR.INC:261-318): SRCEN|LFU_REPLACE|DSTA2
+BCMD_TEX	.equ	$01800801
+BLIT_GUARD	.equ	200000		; bounded wait-for-idle spins
+
+MAGIC_HELLO	.equ	$0A3D0001
+MAGIC_DONE	.equ	$0A3DD05E
+
+YMAX		.equ	239		; framebuffer bottom clamp (RENDER_H-1)
+
+; SRAM layout
+PARAMS		.equ	$F03F00
+SX_BUF		.equ	$F03E00
+SY_BUF		.equ	$F03E20
+U_BUF		.equ	$F03E40
+V_BUF		.equ	$F03E60
+; chain A u/v DDA state
+AU		.equ	$F03E80
+AUSL		.equ	$F03E84
+AV		.equ	$F03E88
+AVSL		.equ	$F03E8C
+; chain B u/v DDA state
+BU		.equ	$F03E90
+BUSL		.equ	$F03E94
+BV		.equ	$F03E98
+BVSL		.equ	$F03E9C
+
+	.gpu
+	.org	$F03000
+
+start:
+	movei	#PARAMS,r1
+	nop
+	load	(r1),r4			; [0] poly-list pointer
+	addq	#4,r1
+	load	(r1),r30		; [1] mailbox
+	addq	#4,r1
+	nop
+	load	(r1),r5			; [2] poly count
+	addq	#4,r1
+	load	(r1),r0			; [3] framebuffer base (8bpp)
+	addq	#4,r1
+	nop
+	nop
+	movei	#A2_BASE,r2		; A2_BASE = framebuffer (dest)
+	store	r0,(r2)
+	load	(r1),r7			; [4] atlas_base
+	addq	#4,r1
+	nop
+	nop
+	movei	#A1_BASE,r2		; A1_BASE = atlas (texture source)
+	store	r7,(r2)
+	load	(r1),r0			; [5] atlas_width
+	nop
+	nop
+
+;---------------------------------------------------------------------
+; Encode atlas_width (r0) into the A1 WID flag and program A1_FLAGS/A2_FLAGS.
+;   e = floor(log2(w)); m = (w >> (e-2)) & 3; field = ((e<<2)|m) << 9.
+;---------------------------------------------------------------------
+	moveq	#1,r3			; const 1 (for cmp)
+	move	r0,r1			; t = w
+	moveq	#0,r2			; e = 0
+wid_e:
+	cmp	r3,r1			; t - 1
+	movei	#wid_e_done,r22
+	jump	EQ,(r22)		; t == 1 -> e is floor(log2 w)
+	nop
+	nop
+	jump	MI,(r22)		; t == 0 (guard) -> done
+	nop
+	nop
+	shrq	#1,r1			; t >>= 1
+	addq	#1,r2			; e++
+	movei	#wid_e,r22
+	jump	T,(r22)
+	nop
+	nop
+wid_e_done:
+	move	r2,r8			; count = e
+	subq	#2,r8			; e - 2
+	move	r0,r9			; w
+wid_m:
+	cmpq	#0,r8
+	movei	#wid_m_done,r22
+	jump	EQ,(r22)
+	nop
+	nop
+	jump	MI,(r22)		; guard e < 2
+	nop
+	nop
+	shrq	#1,r9			; w >>= 1
+	subq	#1,r8
+	movei	#wid_m,r22
+	jump	T,(r22)
+	nop
+	nop
+wid_m_done:
+	moveq	#3,r3
+	and	r3,r9			; m = (w>>(e-2)) & 3
+	shlq	#2,r2			; e << 2
+	or	r9,r2			; (e<<2) | m
+	shlq	#9,r2			; << 9  -> WID field in bits 9-14
+	movei	#A1_FIXED,r3		; PIXEL8 | XADDINC
+	or	r3,r2			; A1_FLAGS = PIXEL8|WID|XADDINC
+	movei	#A1_FLAGS,r1
+	store	r2,(r1)
+	movei	#A2_FLAGS_VAL,r2
+	movei	#A2_FLAGS,r1
+	store	r2,(r1)			; A2_FLAGS = PIXEL8|WID320|XADDPIX
+
+	; mailbox[1] = hello
+	movei	#MAGIC_HELLO,r0
+	move	r30,r1
+	addq	#4,r1
+	store	r0,(r1)
+
+	; 16.16 divide mode for all edge-slope divides (span toggles to int)
+	movei	#G_DIVCTRL,r0
+	moveq	#1,r1
+	store	r1,(r0)
+
+;=====================================================================
+; POLY ITERATOR
+;=====================================================================
+poly_loop:
+	cmpq	#0,r5
+	movei	#done,r22
+	jump	EQ,(r22)
+	nop
+	nop
+
+	; header long = n
+	load	(r4),r0
+	addq	#4,r4
+	nop
+	nop
+	move	r0,r6			; n
+
+	; read n verts {sx,sy,u,v} into SX/SY/U/V buffers
+	moveq	#0,r3			; i = 0
+vin_loop:
+	cmp	r6,r3			; i - n
+	movei	#vin_done,r22
+	jump	EQ,(r22)
+	nop
+	nop
+	move	r3,r7
+	shlq	#2,r7			; i*4
+	load	(r4),r8			; sx
+	addq	#4,r4
+	load	(r4),r9			; sy
+	addq	#4,r4
+	load	(r4),r0			; u
+	addq	#4,r4
+	load	(r4),r1			; v
+	addq	#4,r4
+	movei	#SX_BUF,r2
+	add	r7,r2
+	store	r8,(r2)			; SX_BUF[i]
+	movei	#SY_BUF,r2
+	add	r7,r2
+	store	r9,(r2)			; SY_BUF[i]
+	movei	#U_BUF,r2
+	add	r7,r2
+	store	r0,(r2)			; U_BUF[i]
+	movei	#V_BUF,r2
+	add	r7,r2
+	store	r1,(r2)			; V_BUF[i]
+	addq	#1,r3
+	movei	#vin_loop,r22
+	jump	T,(r22)
+	nop
+	nop
+vin_done:
+
+;---------------------------------------------------------------------
+; edge-walk setup: itop = first strict-min sy; ymin; ymax  (VERBATIM)
+;---------------------------------------------------------------------
+	movei	#SY_BUF,r0
+	load	(r0),r1			; sy[0]
+	moveq	#0,r20			; itop = 0
+	nop
+	move	r1,r2			; ymin
+	move	r1,r3			; ymax
+	moveq	#1,r24			; i = 1
+scan_loop:
+	cmp	r6,r24			; i - n
+	movei	#scan_done,r22
+	jump	EQ,(r22)
+	nop
+	nop
+	move	r24,r0
+	shlq	#2,r0
+	movei	#SY_BUF,r1
+	add	r1,r0
+	load	(r0),r1			; sy[i]
+	nop
+	nop
+	cmp	r2,r1			; sy[i] - ymin
+	movei	#not_min,r22
+	jump	PL,(r22)		; >= ymin -> keep first min
+	nop
+	nop
+	move	r1,r2			; ymin = sy[i]
+	move	r24,r20			; itop = i
+not_min:
+	cmp	r3,r1			; sy[i] - ymax
+	movei	#not_max,r22
+	jump	MI,(r22)		; < ymax
+	nop
+	nop
+	jump	EQ,(r22)		; == ymax
+	nop
+	nop
+	move	r1,r3			; ymax = sy[i]
+not_max:
+	addq	#1,r24
+	movei	#scan_loop,r22
+	jump	T,(r22)
+	nop
+	nop
+scan_done:
+	; y0 = max(ymin,0) -> r10 ; y1 = min(ymax,YMAX) -> r11
+	move	r2,r10			; y = ymin
+	cmpq	#0,r10
+	movei	#y0_ok,r22
+	jump	PL,(r22)
+	nop
+	nop
+	moveq	#0,r10
+y0_ok:
+	move	r3,r11			; y1 = ymax
+	movei	#YMAX,r0
+	cmp	r0,r11			; ymax - YMAX
+	movei	#y1_ok,r22
+	jump	MI,(r22)		; < YMAX keep
+	nop
+	nop
+	jump	EQ,(r22)		; == YMAX keep
+	nop
+	nop
+	move	r0,r11			; y1 = YMAX
+y1_ok:
+	; reject empty: y1 < y0
+	cmp	r10,r11			; y1 - y0
+	movei	#next_poly,r22
+	jump	MI,(r22)
+	nop
+	nop
+
+	; init chains: aci=bci=itop; ayend=byend=sy[itop]=ymin(r2);
+	; ax=bx=aslope=bslope=0
+	move	r20,r12			; aci
+	move	r20,r13			; bci
+	move	r2,r14			; ayend
+	move	r2,r15			; byend
+	moveq	#0,r16			; ax
+	moveq	#0,r17			; bx
+	moveq	#0,r18			; aslope
+	moveq	#0,r19			; bslope
+
+	; init chain u/v DDA state to 0 (recomputed on first edge step)
+	moveq	#0,r0
+	movei	#AU,r1
+	store	r0,(r1)
+	movei	#AUSL,r1
+	store	r0,(r1)
+	movei	#AV,r1
+	store	r0,(r1)
+	movei	#AVSL,r1
+	store	r0,(r1)
+	movei	#BU,r1
+	store	r0,(r1)
+	movei	#BUSL,r1
+	store	r0,(r1)
+	movei	#BV,r1
+	store	r0,(r1)
+	movei	#BVSL,r1
+	store	r0,(r1)
+
+;---------------------------------------------------------------------
+yloop:
+	; ---- chain A: while (y >= ayend && guardA++ <= n)  dir +1 ----
+	moveq	#0,r21			; guardA
+lchain:
+	cmp	r14,r10			; y - ayend
+	movei	#lchain_done,r22
+	jump	MI,(r22)		; y < ayend -> stop
+	nop
+	nop
+	cmp	r6,r21			; guard - n
+	movei	#lchain_cont,r22
+	jump	EQ,(r22)		; guard == n -> allowed
+	nop
+	nop
+	movei	#lchain_done,r22
+	jump	PL,(r22)		; guard > n -> stop
+	nop
+	nop
+lchain_cont:
+	addq	#1,r21			; guard++
+	move	r12,r24			; cur = aci
+	moveq	#1,r9			; dir +1
+	movei	#lc_ret,r8
+	movei	#chain_step,r22
+	jump	T,(r22)
+	nop
+	nop
+lc_ret:
+	; stash chain_step outputs into walk state (uv_edge preserves r10-r21)
+	move	r29,r14			; ayend = sy[ni]
+	move	r25,r16			; ax    = x
+	move	r23,r18			; aslope
+	; compute u/v edge DDA for chain A (block @ AU); cur=old aci(r12), ni=r24
+	move	r12,r0			; cur
+	move	r24,r1			; ni
+	move	r24,r12			; aci = ni  (safe: uv_edge reads cur/ni from r0/r1)
+	movei	#AU,r7			; block ptr
+	movei	#lc_uv,r20		; return addr
+	movei	#uv_edge,r22
+	jump	T,(r22)
+	nop
+	nop
+lc_uv:
+	movei	#lchain,r22
+	jump	T,(r22)
+	nop
+	nop
+lchain_done:
+
+	; ---- chain B: while (y >= byend && guardB++ <= n)  dir -1 ----
+	moveq	#0,r21			; guardB
+rchain:
+	cmp	r15,r10			; y - byend
+	movei	#rchain_done,r22
+	jump	MI,(r22)
+	nop
+	nop
+	cmp	r6,r21
+	movei	#rchain_cont,r22
+	jump	EQ,(r22)
+	nop
+	nop
+	movei	#rchain_done,r22
+	jump	PL,(r22)
+	nop
+	nop
+rchain_cont:
+	addq	#1,r21
+	move	r13,r24			; cur = bci
+	movei	#-1,r9			; dir -1
+	movei	#rc_ret,r8
+	movei	#chain_step,r22
+	jump	T,(r22)
+	nop
+	nop
+rc_ret:
+	move	r29,r15			; byend = sy[ni]
+	move	r25,r17			; bx    = x
+	move	r23,r19			; bslope
+	move	r13,r0			; cur = old bci
+	move	r24,r1			; ni
+	move	r24,r13			; bci = ni
+	movei	#BU,r7			; block ptr
+	movei	#rc_uv,r20		; return addr
+	movei	#uv_edge,r22
+	jump	T,(r22)
+	nop
+	nop
+rc_uv:
+	movei	#rchain,r22
+	jump	T,(r22)
+	nop
+	nop
+rchain_done:
+
+;---------------------------------------------------------------------
+; SPAN: choose left/right chain, build affine (u,v) gradient, Blitter fill
+;---------------------------------------------------------------------
+	; xa = ax>>16, xb = bx>>16
+	move	r16,r0
+	sharq	#16,r0			; xa
+	move	r17,r1
+	sharq	#16,r1			; xb
+	cmp	r1,r0			; xa - xb
+	movei	#sp_bleft,r22
+	jump	PL,(r22)		; xa >= xb -> chain B is the LEFT edge
+	nop
+	nop
+	; --- chain A is LEFT ---
+	move	r0,r2			; xl_raw = xa
+	move	r1,r3			; xr_raw = xb
+	movei	#AU,r28
+	load	(r28),r24		; uL = AU
+	movei	#AV,r28
+	load	(r28),r25		; vL = AV
+	movei	#BU,r28
+	load	(r28),r26		; uR = BU
+	movei	#BV,r28
+	load	(r28),r27		; vR = BV
+	movei	#sp_have,r22
+	jump	T,(r22)
+	nop
+	nop
+sp_bleft:
+	; --- chain B is LEFT ---
+	move	r1,r2			; xl_raw = xb
+	move	r0,r3			; xr_raw = xa
+	movei	#BU,r28
+	load	(r28),r24		; uL = BU
+	movei	#BV,r28
+	load	(r28),r25		; vL = BV
+	movei	#AU,r28
+	load	(r28),r26		; uR = AU
+	movei	#AV,r28
+	load	(r28),r27		; vR = AV
+sp_have:
+	; denom = xr_raw - xl_raw  (>= 0)
+	move	r3,r7
+	sub	r2,r7			; r7 = denom
+	; integer divide mode for the per-span du/dv divide
+	movei	#G_DIVCTRL,r0
+	moveq	#0,r1
+	store	r1,(r0)
+	; denom == 0 (single column) -> du=dv=0
+	cmpq	#0,r7
+	movei	#sp_zero,r22
+	jump	EQ,(r22)
+	nop
+	nop
+	; du = (uR - uL) / denom   (signed; uR,uL are 16.16 so result is 16.16)
+	move	r26,r0			; uR
+	sub	r24,r0			; uR - uL
+	move	r0,r8			; keep sign
+	abs	r0
+	div	r7,r0			; |num| / denom  (integer mode)
+	cmpq	#0,r8
+	movei	#sp_dup,r22
+	jump	PL,(r22)
+	nop
+	nop
+	neg	r0
+sp_dup:
+	move	r0,r8			; du -> r8
+	; dv = (vR - vL) / denom
+	move	r27,r0			; vR
+	sub	r25,r0			; vR - vL
+	move	r0,r9			; keep sign
+	abs	r0
+	div	r7,r0
+	cmpq	#0,r9
+	movei	#sp_dvp,r22
+	jump	PL,(r22)
+	nop
+	nop
+	neg	r0
+sp_dvp:
+	move	r0,r9			; dv -> r9
+	movei	#sp_clamp,r22
+	jump	T,(r22)
+	nop
+	nop
+sp_zero:
+	moveq	#0,r8			; du = 0
+	moveq	#0,r9			; dv = 0
+sp_clamp:
+	; restore 16.16 divide mode for the next scanline's edge slopes
+	movei	#G_DIVCTRL,r0
+	moveq	#1,r1
+	store	r1,(r0)
+	; xl = max(xl_raw,0) -> r29
+	move	r2,r29
+	cmpq	#0,r29
+	movei	#sp_xlok,r22
+	jump	PL,(r22)
+	nop
+	nop
+	moveq	#0,r29
+sp_xlok:
+	; xr = min(xr_raw,319) -> r23
+	move	r3,r23
+	movei	#319,r0
+	cmp	r0,r23			; xr_raw - 319
+	movei	#sp_xrok,r22
+	jump	MI,(r22)		; < 319 keep
+	nop
+	nop
+	jump	EQ,(r22)		; == 319 keep
+	nop
+	nop
+	move	r0,r23			; xr = 319
+sp_xrok:
+	; if xr < xl -> skip span
+	cmp	r29,r23			; xr - xl
+	movei	#sp_skip,r22
+	jump	MI,(r22)
+	nop
+	nop
+
+	; off = xl - xl_raw  (>=0; advance the gradient over any left clamp)
+	move	r29,r1
+	sub	r2,r1			; off (kept in r1; imul32 preserves r1)
+	; u0 = uL + du*off
+	move	r8,r0			; du
+	movei	#sp_u0,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+sp_u0:
+	add	r24,r0			; u0 = uL + du*off
+	move	r0,r7			; u0 (16.16) -> r7
+	; v0 = vL + dv*off   (r1 still = off)
+	move	r9,r0			; dv
+	movei	#sp_v0,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+sp_v0:
+	add	r25,r0			; v0 = vL + dv*off
+	move	r0,r20			; v0 (16.16) -> r20
+
+;---- Blitter textured-span fill --------------------------------------
+; live: r29=xl r23=xr r10=y  r7=u0(16.16) r20=v0(16.16) r8=du(16.16) r9=dv(16.16)
+; clobbers r0-r3, r22 only (walk state r10-r21, span r7/r8/r9/r20/r23/r29 kept)
+;
+; wait for Blitter idle (B_CMD bit0=BLIT_IDLE), BOUNDED
+	movei	#B_CMD,r3
+	movei	#BLIT_GUARD,r2
+bwait:
+	load	(r3),r0			; status
+	subq	#1,r2			; guard--
+	nop
+	btst	#0,r0			; idle?  (bit0 set = idle)
+	movei	#bwait_done,r22
+	jump	NE,(r22)		; idle -> proceed
+	nop
+	nop
+	cmpq	#0,r2
+	movei	#bwait_done,r22
+	jump	EQ,(r22)		; guard exhausted -> proceed (torn, not frozen)
+	nop
+	nop
+	movei	#bwait,r22
+	jump	T,(r22)
+	nop
+	nop
+bwait_done:
+	; A1_PIXEL = (v0 & $FFFF0000) | (u0 >> 16)   integer texel start (v<<16)|u
+	move	r20,r0
+	movei	#$FFFF0000,r1
+	and	r1,r0			; v0 integer part in bits 16-31
+	move	r7,r2
+	shrq	#16,r2			; u0 integer part in bits 0-15 (signed-16)
+	or	r2,r0
+	movei	#A1_PIXEL,r1
+	store	r0,(r1)
+	; A1_FPIXEL = (v0 << 16) | (u0 & $FFFF)      fractional texel start
+	move	r20,r0
+	shlq	#16,r0			; v0 fraction in bits 16-31
+	move	r7,r2
+	movei	#$0000FFFF,r3
+	and	r3,r2			; u0 fraction in bits 0-15
+	or	r2,r0
+	movei	#A1_FPIXEL,r1
+	store	r0,(r1)
+	; A1_INC = (dv & $FFFF0000) | (du >> 16)      integer per-pixel U:V step
+	move	r9,r0
+	movei	#$FFFF0000,r1
+	and	r1,r0			; dv integer step in bits 16-31
+	move	r8,r2
+	shrq	#16,r2			; du integer step in bits 0-15 (signed-16)
+	or	r2,r0
+	movei	#A1_INC,r1
+	store	r0,(r1)
+	; A1_FINC = (dv << 16) | (du & $FFFF)         fractional per-pixel step
+	move	r9,r0
+	shlq	#16,r0			; dv fraction step in bits 16-31
+	move	r8,r2
+	movei	#$0000FFFF,r3
+	and	r3,r2			; du fraction step in bits 0-15
+	or	r2,r0
+	movei	#A1_FINC,r1
+	store	r0,(r1)
+	; A2_PIXEL = (y<<16) | xl                     dest span start
+	move	r10,r0
+	shlq	#16,r0
+	or	r29,r0
+	movei	#A2_PIXEL,r1
+	store	r0,(r1)
+	; B_COUNT = (1<<16) | (xr - xl + 1)           1 line, span-width pixels
+	move	r23,r0
+	sub	r29,r0
+	addq	#1,r0			; npix = xr-xl+1
+	movei	#$00010000,r1
+	or	r1,r0
+	movei	#B_COUNT,r1
+	store	r0,(r1)
+	; B_CMD = SRCEN|LFU_REPLACE|DSTA2 -> LAUNCH (fire and continue)
+	movei	#BCMD_TEX,r0
+	movei	#B_CMD,r1
+	store	r0,(r1)
+
+sp_skip:
+sp_tail:
+	; advance the two x DDAs (verbatim) ...
+	add	r18,r16			; ax += aslope
+	add	r19,r17			; bx += bslope
+	; ... and the four u/v DDAs (AU+=AUSL, AV+=AVSL, BU+=BUSL, BV+=BVSL)
+	movei	#AU,r0
+	load	(r0),r1
+	movei	#AUSL,r2
+	load	(r2),r3
+	nop
+	nop
+	add	r3,r1
+	store	r1,(r0)
+	movei	#AV,r0
+	load	(r0),r1
+	movei	#AVSL,r2
+	load	(r2),r3
+	nop
+	nop
+	add	r3,r1
+	store	r1,(r0)
+	movei	#BU,r0
+	load	(r0),r1
+	movei	#BUSL,r2
+	load	(r2),r3
+	nop
+	nop
+	add	r3,r1
+	store	r1,(r0)
+	movei	#BV,r0
+	load	(r0),r1
+	movei	#BVSL,r2
+	load	(r2),r3
+	nop
+	nop
+	add	r3,r1
+	store	r1,(r0)
+	; y++
+	addq	#1,r10			; y++
+	cmp	r11,r10			; y - y1
+	movei	#yloop,r22
+	jump	MI,(r22)		; y < y1 -> continue
+	nop
+	nop
+	jump	EQ,(r22)		; y == y1 -> last line
+	nop
+	nop
+	; fall through to next_poly
+
+;---------------------------------------------------------------------
+next_poly:
+	subq	#1,r5
+	movei	#poly_loop,r22
+	jump	T,(r22)
+	nop
+	nop
+
+;=====================================================================
+; uv_edge: compute the (u,v) DDA state for one edge cur->ni and store it
+;   into the given chain block (mirrors chain_step's x/slope math for u,v).
+;   in:  r0 = cur index, r1 = ni index, r10 = y, r7 = block ptr
+;        (block: +0 U(16.16), +4 USL, +8 V, +12 VSL), r20 = return addr.
+;   out: block[+0..+12] written.  Preserves r10-r21, r4-r6, r30.  DIV in 16.16.
+;   clobbers r0-r3, r8, r9, r22-r29.
+;=====================================================================
+uv_edge:
+	move	r0,r24
+	shlq	#2,r24			; cur*4
+	move	r1,r25
+	shlq	#2,r25			; ni*4
+	movei	#SY_BUF,r2
+	add	r24,r2
+	load	(r2),r26		; sy[cur]
+	movei	#SY_BUF,r3
+	add	r25,r3
+	load	(r3),r27		; sy[ni]
+	nop
+	nop
+	move	r27,r0
+	sub	r26,r0			; dy = sy[ni]-sy[cur]
+	move	r10,r1
+	sub	r26,r1			; delta = y - sy[cur]
+	move	r0,r23			; dy    (persist across imul32/div)
+	move	r1,r29			; delta (persist)
+	cmpq	#0,r0
+	movei	#uve_flat,r22
+	jump	MI,(r22)		; dy < 0
+	nop
+	nop
+	jump	EQ,(r22)		; dy == 0
+	nop
+	nop
+	; ---- dy > 0: U ----
+	movei	#U_BUF,r2
+	add	r24,r2
+	load	(r2),r9			; u[cur]
+	movei	#U_BUF,r3
+	add	r25,r3
+	load	(r3),r0			; u[ni]
+	nop
+	nop
+	move	r0,r8
+	sub	r9,r8			; duint = u[ni]-u[cur] (signed)
+	shlq	#16,r9			; ubase = u[cur]<<16 (persist)
+	; uslope = ((|duint|)<<16)/dy  in 16.16 mode, then re-sign
+	move	r8,r1
+	abs	r1
+	div	r23,r1			; (|duint|<<16)/dy
+	cmpq	#0,r8
+	movei	#uve_us_pos,r22
+	jump	PL,(r22)
+	nop
+	nop
+	neg	r1
+uve_us_pos:
+	move	r7,r2
+	addq	#4,r2
+	store	r1,(r2)			; USL = uslope
+	; u = ubase + uslope*delta
+	move	r1,r0			; uslope
+	move	r29,r1			; delta
+	movei	#uve_u_ret,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+uve_u_ret:
+	add	r9,r0			; u = u[cur]<<16 + uslope*delta
+	store	r0,(r7)			; U
+	; ---- dy > 0: V ----
+	movei	#V_BUF,r2
+	add	r24,r2
+	load	(r2),r9			; v[cur]
+	movei	#V_BUF,r3
+	add	r25,r3
+	load	(r3),r0			; v[ni]
+	nop
+	nop
+	move	r0,r8
+	sub	r9,r8			; dvint
+	shlq	#16,r9			; vbase = v[cur]<<16
+	move	r8,r1
+	abs	r1
+	div	r23,r1			; (|dvint|<<16)/dy
+	cmpq	#0,r8
+	movei	#uve_vs_pos,r22
+	jump	PL,(r22)
+	nop
+	nop
+	neg	r1
+uve_vs_pos:
+	move	r7,r2
+	addq	#12,r2
+	store	r1,(r2)			; VSL = vslope
+	move	r1,r0			; vslope
+	move	r29,r1			; delta
+	movei	#uve_v_ret,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+uve_v_ret:
+	add	r9,r0			; v = v[cur]<<16 + vslope*delta
+	move	r7,r2
+	addq	#8,r2
+	store	r0,(r2)			; V
+	jump	T,(r20)
+	nop
+	nop
+uve_flat:
+	; dy <= 0: slopes 0, u/v snap to the ni endpoint (matches gw_flat for x)
+	moveq	#0,r0
+	move	r7,r2
+	addq	#4,r2
+	store	r0,(r2)			; USL = 0
+	move	r7,r2
+	addq	#12,r2
+	store	r0,(r2)			; VSL = 0
+	movei	#U_BUF,r2
+	add	r25,r2
+	load	(r2),r0			; u[ni]
+	movei	#V_BUF,r3
+	add	r25,r3
+	load	(r3),r1			; v[ni]
+	nop
+	nop
+	shlq	#16,r0			; u[ni]<<16
+	store	r0,(r7)			; U
+	shlq	#16,r1			; v[ni]<<16
+	move	r7,r2
+	addq	#8,r2
+	store	r1,(r2)			; V
+	jump	T,(r20)
+	nop
+	nop
+
+;=====================================================================
+; chain_step: advance ONE edge of a chain.  VERBATIM from gpu_geomxform.
+;   in:  r24 = cur index, r9 = +1/-1, r10 = y, r6 = n, r8 = return address
+;   out: r24 = next index (ni), r23 = slope, r25 = x (16.16), r29 = yend
+;   clobbers r0-r3, r22, r26, r27, r28.  Preserves r10-r21.
+;=====================================================================
+chain_step:
+	move	r24,r26			; cur
+	add	r9,r24			; ni = cur + dir
+	cmpq	#0,r24
+	movei	#gw_m1,r22
+	jump	PL,(r22)
+	nop
+	nop
+	add	r6,r24			; wrapped below 0 (left)
+gw_m1:
+	cmp	r6,r24			; ni - n
+	movei	#gw_m2,r22
+	jump	MI,(r22)
+	nop
+	nop
+	sub	r6,r24			; wrapped past n-1 (right)
+gw_m2:
+	move	r26,r0
+	shlq	#2,r0			; cur*4
+	move	r24,r1
+	shlq	#2,r1			; ni*4
+	movei	#SY_BUF,r2
+	add	r0,r2
+	load	(r2),r27		; sy[cur]
+	movei	#SY_BUF,r3
+	add	r1,r3
+	load	(r3),r29		; sy[ni]  (= yend)
+	movei	#SX_BUF,r2
+	add	r0,r2
+	load	(r2),r25		; sx[cur]
+	movei	#SX_BUF,r3
+	add	r1,r3
+	load	(r3),r23		; sx[ni]
+	; dy = sy[ni] - sy[cur]
+	move	r29,r0
+	sub	r27,r0			; r0 = dy
+	cmpq	#0,r0
+	movei	#gw_flat,r22
+	jump	MI,(r22)		; dy < 0
+	nop
+	nop
+	jump	EQ,(r22)		; dy == 0
+	nop
+	nop
+	; --- dy > 0: slope = ((sx[ni]-sx[cur])<<16)/dy ---
+	move	r23,r1
+	sub	r25,r1			; dx = sx[ni]-sx[cur] (signed)
+	move	r1,r2			; keep dx (sign)
+	abs	r1			; ua = |dx|
+	move	r1,r3
+	shrq	#16,r3			; ua>>16
+	cmp	r0,r3			; (ua>>16) - dy
+	movei	#gw_div,r26
+	jump	CS,(r26)		; (ua>>16) < dy -> divide
+	nop
+	nop
+	movei	#$7FFFFFFF,r1		; saturate (only if dx would overflow)
+	movei	#gw_sign,r26
+	jump	T,(r26)
+	nop
+	nop
+gw_div:
+	div	r0,r1			; r1 = (ua<<16)/dy  [16.16 mode]
+gw_sign:
+	cmpq	#0,r2			; dx < 0 ?
+	movei	#gw_pos,r26
+	jump	PL,(r26)
+	nop
+	nop
+	neg	r1
+gw_pos:
+	move	r1,r23			; slope (output)
+	; x = (sx[cur]<<16) + slope*(y - sy[cur])
+	shlq	#16,r25			; r25 = sx[cur]<<16 (survivor)
+	move	r10,r1
+	sub	r27,r1			; delta = y - sy[cur]
+	move	r23,r0			; slope
+	movei	#gw_xret,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+gw_xret:
+	add	r25,r0			; x = sx[cur]<<16 + slope*delta
+	move	r0,r25			; output x
+	jump	T,(r8)
+	nop
+	nop
+gw_flat:
+	; dy <= 0: x = sx[ni]<<16 ; slope = 0 ; yend = sy[ni]
+	move	r23,r25
+	shlq	#16,r25			; x = sx[ni]<<16
+	moveq	#0,r23			; slope = 0
+	jump	T,(r8)
+	nop
+	nop
+
+;=====================================================================
+; imul32: r0 = low32(r0 * r1).  VERBATIM from gpu_geomxform.
+;   clobbers r2,r3,r26,r27.  return: jump (r28).  Preserves r1,r4-r25,r29..
+;=====================================================================
+imul32:
+	move	r0,r2			; a  (aLo via low 16)
+	move	r1,r3			; b  (bLo via low 16)
+	move	r0,r26
+	shrq	#16,r26			; aHi
+	move	r1,r27
+	shrq	#16,r27			; bHi
+	mult	r3,r2			; r2 = aLo * bLo
+	mult	r27,r0			; r0 = aLo * bHi
+	mult	r1,r26			; r26 = aHi * bLo
+	nop
+	nop
+	add	r26,r0			; cross = aLo*bHi + aHi*bLo
+	shlq	#16,r0
+	add	r2,r0			; low32 = aLo*bLo + (cross<<16)
+	jump	T,(r28)
+	nop
+	nop
+
+;=====================================================================
+done:
+	movei	#MAGIC_DONE,r0
+	store	r0,(r30)		; mailbox[0] = done
+	nop
+	nop
+halt:
+	nop
+	jr	T,halt
+	nop
+	nop

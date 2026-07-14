@@ -1,0 +1,79 @@
+; gpu_hello.gas - minimal Tom GPU bring-up kernel
+;
+; Proves the GPU executes from SRAM and writes DRAM on this unit.
+; Fills a solid rectangle into the framebuffer, then signals done via
+; the DRAM mailbox. Launch protocol:
+;   params at $F03F00: [0] = framebuffer base, [1] = mailbox address.
+;   mailbox (DRAM):    [0] = done magic, [1] = hello magic.
+;
+; Hazard rules honoured (jaguar-shared coprocessor-offload.md):
+;   >=2 instructions after a load before using the result; 2 nops
+;   after every jr; only backward jr (no forward-jr rmac bug); storew
+;   not storeb; movei for all addresses/constants. Assembled at the
+;   true SRAM origin so movei #label resolves correctly.
+
+PARAMS      .equ    $F03F00
+MAGIC_HELLO .equ    $0A3D0001
+MAGIC_DONE  .equ    $0A3DD05E
+
+RW          .equ    320             ; RENDER_W
+X0          .equ    80
+X1          .equ    240
+Y0          .equ    80
+Y1          .equ    160
+COLOR       .equ    $001F           ; RGB16 R5·B5·G6: pure green (G=31)
+
+	.gpu
+	.org	$F03000
+
+gpustart:
+	movei	#PARAMS,r1
+	nop
+	load	(r1),r4			; r4 = framebuffer base
+	addq	#4,r1
+	load	(r1),r30		; r30 = mailbox
+	nop
+	nop
+
+	; mailbox[1] = hello (proof the kernel started)
+	movei	#MAGIC_HELLO,r0
+	move	r30,r1
+	addq	#4,r1
+	store	r0,(r1)
+
+	; row pointer r7 = fb + Y0*RW*2 + X0*2
+	movei	#(Y0*RW*2+X0*2),r7
+	add	r4,r7
+	movei	#COLOR,r8
+	movei	#(RW*2),r9		; row stride (bytes)
+	movei	#(X1-X0),r10		; columns per row
+	movei	#(Y1-Y0),r5		; rows remaining
+
+.row:
+	move	r7,r11			; r11 = pixel pointer
+	move	r10,r12			; r12 = column counter
+.col:
+	storew	r8,(r11)
+	addq	#2,r11
+	subq	#1,r12
+	jr	NE,.col
+	nop
+	nop
+
+	add	r9,r7			; advance one row
+	subq	#1,r5
+	jr	NE,.row
+	nop
+	nop
+
+	; mailbox[0] = done
+	movei	#MAGIC_DONE,r0
+	store	r0,(r30)
+	nop
+	nop
+
+.halt:
+	nop
+	jr	T,.halt
+	nop
+	nop

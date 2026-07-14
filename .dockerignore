@@ -1,0 +1,39 @@
+# Keep the build image SOURCE-ONLY: no copyrighted game data, ever, and small.
+# (Assets are generated at run time from the user's mounted disc.)
+assets
+*.bin
+*.cof
+*.rom
+MUSIC.PCM
+OPENLARA.COF
+
+# generated headers (emitted by tools/ at build time)
+mrt.h
+mrt_lara.h
+mrt_spawn.h
+gym.h
+gym_lara.h
+gym_spawn.h
+sfx.h
+pass.h
+photo.h
+room0_tex.h
+textures.h
+
+# build products / local junk / dev attic
+build/
+*.o
+*.elf
+tools/tr2jag
+__pycache__/
+*.pyc
+*.bak
+*_pre*.c
+*_pre*.das
+*_pre*.gas
+*_WIP*.gas
+*_BROKEN*.gas
+*_dietonly.gas
+*_surgeries.gas
+*_halfA.gas
+.git

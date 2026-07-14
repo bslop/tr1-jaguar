@@ -1,0 +1,1407 @@
+; gpu_geomdirect.gas - Tom GPU reads the ROOM GEOMETRY TABLES directly from
+; DRAM and renders them; the 68000 no longer marshals per-vertex packets.
+;
+; This is the "68k-idle, Tom reads the geometry pool itself" pattern.  It
+; REUSES the HW-verified gpu_geomxform.gas per-polygon render core VERBATIM
+; (camera transform + perspective projection + near-cull + backface cull +
+; two-chain edge-walk + per-span Blitter).  Only the INPUT FRONT-END is new:
+; instead of reading pre-built world-vertex packets, this kernel walks the
+; room list, and for each room's quads then tris it looks up the room vertex
+; table, adds the room offset to get WORLD (x,y,z), STAGES the poly into an
+; SRAM scratch packet in the EXACT gpu_geomxform format, then runs it through
+; the unchanged render core (render_pkt).  Lara polys (already world-space,
+; already in the gpu_geomxform packet format) are drawn last, straight from
+; DRAM through the same render core.
+;
+; ---- Input (68000, big-endian, all longs unless noted s16/u16) ----------
+; params $F03F00:
+;   [0]=room-list ptr, [1]=mailbox, [2]=room count, [3]=framebuffer base,
+;   [4]=camera-block ptr, [5]=lara-packet ptr, [6]=lara poly count.
+; camera block (8 longs at [4]): cY4,sY4,cP4,sP4,camx,camy,camz,pad (s32).
+;   (Only 7 copied; pad ignored - same as gpu_geomxform.)
+; room-list: `room count` records, each 9 longs, in the given order
+;   (68k pre-orders far-first):
+;     [0]=vert_base, [1]=quad_base, [2]=quad_count, [3]=tri_base,
+;     [4]=tri_count, [5]=offX, [6]=offZ, [7]=yTopD,   (offX/offZ/yTopD s32)
+;     [8]=norm_base (DRAM ptr to this room's face-normal array).
+; norm array @ norm_base: one entry per face, in kernel iteration order
+;   (ALL quads first, then ALL tris); each entry = 3 s16 nx,ny,nz @ +0,+2,+4
+;   (6 bytes), WORLD-space normals scaled /64 (|component| <= ~64).  A cheap
+;   pre-cull (dot = n.(cam-v0) < 0 -> skip) drops backfaces BEFORE transform.
+; room vertex  RVert @ vert_base + index*8  (8 bytes):
+;     +0 s16 x, +2 s16 y, +4 s16 z, +6 u16 shade.
+;     WORLD = (x+offX, y+yTopD, z+offZ).   (y uses yTopD; x->offX; z->offZ)
+; room quad    RQuad @ quad_base + i*12 (12 bytes):
+;     +0 u16 v0, +2 u16 v1, +4 u16 v2, +6 u16 v3, +8 u16 color, +10 u16 flags.
+; room tri     RTri  @ tri_base  + i*10 (10 bytes):
+;     +0 u16 v0, +2 u16 v1, +4 u16 v2, +6 u16 color, +8 u16 flags.
+;   NB: RTri stride is 10 (even) so all fields are 2-byte aligned but NOT
+;   all long-aligned -> 16-bit fields are read with LOADW (not 32-bit LOAD),
+;   which is the alignment-safe path and matches this project's use of the
+;   16-bit word ops (gpu_hello.gas: "storew not storeb").
+; lara packet (at [5], `lara poly count` records): EXACT gpu_geomxform
+;   format - [0]=(n<<16)|color, then n*3 s32 world coords.  Fed straight to
+;   render_pkt (offset already baked in / world space).
+; mailbox (DRAM): [0]=done magic $0A3DD05E, [1]=hello magic $0A3D0001.
+;
+; ---- Hazard rules honoured (identical discipline to gpu_geomxform) -------
+; assembled at true SRAM origin so `movei #label` resolves; >=2 instrs after
+; a load before using the result; 2 nops after MULT before reading product;
+; DIV UNSIGNED so abs/sign dance; only MI/PL/EQ/NE/T conditions; no forward
+; jr - forward/long branches via movei #label,rN; jump cc,(rN); nop; nop.
+; Backward jr only (blitter wait, halt), within +-16 words.
+
+G_DIVCTRL	.equ	$F0211C
+A1_BASE		.equ	$F02200
+A1_FLAGS	.equ	$F02204
+A1_PIXEL	.equ	$F0220C
+B_CMD		.equ	$F02238
+B_COUNT		.equ	$F0223C
+B_SRCD		.equ	$F02240
+B_SRCD1		.equ	$F02244
+
+A1F_VAL		.equ	$00014220	; PIX16 | WID320 | XADDPIX
+BCMD_SPAN	.equ	$01800000	; LFU = source (B_SRCD)
+
+MAGIC_HELLO	.equ	$0A3D0001
+MAGIC_DONE	.equ	$0A3DD05E
+
+; projection constants.  X is never scaled (WID/CENTER_X/FOCAL fixed); only the
+; VERTICAL axis differs in LOWRES, where the 320x120 framebuffer is stretched
+; 2x to 240 lines by the OP hardware scaler.  So LOWRES compresses Y by 2:
+; CENTER_Y and FOCAL_Y are halved and the edge-walk Y clamp is [0,119].
+; Selected at assemble time via `-dLOWRES=1` (Makefile passes -dLOWRES=0/1;
+; rmac has no .ifdef, so LOWRES is ALWAYS defined as 0 or 1).
+	.if	LOWRES
+RENDER_H	.equ	120		; half-height framebuffer
+CENTER_Y	.equ	60		; RENDER_H/2
+FOCAL_Y		.equ	80		; FOCAL/2 (only vertical axis compressed 2x)
+	.else
+RENDER_H	.equ	240
+CENTER_Y	.equ	120
+FOCAL_Y		.equ	160		; = FOCAL (no vertical scaling)
+	.endif
+YMAX		.equ	(RENDER_H-1)	; edge-walk bottom clamp
+CENTER_X	.equ	160
+FOCAL		.equ	160
+NEAR		.equ	32
+
+; SRAM layout: code $F03000-..., scratch $F03E00+, params $F03F00.
+PARAMS		.equ	$F03F00
+SX_BUF		.equ	$F03E00		; up to 4 screen x (int)
+SY_BUF		.equ	$F03E20		; up to 4 screen y (int)
+CAM_BUF		.equ	$F03E40		; 7 longs cY4,sY4,cP4,sP4,camx,camy,camz
+WBUF		.equ	$F03E60		; staged poly packet: hdr + 4*3 world = 13 longs
+
+; ROOM / iterator state block.  The first 9 longs mirror the DRAM room-record
+; layout exactly (now including norm_base) so a room record copies in with one
+; loop.
+ROOM_BLK	.equ	$F03EA0
+VERT_BASE	.equ	$F03EA0		; room-record[0]
+QUAD_BASE	.equ	$F03EA4		; room-record[1]
+QUAD_CNT	.equ	$F03EA8		; room-record[2]
+TRI_BASE	.equ	$F03EAC		; room-record[3]
+TRI_CNT		.equ	$F03EB0		; room-record[4]
+OFFX		.equ	$F03EB4		; room-record[5]
+OFFZ		.equ	$F03EB8		; room-record[6]
+YTOPD		.equ	$F03EBC		; room-record[7]
+NORM_BASE	.equ	$F03EC0		; room-record[8]  face-normal array base (DRAM)
+FACE_LEFT	.equ	$F03EC4		; faces remaining in current quad/tri loop
+FACE_CUR	.equ	$F03EC8		; DRAM cursor into current quad/tri table
+RET_ADDR	.equ	$F03ECC		; render_pkt return continuation (movei val)
+RLIST_PTR	.equ	$F03ED0		; DRAM cursor into the room list
+ROOMS_LEFT	.equ	$F03ED4		; rooms remaining
+LARA_PTR	.equ	$F03ED8		; DRAM cursor into the lara packet list
+LARA_LEFT	.equ	$F03EDC		; lara polys remaining
+NORM_CUR	.equ	$F03EE0		; DRAM cursor into current room's normal array
+
+	.gpu
+	.org	$F03000
+
+start:
+	movei	#PARAMS,r1
+	nop
+	load	(r1),r4			; [0] room-list ptr
+	addq	#4,r1
+	load	(r1),r30		; [1] mailbox
+	addq	#4,r1
+	nop
+	load	(r1),r5			; [2] room count
+	addq	#4,r1
+	load	(r1),r6			; [3] framebuffer base
+	addq	#4,r1			; -> params[4]
+	nop
+
+	; A1_BASE = fb, A1_FLAGS = A1F_VAL (pixel mode; set once)
+	movei	#A1_BASE,r7
+	store	r6,(r7)
+	movei	#A1_FLAGS,r7
+	movei	#A1F_VAL,r8
+	store	r8,(r7)
+
+	; [4] camera block ptr -> copy 7 longs into CAM_BUF
+	load	(r1),r0			; camera block ptr
+	addq	#4,r1			; -> params[5]
+	nop
+	movei	#CAM_BUF,r2
+	moveq	#7,r3
+cam_cpy:
+	load	(r0),r8
+	addq	#4,r0
+	nop
+	nop
+	store	r8,(r2)
+	addq	#4,r2
+	subq	#1,r3
+	movei	#cam_cpy,r22
+	jump	NE,(r22)
+	nop
+	nop
+
+	; [5] lara-packet ptr -> LARA_PTR
+	load	(r1),r8
+	addq	#4,r1			; -> params[6]
+	nop
+	nop
+	movei	#LARA_PTR,r0
+	store	r8,(r0)
+	; [6] lara poly count -> LARA_LEFT
+	load	(r1),r8
+	nop
+	nop
+	movei	#LARA_LEFT,r0
+	store	r8,(r0)
+
+	; room-list ptr (r4) -> RLIST_PTR, room count (r5) -> ROOMS_LEFT
+	movei	#RLIST_PTR,r0
+	store	r4,(r0)
+	movei	#ROOMS_LEFT,r0
+	store	r5,(r0)
+
+	; mailbox[1] = hello
+	movei	#MAGIC_HELLO,r0
+	move	r30,r1
+	addq	#4,r1
+	store	r0,(r1)
+
+;=====================================================================
+; ROOM ITERATOR
+;=====================================================================
+room_loop:
+	movei	#ROOMS_LEFT,r0
+	load	(r0),r5
+	nop
+	nop
+	cmpq	#0,r5
+	movei	#lara_loop,r22
+	jump	EQ,(r22)		; no rooms left -> draw Lara
+	nop
+	nop
+
+	; copy this room record (9 longs) from RLIST_PTR into ROOM_BLK
+	movei	#RLIST_PTR,r0
+	load	(r0),r4			; room record ptr
+	nop
+	nop
+	movei	#ROOM_BLK,r2
+	moveq	#9,r3
+rr_cpy:
+	load	(r4),r8
+	addq	#4,r4
+	nop
+	nop
+	store	r8,(r2)
+	addq	#4,r2
+	subq	#1,r3
+	movei	#rr_cpy,r22
+	jump	NE,(r22)
+	nop
+	nop
+	; advance RLIST_PTR by 36 (r4 already points past this 9-long record)
+	movei	#RLIST_PTR,r0
+	store	r4,(r0)
+	; ROOMS_LEFT--
+	subq	#1,r5
+	movei	#ROOMS_LEFT,r0
+	store	r5,(r0)
+
+	; init NORM_CUR = NORM_BASE (normal cursor, advances 6 bytes per face,
+	; in lockstep across this room's quads then tris)
+	movei	#NORM_BASE,r0
+	load	(r0),r8
+	nop
+	nop
+	movei	#NORM_CUR,r0
+	store	r8,(r0)
+
+	; set up quad loop:  FACE_LEFT = QUAD_CNT, FACE_CUR = QUAD_BASE
+	movei	#QUAD_CNT,r0
+	load	(r0),r8
+	movei	#QUAD_BASE,r0
+	load	(r0),r9
+	nop
+	nop
+	movei	#FACE_LEFT,r0
+	store	r8,(r0)
+	movei	#FACE_CUR,r0
+	store	r9,(r0)
+	; fall into quad_loop
+
+;---------------------------------------------------------------------
+; QUAD ITERATOR (n = 4)
+;---------------------------------------------------------------------
+quad_loop:
+	movei	#FACE_LEFT,r0
+	load	(r0),r5
+	nop
+	nop
+	cmpq	#0,r5
+	movei	#tri_setup,r22
+	jump	EQ,(r22)		; quads done -> tris
+	nop
+	nop
+
+	; room vertex base + offsets for stage_vert
+	movei	#VERT_BASE,r0
+	load	(r0),r10		; VERT_BASE
+	movei	#OFFX,r0
+	load	(r0),r11		; offX
+	movei	#YTOPD,r0
+	load	(r0),r12		; yTopD
+	movei	#OFFZ,r0
+	load	(r0),r13		; offZ
+
+	; read RQuad (indices + color) via loadw (2-byte fields)
+	movei	#FACE_CUR,r0
+	load	(r0),r5			; quad record ptr
+	nop
+	nop
+	; ---- PRE-CULL (before any per-vertex transform) using the face normal;
+	;      cull_face returns dot = n.(cam-v0) in r18.  r5,r10-r13 preserved.
+	movei	#cq_ret,r8
+	movei	#cull_face,r22
+	jump	T,(r22)
+	nop
+	nop
+cq_ret:
+	cmpq	#0,r18			; dot sign
+	movei	#quad_cull,r22
+	jump	PL,(r22)		; dot < 0 -> backface, SKIP quad.
+	nop				;   *** FLIP CULL SENSE (quads): change MI<->PL on the line above ***
+	nop
+	loadw	(r5),r6			; v0 @ +0
+	addq	#2,r5
+	loadw	(r5),r7			; v1 @ +2
+	addq	#2,r5
+	loadw	(r5),r20		; v2 @ +4
+	addq	#2,r5
+	loadw	(r5),r23		; v3 @ +6
+	addq	#2,r5
+	loadw	(r5),r21		; color @ +8
+	movei	#WBUF,r14		; staged-packet write ptr
+	nop
+	; header = (4<<16)|color   (color is zero-extended 16-bit)
+	move	r21,r0
+	movei	#$40000,r1
+	or	r1,r0
+	store	r0,(r14)
+	addq	#4,r14
+
+	; stage the 4 world verts (index passed in r1)
+	move	r6,r1
+	movei	#sv_qr0,r8
+	movei	#stage_vert,r22
+	jump	T,(r22)
+	nop
+	nop
+sv_qr0:
+	move	r7,r1
+	movei	#sv_qr1,r8
+	movei	#stage_vert,r22
+	jump	T,(r22)
+	nop
+	nop
+sv_qr1:
+	move	r20,r1
+	movei	#sv_qr2,r8
+	movei	#stage_vert,r22
+	jump	T,(r22)
+	nop
+	nop
+sv_qr2:
+	move	r23,r1
+	movei	#sv_qr3,r8
+	movei	#stage_vert,r22
+	jump	T,(r22)
+	nop
+	nop
+sv_qr3:
+	; advance FACE_CUR by 12, FACE_LEFT--
+	movei	#FACE_CUR,r0
+	load	(r0),r1
+	nop
+	nop
+	addq	#12,r1
+	store	r1,(r0)
+	movei	#FACE_LEFT,r0
+	load	(r0),r1
+	nop
+	nop
+	subq	#1,r1
+	store	r1,(r0)
+	; advance NORM_CUR by 6 (one normal entry per face, in lockstep)
+	movei	#NORM_CUR,r0
+	load	(r0),r1
+	nop
+	nop
+	addq	#6,r1
+	store	r1,(r0)
+	; return here after the render core, r4 = staged packet
+	movei	#quad_loop,r1
+	movei	#RET_ADDR,r0
+	store	r1,(r0)
+	movei	#WBUF,r4
+	movei	#render_pkt,r22
+	jump	T,(r22)
+	nop
+	nop
+
+;---------------------------------------------------------------------
+; quad_cull: culled quad - advance FACE_CUR +12, FACE_LEFT--, NORM_CUR +6
+; (both cursors kept in sync) and continue WITHOUT staging/transforming.
+quad_cull:
+	movei	#FACE_CUR,r0
+	load	(r0),r1
+	nop
+	nop
+	addq	#12,r1
+	store	r1,(r0)
+	movei	#FACE_LEFT,r0
+	load	(r0),r1
+	nop
+	nop
+	subq	#1,r1
+	store	r1,(r0)
+	movei	#NORM_CUR,r0
+	load	(r0),r1
+	nop
+	nop
+	addq	#6,r1
+	store	r1,(r0)
+	movei	#quad_loop,r22
+	jump	T,(r22)
+	nop
+	nop
+
+;---------------------------------------------------------------------
+; TRI ITERATOR (n = 3)
+;---------------------------------------------------------------------
+tri_setup:
+	movei	#TRI_CNT,r0
+	load	(r0),r8
+	movei	#TRI_BASE,r0
+	load	(r0),r9
+	nop
+	nop
+	movei	#FACE_LEFT,r0
+	store	r8,(r0)
+	movei	#FACE_CUR,r0
+	store	r9,(r0)
+	; fall into tri_loop
+
+tri_loop:
+	movei	#FACE_LEFT,r0
+	load	(r0),r5
+	nop
+	nop
+	cmpq	#0,r5
+	movei	#room_loop,r22
+	jump	EQ,(r22)		; tris done -> next room
+	nop
+	nop
+
+	movei	#VERT_BASE,r0
+	load	(r0),r10		; VERT_BASE
+	movei	#OFFX,r0
+	load	(r0),r11		; offX
+	movei	#YTOPD,r0
+	load	(r0),r12		; yTopD
+	movei	#OFFZ,r0
+	load	(r0),r13		; offZ
+
+	; read RTri (indices + color) via loadw
+	movei	#FACE_CUR,r0
+	load	(r0),r5			; tri record ptr
+	nop
+	nop
+	; ---- PRE-CULL (before any per-vertex transform) using the face normal;
+	;      cull_face returns dot = n.(cam-v0) in r18.  r5,r10-r13 preserved.
+	movei	#ct_ret,r8
+	movei	#cull_face,r22
+	jump	T,(r22)
+	nop
+	nop
+ct_ret:
+	cmpq	#0,r18			; dot sign
+	movei	#tri_cull,r22
+	jump	PL,(r22)		; dot < 0 -> backface, SKIP tri.
+	nop				;   *** FLIP CULL SENSE (tris): change MI<->PL on the line above ***
+	nop
+	loadw	(r5),r6			; v0 @ +0
+	addq	#2,r5
+	loadw	(r5),r7			; v1 @ +2
+	addq	#2,r5
+	loadw	(r5),r20		; v2 @ +4
+	addq	#2,r5
+	loadw	(r5),r21		; color @ +6
+	movei	#WBUF,r14
+	nop
+	; header = (3<<16)|color
+	move	r21,r0
+	movei	#$30000,r1
+	or	r1,r0
+	store	r0,(r14)
+	addq	#4,r14
+
+	move	r6,r1
+	movei	#sv_tr0,r8
+	movei	#stage_vert,r22
+	jump	T,(r22)
+	nop
+	nop
+sv_tr0:
+	move	r7,r1
+	movei	#sv_tr1,r8
+	movei	#stage_vert,r22
+	jump	T,(r22)
+	nop
+	nop
+sv_tr1:
+	move	r20,r1
+	movei	#sv_tr2,r8
+	movei	#stage_vert,r22
+	jump	T,(r22)
+	nop
+	nop
+sv_tr2:
+	; advance FACE_CUR by 10, FACE_LEFT--
+	movei	#FACE_CUR,r0
+	load	(r0),r1
+	nop
+	nop
+	addq	#10,r1
+	store	r1,(r0)
+	movei	#FACE_LEFT,r0
+	load	(r0),r1
+	nop
+	nop
+	subq	#1,r1
+	store	r1,(r0)
+	; advance NORM_CUR by 6 (one normal entry per face, in lockstep)
+	movei	#NORM_CUR,r0
+	load	(r0),r1
+	nop
+	nop
+	addq	#6,r1
+	store	r1,(r0)
+	movei	#tri_loop,r1
+	movei	#RET_ADDR,r0
+	store	r1,(r0)
+	movei	#WBUF,r4
+	movei	#render_pkt,r22
+	jump	T,(r22)
+	nop
+	nop
+
+;---------------------------------------------------------------------
+; tri_cull: culled tri - advance FACE_CUR +10, FACE_LEFT--, NORM_CUR +6
+; (both cursors kept in sync) and continue WITHOUT staging/transforming.
+tri_cull:
+	movei	#FACE_CUR,r0
+	load	(r0),r1
+	nop
+	nop
+	addq	#10,r1
+	store	r1,(r0)
+	movei	#FACE_LEFT,r0
+	load	(r0),r1
+	nop
+	nop
+	subq	#1,r1
+	store	r1,(r0)
+	movei	#NORM_CUR,r0
+	load	(r0),r1
+	nop
+	nop
+	addq	#6,r1
+	store	r1,(r0)
+	movei	#tri_loop,r22
+	jump	T,(r22)
+	nop
+	nop
+
+;---------------------------------------------------------------------
+; LARA ITERATOR (packets already in gpu_geomxform format, DRAM, world-space)
+;---------------------------------------------------------------------
+lara_loop:
+	movei	#LARA_LEFT,r0
+	load	(r0),r5
+	nop
+	nop
+	cmpq	#0,r5
+	movei	#done,r22
+	jump	EQ,(r22)		; no Lara polys left -> done
+	nop
+	nop
+
+	movei	#LARA_PTR,r0
+	load	(r0),r4			; packet start (fed to render_pkt as-is)
+	nop
+	nop
+	load	(r4),r1			; header = (n<<16)|color
+	nop
+	nop
+	move	r1,r2
+	shrq	#16,r2			; n
+	; packet size = 4 + n*12  (= n*8 + n*4 + 4)
+	move	r2,r6
+	shlq	#3,r6			; n*8
+	move	r2,r7
+	shlq	#2,r7			; n*4
+	add	r7,r6			; n*12
+	addq	#4,r6			; + header
+	; advance LARA_PTR past this packet
+	move	r4,r7
+	add	r6,r7
+	movei	#LARA_PTR,r0
+	store	r7,(r0)
+	; LARA_LEFT--
+	subq	#1,r5
+	movei	#LARA_LEFT,r0
+	store	r5,(r0)
+	; return to lara_loop after render; r4 already = packet start
+	movei	#lara_loop,r1
+	movei	#RET_ADDR,r0
+	store	r1,(r0)
+	movei	#render_pkt,r22
+	jump	T,(r22)
+	nop
+	nop
+
+;=====================================================================
+; render_pkt : gpu_geomxform per-polygon render CORE, VERBATIM.
+;   in:  r4 = packet ptr ([0]=(n<<16)|color, then n*3 s32 world coords),
+;        r30 = mailbox (preserved), CAM_BUF holds camera.
+;   on completion / any skip -> pkt_done -> jump (RET_ADDR).
+;=====================================================================
+render_pkt:
+	; header = (n<<16)|color
+	load	(r4),r0
+	addq	#4,r4
+	nop
+	nop
+	move	r0,r6
+	shrq	#16,r6			; r6 = n
+	movei	#$FFFF,r1
+	and	r1,r0			; r0 = color (low 16)
+	move	r0,r7
+	shlq	#16,r7
+	or	r0,r7			; r7 = color32
+
+;---------------------------------------------------------------------
+; PROJECTION front-end: transform+project n world verts into SX/SY,
+; near-cull the whole poly if any vertex is behind.
+;---------------------------------------------------------------------
+	movei	#CAM_BUF,r0
+	load	(r0),r11		; cY4
+	addq	#4,r0
+	load	(r0),r12		; sY4
+	addq	#4,r0
+	load	(r0),r13		; cP4
+	addq	#4,r0
+	load	(r0),r14		; sP4
+	addq	#4,r0
+	load	(r0),r15		; camx
+	addq	#4,r0
+	load	(r0),r16		; camy
+	addq	#4,r0
+	load	(r0),r17		; camz
+
+	; integer divide mode for the projection divides
+	movei	#G_DIVCTRL,r0
+	moveq	#0,r1
+	store	r1,(r0)
+
+	movei	#SX_BUF,r18		; SX store ptr
+	movei	#SY_BUF,r10		; SY store ptr
+	move	r6,r31			; vertex counter = n
+	moveq	#0,r19			; behind = 0
+
+vloop:
+	load	(r4),r8			; wx
+	addq	#4,r4
+	load	(r4),r9			; wy
+	addq	#4,r4
+	load	(r4),r20		; wz
+	addq	#4,r4
+	sub	r15,r8			; dx = wx - camx
+	sub	r16,r9			; dy = wy - camy
+	sub	r17,r20			; dz = wz - camz
+
+	; rx = (dx*cY4 - dz*sY4) >> 12
+	move	r8,r0
+	move	r11,r1
+	movei	#xf1,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+xf1:
+	move	r0,r21			; dx*cY4
+	move	r20,r0
+	move	r12,r1
+	movei	#xf2,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+xf2:
+	sub	r0,r21			; dx*cY4 - dz*sY4
+	sharq	#12,r21			; rx
+
+	; rz = (dx*sY4 + dz*cY4) >> 12
+	move	r8,r0
+	move	r12,r1
+	movei	#xf3,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+xf3:
+	move	r0,r23			; dx*sY4
+	move	r20,r0
+	move	r11,r1
+	movei	#xf4,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+xf4:
+	add	r0,r23			; dx*sY4 + dz*cY4
+	sharq	#12,r23			; rz
+
+	; ry = (dy*cP4 - rz*sP4) >> 12
+	move	r9,r0
+	move	r13,r1
+	movei	#xf5,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+xf5:
+	move	r0,r24			; dy*cP4
+	move	r23,r0
+	move	r14,r1
+	movei	#xf6,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+xf6:
+	sub	r0,r24			; dy*cP4 - rz*sP4
+	sharq	#12,r24			; ry
+
+	; rz2 = (dy*sP4 + rz*cP4) >> 12
+	move	r9,r0
+	move	r14,r1
+	movei	#xf7,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+xf7:
+	move	r0,r25			; dy*sP4
+	move	r23,r0
+	move	r13,r1
+	movei	#xf8,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+xf8:
+	add	r0,r25			; dy*sP4 + rz*cP4
+	sharq	#12,r25			; rz2
+
+	; near cull: if (rz2 < NEAR) mark behind, skip projection
+	movei	#NEAR,r0
+	cmp	r0,r25			; rz2 - NEAR
+	movei	#v_behind,r22
+	jump	MI,(r22)		; rz2 < NEAR
+	nop
+	nop
+
+	; sx = CENTER_X + rx*FOCAL/rz2   (integer divide, signed numerator)
+	move	r21,r0
+	movei	#FOCAL,r1
+	movei	#xf9,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+xf9:
+	move	r0,r29			; numerator (keep sign)
+	abs	r0			; |numerator|
+	div	r25,r0			; r0 = |num| / rz2  (integer mode)
+	cmpq	#0,r29
+	movei	#v_sxp,r22
+	jump	PL,(r22)		; num >= 0
+	nop
+	nop
+	neg	r0
+v_sxp:
+	movei	#CENTER_X,r1
+	add	r1,r0			; sx
+	store	r0,(r18)
+
+	; sy = CENTER_Y + ry*FOCAL_Y/rz2  (FOCAL_Y = FOCAL/2 in LOWRES)
+	move	r24,r0
+	movei	#FOCAL_Y,r1
+	movei	#xf10,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+xf10:
+	move	r0,r29
+	abs	r0
+	div	r25,r0
+	cmpq	#0,r29
+	movei	#v_syp,r22
+	jump	PL,(r22)
+	nop
+	nop
+	neg	r0
+v_syp:
+	movei	#CENTER_Y,r1
+	add	r1,r0			; sy
+	store	r0,(r10)
+	movei	#v_next,r22
+	jump	T,(r22)
+	nop
+	nop
+v_behind:
+	moveq	#1,r19			; behind = 1 (poly will be skipped)
+v_next:
+	addq	#4,r18
+	addq	#4,r10
+	subq	#1,r31
+	movei	#vloop,r22
+	jump	NE,(r22)
+	nop
+	nop
+
+	; all n verts consumed.  if any vertex was behind -> skip whole poly.
+	cmpq	#0,r19
+	movei	#pkt_done,r22
+	jump	NE,(r22)
+	nop
+	nop
+
+	; ---- backface cull: ar = (sx1-sx0)*(sy2-sy0)-(sx2-sx0)*(sy1-sy0)
+	movei	#SX_BUF,r0
+	load	(r0),r8			; sx0
+	addq	#4,r0
+	load	(r0),r9			; sx1
+	addq	#4,r0
+	load	(r0),r20		; sx2
+	movei	#SY_BUF,r0
+	load	(r0),r21		; sy0
+	addq	#4,r0
+	load	(r0),r23		; sy1
+	addq	#4,r0
+	load	(r0),r24		; sy2
+	sub	r8,r9			; sx1 - sx0
+	sub	r8,r20			; sx2 - sx0
+	sub	r21,r23			; sy1 - sy0
+	sub	r21,r24			; sy2 - sy0
+	; p1 = (sx1-sx0)*(sy2-sy0)
+	move	r9,r0
+	move	r24,r1
+	movei	#bc1,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+bc1:
+	move	r0,r25			; p1
+	; p2 = (sx2-sx0)*(sy1-sy0)
+	move	r20,r0
+	move	r23,r1
+	movei	#bc2,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+bc2:
+	sub	r0,r25			; ar = p1 - p2
+	cmpq	#0,r25
+	movei	#pkt_done,r22
+	jump	MI,(r22)		; ar < 0 -> skip
+	nop
+	nop
+	jump	EQ,(r22)		; ar == 0 -> skip
+	nop
+	nop
+
+	; 16.16 divide mode for the edge-walk slope divide
+	movei	#G_DIVCTRL,r0
+	moveq	#1,r1
+	store	r1,(r0)
+
+;---------------------------------------------------------------------
+; gpu_geomwalk edge-walk, VERBATIM (screen coords = SX_BUF/SY_BUF).
+;---------------------------------------------------------------------
+	; itop = first strict-min sy; ymin = sy[itop]; ymax = max sy
+	movei	#SY_BUF,r0
+	load	(r0),r1			; sy[0]
+	moveq	#0,r20			; itop = 0
+	nop
+	move	r1,r2			; ymin
+	move	r1,r3			; ymax
+	moveq	#1,r24			; i = 1
+scan_loop:
+	cmp	r6,r24			; i - n
+	movei	#scan_done,r22
+	jump	EQ,(r22)
+	nop
+	nop
+	move	r24,r0
+	shlq	#2,r0
+	movei	#SY_BUF,r1
+	add	r1,r0
+	load	(r0),r1			; sy[i]
+	nop
+	nop
+	cmp	r2,r1			; sy[i] - ymin
+	movei	#not_min,r22
+	jump	PL,(r22)		; >= ymin -> keep first min
+	nop
+	nop
+	move	r1,r2			; ymin = sy[i]
+	move	r24,r20			; itop = i
+not_min:
+	cmp	r3,r1			; sy[i] - ymax
+	movei	#not_max,r22
+	jump	MI,(r22)		; < ymax
+	nop
+	nop
+	jump	EQ,(r22)		; == ymax
+	nop
+	nop
+	move	r1,r3			; ymax = sy[i]
+not_max:
+	addq	#1,r24
+	movei	#scan_loop,r22
+	jump	T,(r22)
+	nop
+	nop
+scan_done:
+	; y0 = max(ymin,0) -> r10 ; y1 = min(ymax,YMAX) -> r11  (YMAX=119 LOWRES)
+	move	r2,r10			; y = ymin
+	cmpq	#0,r10
+	movei	#y0_ok,r22
+	jump	PL,(r22)
+	nop
+	nop
+	moveq	#0,r10
+y0_ok:
+	move	r3,r11			; y1 = ymax
+	movei	#YMAX,r0
+	cmp	r0,r11			; ymax - YMAX
+	movei	#y1_ok,r22
+	jump	MI,(r22)		; < YMAX keep
+	nop
+	nop
+	jump	EQ,(r22)		; == YMAX keep
+	nop
+	nop
+	move	r0,r11			; y1 = YMAX
+y1_ok:
+	; reject empty: y1 < y0  (covers ymin>=240 and ymax<0)
+	cmp	r10,r11			; y1 - y0
+	movei	#pkt_done,r22
+	jump	MI,(r22)
+	nop
+	nop
+
+	; init chains: aci=bci=itop; ayend=byend=sy[itop]=ymin(r2);
+	; ax=bx=aslope=bslope=0
+	move	r20,r12			; aci
+	move	r20,r13			; bci
+	move	r2,r14			; ayend
+	move	r2,r15			; byend
+	moveq	#0,r16			; ax
+	moveq	#0,r17			; bx
+	moveq	#0,r18			; aslope
+	moveq	#0,r19			; bslope
+
+	; set this polygon's fill colour once (wait blitter idle first)
+	movei	#B_CMD,r22
+pc_wait:
+	load	(r22),r0
+	nop
+	nop
+	btst	#0,r0
+	jr	EQ,pc_wait
+	nop
+	nop
+	movei	#B_SRCD,r22
+	store	r7,(r22)
+	movei	#B_SRCD1,r22
+	store	r7,(r22)
+
+;---------------------------------------------------------------------
+yloop:
+	; ---- chain A: while (y >= ayend && guardA++ <= n)  dir +1 ----
+	moveq	#0,r21			; guardA
+lchain:
+	cmp	r14,r10			; y - ayend
+	movei	#lchain_done,r22
+	jump	MI,(r22)		; y < ayend -> stop
+	nop
+	nop
+	cmp	r6,r21			; guard - n
+	movei	#lchain_cont,r22
+	jump	EQ,(r22)		; guard == n -> allowed
+	nop
+	nop
+	movei	#lchain_done,r22
+	jump	PL,(r22)		; guard > n -> stop
+	nop
+	nop
+lchain_cont:
+	addq	#1,r21			; guard++
+	move	r12,r24			; cur = aci
+	moveq	#1,r9			; dir +1
+	movei	#lc_ret,r8
+	movei	#chain_step,r22
+	jump	T,(r22)
+	nop
+	nop
+lc_ret:
+	move	r24,r12			; aci  = ni
+	move	r29,r14			; ayend= sy[ni]
+	move	r25,r16			; ax   = x
+	move	r23,r18			; aslope
+	movei	#lchain,r22
+	jump	T,(r22)
+	nop
+	nop
+lchain_done:
+
+	; ---- chain B: while (y >= byend && guardB++ <= n)  dir -1 ----
+	moveq	#0,r21			; guardB
+rchain:
+	cmp	r15,r10			; y - byend
+	movei	#rchain_done,r22
+	jump	MI,(r22)
+	nop
+	nop
+	cmp	r6,r21
+	movei	#rchain_cont,r22
+	jump	EQ,(r22)
+	nop
+	nop
+	movei	#rchain_done,r22
+	jump	PL,(r22)
+	nop
+	nop
+rchain_cont:
+	addq	#1,r21
+	move	r13,r24			; cur = bci
+	movei	#-1,r9			; dir -1
+	movei	#rc_ret,r8
+	movei	#chain_step,r22
+	jump	T,(r22)
+	nop
+	nop
+rc_ret:
+	move	r24,r13			; bci  = ni
+	move	r29,r15			; byend
+	move	r25,r17			; bx
+	move	r23,r19			; bslope
+	movei	#rchain,r22
+	jump	T,(r22)
+	nop
+	nop
+rchain_done:
+
+	; ---- span: xa=ax>>16, xb=bx>>16; xl=min, xr=max ----
+	move	r16,r24
+	sharq	#16,r24			; xa
+	move	r17,r25
+	sharq	#16,r25			; xb
+	cmp	r25,r24			; xa - xb
+	movei	#no_swap,r22
+	jump	MI,(r22)		; xa < xb -> xl=xa already
+	nop
+	nop
+	jump	EQ,(r22)
+	nop
+	nop
+	move	r24,r0			; swap so r24=xl, r25=xr
+	move	r25,r24
+	move	r0,r25
+no_swap:
+	; if (xl < 0) xl = 0
+	cmpq	#0,r24
+	movei	#xl_ok,r22
+	jump	PL,(r22)
+	nop
+	nop
+	moveq	#0,r24
+xl_ok:
+	; if (xr > 319) xr = 319
+	movei	#319,r0
+	cmp	r0,r25			; xr - 319
+	movei	#xr_ok,r22
+	jump	MI,(r22)
+	nop
+	nop
+	jump	EQ,(r22)
+	nop
+	nop
+	move	r0,r25
+xr_ok:
+	; if (xr < xl) skip
+	cmp	r24,r25			; xr - xl
+	movei	#span_skip,r22
+	jump	MI,(r22)
+	nop
+	nop
+
+	; ---- blit the span (y already in [0,239]) ----
+	movei	#B_CMD,r22
+sp_wait:
+	load	(r22),r0
+	nop
+	nop
+	btst	#0,r0
+	jr	EQ,sp_wait
+	nop
+	nop
+	; A1_PIXEL = (y<<16)|xl
+	move	r10,r0
+	shlq	#16,r0
+	or	r24,r0
+	movei	#A1_PIXEL,r1
+	store	r0,(r1)
+	; B_COUNT = (1<<16)|(xr-xl+1)
+	move	r25,r0
+	sub	r24,r0
+	addq	#1,r0			; width
+	movei	#$10000,r1
+	add	r1,r0
+	movei	#B_COUNT,r1
+	store	r0,(r1)
+	; B_SRCD/B_SRCD1 already carry color; launch
+	movei	#BCMD_SPAN,r0
+	movei	#B_CMD,r1
+	store	r0,(r1)
+span_skip:
+	add	r18,r16			; ax += aslope
+	add	r19,r17			; bx += bslope
+	addq	#1,r10			; y++
+	cmp	r11,r10			; y - y1
+	movei	#yloop,r22
+	jump	MI,(r22)		; y < y1 -> continue
+	nop
+	nop
+	jump	EQ,(r22)		; y == y1 -> last line
+	nop
+	nop
+	; fall through to pkt_done
+
+;---------------------------------------------------------------------
+; pkt_done: render core finished (or poly skipped) -> return to caller.
+pkt_done:
+	movei	#RET_ADDR,r0
+	load	(r0),r1
+	nop
+	nop
+	jump	T,(r1)
+	nop
+	nop
+
+;=====================================================================
+; chain_step: advance ONE edge of a chain (VERBATIM from gpu_geomxform).
+;   in:  r24 = cur index, r9 = +1/-1, r10 = y, r6 = n, r8 = return address
+;   out: r24 = next index (ni), r23 = slope, r25 = x (16.16), r29 = yend
+;   clobbers r0-r3, r22, r26, r27, r28.  Preserves r10-r21.
+chain_step:
+	move	r24,r26			; cur
+	add	r9,r24			; ni = cur + dir
+	cmpq	#0,r24
+	movei	#gw_m1,r22
+	jump	PL,(r22)
+	nop
+	nop
+	add	r6,r24			; wrapped below 0 (left)
+gw_m1:
+	cmp	r6,r24			; ni - n
+	movei	#gw_m2,r22
+	jump	MI,(r22)
+	nop
+	nop
+	sub	r6,r24			; wrapped past n-1 (right)
+gw_m2:
+	move	r26,r0
+	shlq	#2,r0			; cur*4
+	move	r24,r1
+	shlq	#2,r1			; ni*4
+	movei	#SY_BUF,r2
+	add	r0,r2
+	load	(r2),r27		; sy[cur]
+	movei	#SY_BUF,r3
+	add	r1,r3
+	load	(r3),r29		; sy[ni]  (= yend)
+	movei	#SX_BUF,r2
+	add	r0,r2
+	load	(r2),r25		; sx[cur]
+	movei	#SX_BUF,r3
+	add	r1,r3
+	load	(r3),r23		; sx[ni]
+	; dy = sy[ni] - sy[cur]
+	move	r29,r0
+	sub	r27,r0			; r0 = dy
+	cmpq	#0,r0
+	movei	#gw_flat,r22
+	jump	MI,(r22)		; dy < 0
+	nop
+	nop
+	jump	EQ,(r22)		; dy == 0
+	nop
+	nop
+	; --- dy > 0: slope = ((sx[ni]-sx[cur])<<16)/dy ---
+	move	r23,r1
+	sub	r25,r1			; dx = sx[ni]-sx[cur] (signed)
+	move	r1,r2			; keep dx (sign)
+	abs	r1			; ua = |dx|
+	move	r1,r3
+	shrq	#16,r3			; ua>>16
+	cmp	r0,r3			; (ua>>16) - dy
+	movei	#gw_div,r26
+	jump	CS,(r26)		; (ua>>16) < dy -> divide
+	nop
+	nop
+	movei	#$7FFFFFFF,r1		; saturate (only if dx would overflow)
+	movei	#gw_sign,r26
+	jump	T,(r26)
+	nop
+	nop
+gw_div:
+	div	r0,r1			; r1 = (ua<<16)/dy  [16.16 mode]
+gw_sign:
+	cmpq	#0,r2			; dx < 0 ?
+	movei	#gw_pos,r26
+	jump	PL,(r26)
+	nop
+	nop
+	neg	r1
+gw_pos:
+	move	r1,r23			; slope (output)
+	; x = (sx[cur]<<16) + slope*(y - sy[cur])
+	shlq	#16,r25			; r25 = sx[cur]<<16 (survivor)
+	move	r10,r1
+	sub	r27,r1			; delta = y - sy[cur]
+	move	r23,r0			; slope
+	movei	#gw_xret,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+gw_xret:
+	add	r25,r0			; x = sx[cur]<<16 + slope*delta
+	move	r0,r25			; output x
+	jump	T,(r8)
+	nop
+	nop
+gw_flat:
+	; dy <= 0: x = sx[ni]<<16 ; slope = 0 ; yend = sy[ni]
+	move	r23,r25
+	shlq	#16,r25			; x = sx[ni]<<16
+	moveq	#0,r23			; slope = 0
+	jump	T,(r8)
+	nop
+	nop
+
+;=====================================================================
+; imul32: r0 = low32(r0 * r1).  VERBATIM from gpu_geomxform.
+;   clobbers r2,r3,r26,r27.  return: jump (r28).
+imul32:
+	move	r0,r2			; a  (aLo via low 16)
+	move	r1,r3			; b  (bLo via low 16)
+	move	r0,r26
+	shrq	#16,r26			; aHi
+	move	r1,r27
+	shrq	#16,r27			; bHi
+	mult	r3,r2			; r2 = aLo * bLo
+	mult	r27,r0			; r0 = aLo * bHi
+	mult	r1,r26			; r26 = aHi * bLo
+	nop
+	nop
+	add	r26,r0			; cross = aLo*bHi + aHi*bLo
+	shlq	#16,r0
+	add	r2,r0			; low32 = aLo*bLo + (cross<<16)
+	jump	T,(r28)
+	nop
+	nop
+
+;=====================================================================
+; cull_face: cheap backface test done BEFORE the per-vertex transform.
+;   Reads the face's first vertex v0 (world = RVert+room offset) and the
+;   precomputed WORLD-space face normal (nx,ny,nz s16, /64) at NORM_CUR, and
+;   returns  dot = nx*(camx-v0x) + ny*(camy-v0y) + nz*(camz-v0z)  in r18.
+;   Caller tests r18: dot < 0 -> backface (skip).  Does NOT advance NORM_CUR.
+;   in:  r5 = face record ptr (v0 index @ +0), r10=VERT_BASE, r11=offX,
+;        r12=yTopD, r13=offZ, r8 = return address.
+;   out: r18 = dot (signed).   Preserves r5, r10-r13, r30.
+;   clobbers r0,r1,r2,r3,r6,r7,r9,r15,r16,r17,r22,r24,r25,r26,r27,r28.
+; Components fit: normal ~+-64, (cam-v0) ~+-35000, product ~+-2.2e6, sum
+; ~+-7e6 -- all within s32, so imul32 (low32 of signed product) is exact.
+cull_face:
+	; --- world-space v0 = (x+offX, y+yTopD, z+offZ) (same math as stage_vert) ---
+	loadw	(r5),r0			; v0 index (u16) @ face+0
+	nop
+	nop
+	shlq	#3,r0			; index*8 (RVert stride)
+	add	r10,r0			; -> RVert addr
+	loadw	(r0),r1			; x @ +0
+	addq	#2,r0
+	loadw	(r0),r2			; y @ +2
+	addq	#2,r0
+	loadw	(r0),r3			; z @ +4
+	shlq	#16,r1			; sign-extend x
+	sharq	#16,r1
+	add	r11,r1			; v0x = x + offX
+	move	r1,r15			; save v0x
+	shlq	#16,r2			; sign-extend y
+	sharq	#16,r2
+	add	r12,r2			; v0y = y + yTopD
+	move	r2,r16			; save v0y
+	shlq	#16,r3			; sign-extend z
+	sharq	#16,r3
+	add	r13,r3			; v0z = z + offZ
+	move	r3,r17			; save v0z
+	; --- face normal (nx,ny,nz) s16 from NORM_CUR ---
+	movei	#NORM_CUR,r0
+	load	(r0),r0			; NORM_CUR (DRAM ptr)
+	nop
+	nop
+	loadw	(r0),r6			; nx @ +0
+	addq	#2,r0
+	loadw	(r0),r7			; ny @ +2
+	addq	#2,r0
+	loadw	(r0),r9			; nz @ +4
+	shlq	#16,r6			; sign-extend nx
+	sharq	#16,r6
+	shlq	#16,r7			; sign-extend ny
+	sharq	#16,r7
+	shlq	#16,r9			; sign-extend nz
+	sharq	#16,r9
+	; --- (cam - v0) ---
+	movei	#CAM_BUF,r0
+	addq	#16,r0			; -> camx (CAM_BUF+16)
+	load	(r0),r1			; camx
+	addq	#4,r0
+	load	(r0),r2			; camy
+	addq	#4,r0
+	load	(r0),r3			; camz
+	sub	r15,r1			; dcx = camx - v0x
+	sub	r16,r2			; dcy = camy - v0y
+	sub	r17,r3			; dcz = camz - v0z
+	move	r1,r24			; dcx (safe across imul32)
+	move	r2,r25			; dcy
+	move	r3,r16			; dcz (reuse r16; v0y no longer needed)
+	; --- dot = nx*dcx + ny*dcy + nz*dcz ---
+	move	r6,r0			; nx
+	move	r24,r1			; dcx
+	movei	#cf1,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+cf1:
+	move	r0,r18			; dot = nx*dcx
+	move	r7,r0			; ny
+	move	r25,r1			; dcy
+	movei	#cf2,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+cf2:
+	add	r0,r18			; dot += ny*dcy
+	move	r9,r0			; nz
+	move	r16,r1			; dcz
+	movei	#cf3,r28
+	movei	#imul32,r22
+	jump	T,(r22)
+	nop
+	nop
+cf3:
+	add	r0,r18			; dot += nz*dcz  (result in r18)
+	jump	T,(r8)			; return; caller tests r18 sign
+	nop
+	nop
+
+;=====================================================================
+; stage_vert: look up an RVert, add the current room offset, and append
+; the resulting WORLD (x,y,z) as 3 longs at the WBUF write ptr.
+;   in:  r1  = vertex index (unsigned)
+;        r10 = VERT_BASE   r11 = offX   r12 = yTopD   r13 = offZ
+;        r14 = write ptr   r8 = return address
+;   out: 3 world longs stored, r14 += 12
+;   clobbers r0,r1,r2,r3,r9.  Preserves r10-r14 and r6,r7,r20,r21,r23.
+;
+; 16-bit signed extraction: RVert fields are 2-byte (loadw, zero-extended);
+; sign-extend a low-16 value with  shlq #16 ; sharq #16.  RVert stride is 8
+; so +0/+2/+4 are all 2-byte aligned (loadw-safe on any index).
+stage_vert:
+	shlq	#3,r1			; index*8
+	add	r10,r1			; -> RVert address
+	loadw	(r1),r2			; x @ +0 (u16)
+	addq	#2,r1
+	loadw	(r1),r3			; y @ +2 (u16)
+	addq	#2,r1
+	loadw	(r1),r9			; z @ +4 (u16)
+	shlq	#16,r2			; sign-extend x
+	sharq	#16,r2
+	add	r11,r2			; wx = x + offX
+	shlq	#16,r3			; sign-extend y
+	sharq	#16,r3
+	add	r12,r3			; wy = y + yTopD
+	shlq	#16,r9			; sign-extend z
+	sharq	#16,r9
+	add	r13,r9			; wz = z + offZ
+	store	r2,(r14)
+	addq	#4,r14
+	store	r3,(r14)
+	addq	#4,r14
+	store	r9,(r14)
+	addq	#4,r14
+	jump	T,(r8)
+	nop
+	nop
+
+;=====================================================================
+done:
+	movei	#MAGIC_DONE,r0
+	store	r0,(r30)		; mailbox[0] = done
+	nop
+	nop
+halt:
+	nop
+	jr	T,halt
+	nop
+	nop
