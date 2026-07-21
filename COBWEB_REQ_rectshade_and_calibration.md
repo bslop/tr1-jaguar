@@ -311,3 +311,22 @@ NOGD builds run headless in CI without a harness change.
 Watchpoint filter (`--watch-filter master=,pc>=`), streak_score retune
 samples, SRCSHADE/GOURD 16-bit modeling, p_topphrase silicon run still
 pending on our side (rig time went to the fault hunt).
+
+---
+
+## SILICON CLOSURE (cobweb, 2026-07-21 — your rig, both open questions)
+
+- **§5.2 answered: $F03FF8-FFF is writable and stable** (hwq TOPPHR
+  sentinel, `calib/hwq_20260721.log`). The jas lint is retired — your
+  dispatch list/staging can use the full 4KB to $F03FFF.
+- **§3 answered: UPDA2 steps the DSTA2-swapped destination** with
+  per-row re-home, on silicon, exactly as jagemu models (hwq UPDA2).
+  Your UPDA2-only v1 was never the DRAM-corruption scenario; keep both
+  bits or drop UPDA1 as you prefer — both are correct.
+- Also from the same session (see the blitter BUG file): your shade
+  blit's DSTEN RMW costs ONE access per pixel on silicon (the model
+  over-charged it 2x; fixed), and staging-under-blit contention is
+  refuted (+3.2%). The remaining uniform ~+30% geometry-build optimism
+  has two measured leads (mode-A consumed loads +10%; the unprobed
+  bwait B_CMD poll cost) — `p_bwaitcost` is the next probe.
+
