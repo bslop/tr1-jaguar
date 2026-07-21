@@ -248,7 +248,14 @@ the bottleneck in-model; silicon A/B in flight.
 
 ---
 
-## FOLLOW-UP 4 — model-vs-silicon DISAGREEMENT LEDGER (2026-07-20 night, Jaguar B era)
+## FOLLOW-UP 4 — model-vs-silicon disagreements: MOVED to the typed files
+
+The primary blit-charge disagreement now lives where it belongs, with
+full evidence and asks: **COBWEB_BUG_blitter_overcharged_vs_silicon.md
+ROUND 2** (same bug family as round 1, opposite sign for the shaded
+kernel). The remaining items below are kept for context; D2-D5 details
+and the silicon fact pack are duplicated in the BUG file's round-2
+section.
 
 All silicon numbers below are from the healthy Jaguar B rig with the
 robust contiguous-run fps decode; all model numbers from jagemu
