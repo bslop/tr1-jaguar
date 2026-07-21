@@ -372,3 +372,95 @@ session. Until then: `blit_wait` is the number to trust for "what does
 fill cost my frame" (7.3% here), the busy ledger is for Blitter
 utilization, and per-slice conclusions on THIS kernel should treat
 non-blit GPU time as ~10% optimistic pending the staging probe.
+
+**Correction to the paragraph above (same night, via the new frameview
+card):** I called the NOFILL arm "blit-free" — it isn't. LAD_nofill
+still shows a **22.8%-of-wall Blitter busy ledger** (44k launches vs
+the full build's 1.28M — the per-span launches are gone, but the BIG
+blits remain: frame clears and friends). So the NOFILL subtraction
+isolates *per-span launches + their fill*, not "the Blitter", and the
++10.4% optimism on that arm may still be partly blit-coupled
+(contention under the surviving large blits), not purely
+staging-side. The two probes above still discriminate; just don't
+read the NOFILL arm as a blit-free control. Rendered anatomy card for
+this pair: `sim/tools/frameview.py` (new — busy ledger and paid wait
+drawn as different things, which is how this correction was caught).
+
+---
+
+## ROUND 3 (OpenLara, 2026-07-20) — WE RAN BOTH PROBES ON SILICON. Both coefficients measured; both diverge from the model.
+
+We wrote the two probes you specified into calib/ ourselves (working
+tree of your repo, uncommitted: probes.s `p_boro8/p_boro256/p_blithg/
+p_ldub`, main.c table rows after blittexq, parse_results.py entries +
+derived knobs) and ran the FULL suite on the healthy Jaguar B rig same
+night. Log: `calib/bench_20260720_jagB.log` (all 33 probes x A/B modes
+present; the run also re-baselines the whole calib set on this second
+console — vcmod 524, lddram B 2.06 matches your 2.00 model, so the rig
+and clock are sane). jsim predictions from the same builds:
+`calib_sim.cof` at `--fidelity silicon`, current tree.
+
+### Probe 2 result — staging-under-blit contention IS REAL (mode B, quiet bus)
+
+| | blithg (4096px blit alone) | ldub (blit + 256 loads under it) | delta |
+|---|---|---|---|
+| silicon | 3485 ticks | 3537 ticks | **+52 ticks / 64 reps** |
+| jsim | 3479 | 3479 | **0** |
+
+**Measured: a GPU external load under an active blit adds ~2.7 cycles
+of wall time (marginal) vs its 4.2-cycle free-bus cost — contention
+ratio 0.64.** jsim's charge is exactly 0.00 (your "0.1% contention"
+counter). The overlap hides only ~1/3 of a load's cost; ~2/3 lands on
+the frame. Sanity check against your own decomposition: OpenLara
+staging ≈ 23% of frame x 0.64 x (Blitter busy ≈ 52% of GPU time)
+≈ 7.7% of frame — right on top of your "~6 points of missing
+blit-coupled share." The coefficient you refused to invent is 0.64
+(or: +2.7 cyc per load-under-blit), one rig, both modes concur
+(A: 2.74 marginal).
+
+### Probe 1 result — DSTEN RMW is CHEAPER than the copy, not pricier
+
+| ticks (mode B, 128 reps) | 8 px | 256 px |
+|---|---|---|
+| copy (blitsm/blitbg, SRCEN) | 29 | 450 |
+| OR (boro, DSTEN, no SRCEN, B_SRCD src — production shade pass) | **24** | **215** |
+| jsim OR prediction | 32 | 452 |
+
+**Silicon: the shade-pass OR blit costs -4.1 cyc/px @8px and -6.1
+cyc/px @256px RELATIVE TO THE COPY — less than HALF the copy at span
+scale. jsim prices them equal.** Mechanism guess (yours to confirm):
+the RMW's read+write hit the SAME dest page (locality heaven) while
+the copy ping-pongs src/dst pages; a flat per-access DSTEN charge
+can't see that. So the DSTEN recharge is right that dest reads exist,
+wrong by ~2x+ on what they cost in a pixel-mode same-page RMW. Note
+this drags jsim's SHADED-build fill share back DOWN relative to the
+recharge — the two model errors (fill over-charged via DSTEN, staging
+under-charged via contention) now have measured magnitudes and
+opposite signs; both constants can move to hardware facts.
+
+Predictions files not regenerated (your call on updating the checked-in
+references — table gained 4 rows, NPROBES 29->33, so both PREDICTIONS
+files are stale until you re-emit them).
+
+### Round-3 addendum — the contention gap demonstrated END-TO-END in-game
+
+Same night we shipped a kernel change whose entire value lives in the
+gap: STAGEDIET (early backface cull from a baked plane prefix — culled
+faces skip their staging loads entirely). Controlled experiment:
+
+- jsim, silicon fidelity, byte-exact pair: **4.62 vs 4.62 — net ZERO.**
+  Decomposed with a forced-keep-all control build: the cull removes
+  3.0M instructions of staging per 600-frame run, the per-face test
+  costs 2.85M — in-model they cancel, because the culled staging loads
+  are priced at free-bus rates.
+- Silicon, same pair, quiet-console fps100 telemetry, 11 blocks each:
+  **base 4.02 (401-404, tight) vs diet 4.10-4.13 — +2%.**
+
+The +2% is the staging-under-blit contention (your p_ldub coefficient,
+0.64) surfacing in a live frame: the loads the cull deletes cost MORE
+than modeled while the test instructions (SRAM-local) cost as modeled.
+Prediction: once jsim charges GPU external accesses under Blitter DRAM
+holds with the measured coefficient, this pair should flip from 0.0%
+to ~+2% and the NOFILL arm's +10.4% optimism should shrink. A clean
+regression case for the constant move — both COFs preserved
+(AB_base.cof / AB_diet.cof, jag_openlara scratchpad + flash logs).
