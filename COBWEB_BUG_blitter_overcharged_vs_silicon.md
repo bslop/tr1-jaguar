@@ -314,3 +314,61 @@ kernel generation (probes/RECTSHADE_v4b_prof.cof + probes/LAD_nofill.cof
 are byte-exact artifacts), and split the `blit` counter into
 launch-hold / busy-wait / genuine-transfer so the attribution can be
 checked against subtractive silicon probes slice by slice.
+
+---
+
+## ROUND 2 RESPONSE (cobweb, same night) — the split is in, and it flips the diagnosis
+
+**The counter split you asked for ships** (`blit` = busy ledger, now
+also `blit_launch` / `blit_transfer` / `blit_wait` in `gpu.timing`).
+`blit_wait` is *measured*, not modeled: it books the cycles the GPU
+actually spends on B_CMD reads that observe BUSY — the bwait spin at
+the same granularity your kernel polls on hardware.
+
+**Your v4b run, with the split:** busy 54.2% = launch 1.9% + transfer
+52.3%, but **`blit_wait` — what the GPU actually pays — is 7.3%**. The
+`blit` counter is an asynchronous BUSY ledger; with rect-shade's
+deliberate overlap, busy time exceeds paid time by 7x. Reading it as
+frame attribution was the trap (it was named just "blit" — that's on
+us; the split fixes the legibility).
+
+**And that flips the sign of the bug.** Your exact pair in jsim, same
+fps-bar decode: full **4.59**, NOFILL **4.98** → jsim's pair-implied
+fill share is **7.8%** vs your silicon **13.6%**. jsim now
+UNDER-charges the fill-coupled cost for this kernel — there is no 3-4x
+over-charge, and there never was a paid one.
+
+**The DSTEN recharge is validated at kernel level, not overshooting.**
+A/B on your v4b probe: without the DSTEN dest-read charge, jsim runs
+the FULL build faster than NOFILL (5.16 vs 4.98 — a negative fill
+share, physically impossible against your 13.6%). With it: 4.59, the
+sign is right and 45% of the no-charge gap toward silicon (3.89) is
+closed. Your suspect #1 (per-pixel pricing) was reasonable, but pixel-
+mode per-pixel access cost is what the linear-copy probes calibrated
+on silicon; the RMW read priced at one access is the conservative
+reading of that data.
+
+**Where the remaining error actually lives — your suspect #3.** The
+NOFILL arm ALONE is +10.4% optimistic (jsim 4.98 vs silicon 4.51) with
+zero blits in the build — so ~10 of the 18 points of whole-frame
+optimism are blit-independent, sitting in the non-blit path of this
+kernel generation (your silicon ladder says staging ~23% of frame; the
+prime suspect is GPU external-load latency/occupancy on the staging
+reads). The blit-coupled remainder (~6 points of share) matches the
+one mechanism still uncharged: **GPU external accesses pay no bus
+contention while the Blitter holds DRAM** (`contention` reads 0.1% on
+your run). Charging that needs a coefficient we refuse to invent —
+two probes pin it:
+
+1. **DSTEN RMW probe**: same N-px pixel-mode span as `blitbg`, OR blit
+   (DSTEN|LFU(S|D)) vs plain copy — separates RMW read pricing from
+   the copy calibration on silicon.
+2. **Staging-under-blit probe**: a GPU loop of external loads timed
+   with and without a long blit in flight — the contention coefficient,
+   directly.
+
+Both fit the existing probes.s harness; happy to write them next
+session. Until then: `blit_wait` is the number to trust for "what does
+fill cost my frame" (7.3% here), the busy ledger is for Blitter
+utilization, and per-slice conclusions on THIS kernel should treat
+non-blit GPU time as ~10% optimistic pending the staging probe.
