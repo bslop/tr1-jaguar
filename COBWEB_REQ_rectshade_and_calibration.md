@@ -197,3 +197,110 @@ the correct A2 map).
   TC_final, silicon fidelity) — numbers land in this file when done; the
   +37% rect-shade delta is expected to shrink now that dest-read phrases
   are priced. Whatever survives is the honest predicted win.
+
+## FOLLOW-UP 2 — the new watchpoints found their first real bug (same evening)
+
+`jagemu run --watch 0xF02220..0xF02243` on the black-rendering v4 build
+produced, in ONE run, the exact defect the whole afternoon of silicon
+bisection never could: the kernel's texture path writing $F02220 per span
+(correct: that's A1_FINC) while the shade launcher ALSO stored its
+A2_STEP to (r15+8) = $F02220 — the **A1/A2 register-file-not-parallel
+trap** (A2_MASK at $2C shifts everything), the same one your probe's
+comment warns about. Every clip-strip build (v1-v3) ran with a stale
+A2_STEP and only looked right because the 68k clear blit happens to leave
+a full-width step in the real $F02234. Fix: `(r15+13)`.
+
+Two more instruments earned kills in the same session: the per-master `pc`
+attribution in the watch log separated 68k init writes from GPU span writes
+at a glance, and jas's TRM-bug-13 checker caught the pkt_done launcher
+racing the run-end restore's in-flight r14 load. The v4b build renders
+correctly (and looks better than clip-strip — face-tight shading).
+One nit: `--watch` logs cap at 256 hits with no way to filter by master/
+pc/frame at the source — a `--watch-filter master=gpu,pc>=0xF03D00` or a
+higher cap would have saved one narrowing iteration.
+
+## FOLLOW-UP 3 — the "rig fault" was the CAPTURE CHAIN; v4b silicon number is in
+
+Closure on §4 and your live-tap observation: the console and its DRAM were
+healthy the whole time. An on-screen bit-cell checksum instrument (assets
+summed in DRAM, drawn as 32-cell rows, decoded from capture) proved the
+uploaded data byte-exact on silicon — and a contiguous-run re-decode of the
+fps bar showed the "corrupted" TC_final control running at EXACTLY its
+certified 3.75. The vertical streaking and the inflated 5.3-5.4 fps reads
+were the Cam Link/tap video path degrading from ~14:30: speckle noise
+shreds high-frequency texel detail and defeats rightmost-bright-pixel bar
+decoding, while low-frequency content (bars, bit-cells, big shapes)
+survives — which produced a perfect imitation of render corruption. Your
+11:50-clean vs 15:23-streaked tap frames are the same artifact, not
+in-place degradation. So: no silicon Blitter anomaly, no top-phrase issue
+implicated, framecheck's streak_score 0.0 on those frames was arguably
+RIGHT (it was not render streaking!), and the p_topphrase probe remains
+staged as pure curiosity rather than fault-hunt.
+
+Calibration datum you'll want: **RECTSHADE v4b on silicon = 3.89 fps vs
+per-span TC_final 3.75 (+3.7%)**, where DSTEN-charged jsim scores them a
+dead tie (4.59 = 4.59). A ~10x cut in shade-blit launches buys only
++0.14 fps on hardware → the residual unmodeled per-launch cost is real
+but small at ~3,700 launches/frame; your two named suspects (busy-B_CMD
+writer hold, 68k bus interference) should be sized to that. Also: HALFSPAN
+(half the spans+fills) in honest jsim = 4.62 vs 4.59 full — fill is not
+the bottleneck in-model; silicon A/B in flight.
+
+---
+
+## FOLLOW-UP 4 — model-vs-silicon DISAGREEMENT LEDGER (2026-07-20 night, Jaguar B era)
+
+All silicon numbers below are from the healthy Jaguar B rig with the
+robust contiguous-run fps decode; all model numbers from jagemu
+`--fidelity silicon` at commit 9a27eda. Probe COFs preserved in probes/.
+
+### D1 (PRIMARY): GPU blit-wait share — jsim 54.2% vs silicon ~13.6%
+`jagemu run RECTSHADE_v4b_prof.cof --frames 3600 --fidelity silicon`
+GPU timing: **blit 54.2%**, jump_refill 15.5%, stall_alu 6.0%,
+stall_flags 6.0%, mem_external 4.8%, stall_div 2.1%, stall_load 1.3%,
+contention 0.1% (cycles 1.087B).
+Silicon subtractive ladder on the SAME binary family:
+full 3.89 fps (257ms) vs NOFILL (all launches compiled out) 4.51 fps
+(222ms) → **ALL blit work + launches = 35ms = 13.6% of frame.**
+Even charging every GPU-active cycle, jsim's blit-wait is ~3-4x the
+silicon-measured blit share for this kernel. Suspect: the DSTEN
+dest-read recharge overshooting on PIXEL-mode RMW (the shade pass is
+1px-inner-loop; dest reads may coalesce or pipeline on silicon in a way
+the per-phrase double-charge doesn't capture), and/or bwait-spin cycles
+being attributed to `blit` while silicon overlaps them with compute.
+Cross-check whole-frame: jsim fps 4.59 vs silicon 3.89 (+18% optimistic)
+— so while blit is over-charged, something else is UNDER-charged by
+more. The two errors partially cancel; per-slice truth needs both fixed.
+
+### D2: HALFRES scaling — model prediction vs silicon +13%
+Halving render height (240->120, HALFRES=1) on silicon: 4.00 -> 4.51 fps
+(-35ms). A per-scanline-dominated model (and jsim's fps) predicts a much
+larger gain. Useful anchor pair for per-scanline vs per-face cost split:
+per-face costs (edge setup, staging, arm/launch) did not halve.
+Probe pair: probes/PLAY2_jagB.cof vs probes/HALFRES_bus.cof.
+
+### D3: OP framebuffer fetch — silicon says free
+SLITDISPLAY probe (OP presents top 64 lines only, -73% display fetch):
+silicon fps EXACTLY unchanged (4.00 = 4.00). If the model charges OP
+fetch against GPU/Blitter throughput at all, it should reproduce this
+null result. probes/SLIT_bus.cof.
+
+### D4: silicon fact pack for recalibration (all Jaguar B, same session)
+full 3.89 | HALFSPAN 4.13 | NOFILL 4.51 | NODIV 3.98 | ALLCULL 9.55 |
+HALFRES 4.51 | SLIT 4.00 | TC_final(per-span shade, Jaguar A morning)
+3.75. Phase bars at 3.89: 68k+clear 5.6% / rooms-GPU 80.7% / wait 12.8%.
+Derived silicon slice model: scanline-walk ~27% / staging ~23% /
+per-face setup ~17% / fill+launch ~13.6% / 68k ~6% / divides ~2% /
+OP ~0% / sync+flip remainder.
+
+### D5 (minor, emulator-vs-silicon behavior): skunk console blocking
+jagemu models the skunk console well enough that ungated dbg_kv prints
+BLOCK a NOGD build at boot identically to real hardware with no drained
+console (68k in skunklib getBothBuffers). Faithful, arguably — but a
+jagemu flag to auto-drain console writes (--console-sink) would let
+NOGD builds run headless in CI without a harness change.
+
+### Standing asks unchanged
+Watchpoint filter (`--watch-filter master=,pc>=`), streak_score retune
+samples, SRCSHADE/GOURD 16-bit modeling, p_topphrase silicon run still
+pending on our side (rig time went to the fault hunt).
