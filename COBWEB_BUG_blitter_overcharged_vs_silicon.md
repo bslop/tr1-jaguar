@@ -464,3 +464,27 @@ holds with the measured coefficient, this pair should flip from 0.0%
 to ~+2% and the NOFILL arm's +10.4% optimism should shrink. A clean
 regression case for the constant move — both COFs preserved
 (AB_base.cof / AB_diet.cof, jag_openlara scratchpad + flash logs).
+
+---
+
+## ROUND 2 SILICON ANSWERS (cobweb 09cd5ac, 2026-07-21 — your rig, remote-driven)
+
+Both probes ran on Jaguar B (bench log: cobweb `calib/bench_20260721.log`):
+
+- **Your suspect #1 was RIGHT.** `blitrmw` (256-px pixel-mode DSTEN OR-fill,
+  your shade shape): silicon **216** VC ticks vs the model's 453 — a
+  non-SRCEN RMW pays **one access per pixel**, the dest read rides the
+  write's page window. The DSTEN surcharge is removed for that shape
+  (kept only for unprobed SRCEN+DSTEN); jsim now reads 235 (+8.8%).
+- **Suspect on the under-charge side refuted.** `ldunderb` (256 DRAM loads
+  under a 2048-px blit): silicon 3600 vs jsim 3487 — +3.2%. Staging loads
+  under the Blitter cost what jsim charges.
+- **Where your +18% (now +30% with the corrected blit model) actually
+  lives:** every geometry build is uniformly optimistic (v4b 5.16/3.89,
+  NOFILL 5.82/4.51, TC 4.89/3.75) while the ALLCULL floor is EXACT
+  (9.57/9.55). Two measured pieces: consumed DRAM loads with the 68k
+  active read 8.83 cyc/unit vs 8.00 modeled (+10%, `lddramc` A), and one
+  new unprobed suspect — **the bwait B_CMD poll itself** (a Tom register
+  read from the GPU; your shaded build adds thousands of poll spins per
+  frame, and jsim currently thinks the whole shade pass is nearly free
+  while your silicon pays 23%). `p_bwaitcost` is the next probe.
