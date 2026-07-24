@@ -29,10 +29,10 @@ PSX="$ASSETS/PSXDATA"
 # ── 2. convert every asset (order matters: gen_titlebg writes title_pal.bin,
 #       which tr2jag_title.py then maps the passport/photo textures onto) ──────
 say "Extracting levels + Lara (Caves)"
-TEXSCALE=2 MRT_ROOMS=64 SUBDIV_MAX=3072 LARA_MINAREA=800 \
+TEXSCALE=2 MRT_ROOMS=64 SUBDIV_MAX=3072 LARA_MINAREA=0 \
     TRLEVEL="$PSX/LEVEL1.PSX" TRPREFIX=mrt python3 tools/tr2jag_multiroom.py
 say "Extracting Lara's Home (Mansion)"
-TEXSCALE=2 MRT_ROOMS=64 SUBDIV_MAX=3072 LARA_MINAREA=800 \
+TEXSCALE=2 MRT_ROOMS=64 SUBDIV_MAX=3072 LARA_MINAREA=0 \
     TRLEVEL="$PSX/GYM.PSX" TRPREFIX=gym python3 tools/tr2jag_multiroom.py
 say "Title + loading backgrounds"
 TR_DELDATA="$ASSETS" python3 tools/gen_titlebg.py

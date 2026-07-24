@@ -28,7 +28,7 @@
 #   world = local + (off<<8); Y absolute (offY=0).
 # Sector blob (room0_sect format): u16 xS,zS ; s32 info_x,info_z ; xS*zS*{s16 floorY,ceilY}
 
-import struct, sys, os, zlib
+import struct, sys, os, zlib, math
 from collections import Counter, deque
 
 _REPO   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -42,6 +42,22 @@ CLUT_BYTES      = 16*2
 NUM_TILES       = 13
 NUM_CLUTS       = 1024
 MAX_ROOMS       = int(os.environ.get("MRT_ROOMS", "5"))   # BFS depth cap
+
+# STAGEDIET (early backface cull): FACE_PLANES=1 prepends a 12-byte plane to
+# every room face record (record = 12 + 6n bytes) so the kernel can cull
+# backfaces BEFORE staging verts/UVs. Bins built with this flag REQUIRE a
+# kernel/main.c built with STAGEDIET=1 (record strides move 24/18 -> 36/30).
+FACE_PLANES       = int(os.environ.get("FACE_PLANES","0"))
+FACE_PLANES_SIGN  = int(os.environ.get("FACE_PLANES_SIGN","-1"))  # -1 SETTLED by A/B 2026-07-20 (+1 = all-black: early cull keeps only backfaces, screen cull eats them)
+FACE_PLANES_SLACK = int(os.environ.get("FACE_PLANES_SLACK","96")) # cull margin, world units
+
+# STATICS=1 (2026-07-22 campaign): bake each room's STATIC MESH placements
+# (stalactites / plants / rock formations — the 20B records the room tail used
+# to skip) into the room geometry as ordinary room faces, so subdivision,
+# FACE_PLANES, painter sort, XCULL etc. all apply automatically. 0 = legacy
+# byte-identical output. NOTE: statics push rooms 13/26 past 512 verts — the
+# kernel vertex cache needs `make STATICS=1` (gpu.c vtxcache 512->768 verts).
+STATICS = int(os.environ.get("STATICS","0"))
 
 class R:
     def __init__(s,d): s.d=d; s.p=0
@@ -88,11 +104,18 @@ def read_all_rooms(r):
             below=r.u8(); floor=struct.unpack("b",bytes([r.u8()]))[0]
             above=r.u8(); ceil=struct.unpack("b",bytes([r.u8()]))[0]
             sect.append((floor,ceil,fidx,below,above))
-        r.seek(2); r.seek(r.u16()*20); r.seek(r.u16()*20)
+        r.seek(2); r.seek(r.u16()*20)      # ambient, lights (20B each)
+        nsm=r.u16(); statics=[]            # STATIC PLACEMENTS (20B each; layout
+        for _ in range(nsm):               #  verified vs format.h readRoom TR1_PSX)
+            smx=r.s32(); smy=r.s32(); smz=r.s32()      # world coords
+            srot=r.s16(); sint=r.u16(); smid=r.u16()   # rot(16384=90deg), intensity(0=bright), staticID
+            r.u16()                                    # PSX pad
+            statics.append(dict(x=smx,y=smy,z=smz,rot=srot,inten=sint,mid=smid))
         alt=r.u16(); rflags=r.u16()        # alternateRoom, flags (bit0=WATER)
         rooms.append(dict(i=ri, info_x=ix, info_z=iz, verts=verts, quads=quads,
                           tris=tris, ports=ports, portverts=portverts,
-                          xS=xS, zS=zS, sect=sect, water=bool(rflags & 1)))
+                          xS=xS, zS=zS, sect=sect, statics=statics,
+                          water=bool(rflags & 1)))
     return rooms, nrooms
 
 # =======================================================================
@@ -403,7 +426,8 @@ def main():
     fds=r.u32(); pFrame=r.p;   r.seek(fds*2)    # frameData (u16 words; frameOffset is a BYTE offset)
     mc=r.u32();  pModels=r.p;  r.seek(mc*20)    # models (20B each on PSX)
     modelsCount=mc
-    r.seek(r.u32()*32)                      # staticMeshes
+    nstat=r.u32(); pStatics=r.p; r.seek(nstat*32)  # staticMeshes (32B: u32 id,
+    # u16 mesh, s16 vbox[6], s16 cbox[6], u16 flags — verified vs format.h)
     objCount=r.u32()
     if objCount<1 or objCount>8000:
         print("!! objCount wrong:", objCount); sys.exit(1)
@@ -416,6 +440,18 @@ def main():
     # AFTER the used-set is known so LARA'S textures stay FULL-RES (her
     # holster/boot 1px details mangled at half-res; she's always on screen).
     TEXSCALE=int(os.environ.get("TEXSCALE","1"))
+    # RAMP_PAL=1: build a RAMP palette (K bases x M shades, brightest at ramp
+    # offset 0) instead of baking 4 shade levels into duplicated tiles.
+    # Shading then happens at RUNTIME (Blitter second pass adds a per-face /
+    # per-scanline delta k to the texel index — silicon-probed 2026-07-20:
+    # the intensity path (SRCSHADE/GOURD) writes zeros on 8bpp, but LFU-OR /
+    # ADDDSEL arithmetic works). Kills the (tex,lvl) tile copies: ~205KB less
+    # atlas at shipped params, and per-vertex light (already emitted in VERTS
+    # +6) becomes usable for Gouraud. 0 = legacy byte-identical output.
+    RAMP_PAL=int(os.environ.get("RAMP_PAL","0"))
+    RAMP_K=int(os.environ.get("RAMP_K","30"))     # base colours
+    RAMP_M=int(os.environ.get("RAMP_M","8"))      # shades per base
+    assert not RAMP_PAL or RAMP_K*RAMP_M<=240, "ramps must fit below slot 240"
 
     # ---- LARA SPAWN from the level's entity table (NOT assumed) ----
     # continue the readDataArrays walk: spriteTex -> spriteSeq -> cameras ->
@@ -467,6 +503,89 @@ def main():
     rooms=[rooms_all[i] for i in order]
     print("room set:", order)
 
+    # ---- STATICS=1: bake static-mesh placements into room geometry ---------
+    # Runs BEFORE the texture union / palette / subdivision passes, so the
+    # baked faces flow through the whole pipeline (atlas packing, RAMP k,
+    # FACE_PLANES prefix, painter sort) exactly like native room faces.
+    if STATICS:
+        smtab={}                        # staticID -> mesh index (global table)
+        for _i in range(nstat):
+            _o=pStatics+_i*32
+            smtab[_u32(data,_o)]=_u16(data,_o+4)
+        def parse_smesh(midx):
+            # mesh layout = Lara's (build_lara): 12B header {cx,cy,cz,radius,
+            # flags,vCount}, short4 world-unit coords, normals-or-intensity,
+            # rCount quads {v0..v3,flags}, tCount tris {v0..v2,flags}.
+            boff=_u32(data,pMeshOff+midx*4); base=pMeshData+boff
+            vCount=_s16(data,base+10); vAbs=abs(vCount); p=base+12
+            mverts=[]
+            for _j in range(vAbs):
+                mverts.append((_s16(data,p),_s16(data,p+2),_s16(data,p+4))); p+=8
+            p += vAbs*8 if vCount>0 else vAbs*2      # normals / intensity
+            rc=_u16(data,p); p+=2; mq=[]
+            for _q in range(rc):
+                v=[_u16(data,p),_u16(data,p+2),_u16(data,p+4),_u16(data,p+6)]
+                fl=_u16(data,p+8); p+=10
+                mq.append((v,fl&0x7FFF))
+            tc=_u16(data,p); p+=2; mt=[]
+            for _t in range(tc):
+                v=[_u16(data,p),_u16(data,p+2),_u16(data,p+4)]
+                fl=_u16(data,p+6); p+=8
+                mt.append((v,fl&0x7FFF))
+            return mverts,mq,mt
+        smesh={sid:parse_smesh(mi) for sid,mi in smtab.items()}
+        n_placed=0; n_missing=0
+        for rm in rooms:
+            for s in rm.get('statics',[]):
+                if s['mid'] not in smesh:
+                    n_missing+=1; continue
+                mverts,mq,mt=smesh[s['mid']]
+                lx=s['x']-rm['info_x']; ly=s['y']; lz=s['z']-rm['info_z']
+                # placement intensity -> brightness 0..255 (format.h TR1
+                # conversion: 0 = bright, 0x1FFF = dark, >0x1FFF = full bright)
+                lit=255 if s['inten']>0x1FFF else max(0,min(255,255-(s['inten']>>5)))
+                # Y-rotation. All Caves placements are quadrant multiples
+                # (rot in {0,16384,32768,49152}) -> exact integer rotation;
+                # float rotY fallback otherwise. Convention verified against
+                # format.h Box::rotate90 and our Lara _rot_axis: 90deg ->
+                # x' = z, z' = -x.
+                qrot=s['rot']&0xFFFF
+                if qrot%16384==0:
+                    kq=qrot>>14
+                    def rot(x,z,_k=kq):
+                        return ((x,z),(z,-x),(-x,-z),(-z,x))[_k]
+                else:
+                    _a=qrot/65536.0*2*math.pi
+                    _c=math.cos(_a); _s=math.sin(_a)
+                    def rot(x,z,_c=_c,_s=_s):
+                        return (int(round(x*_c+z*_s)), int(round(-x*_s+z*_c)))
+                vb=len(rm['verts'])
+                for (x,y,z) in mverts:
+                    rx,rz=rot(x,z)
+                    vx,vy,vz=lx+rx, ly+y, lz+rz
+                    if not (-32768<=vx<=32767 and -32768<=vy<=32767 and -32768<=vz<=32767):
+                        print("!! STATICS: s16 overflow room %d id %d v=(%d,%d,%d)"
+                              % (rm['i'], s['mid'], vx, vy, vz))
+                        vx=max(-32768,min(32767,vx)); vy=max(-32768,min(32767,vy))
+                        vz=max(-32768,min(32767,vz))
+                    rm['verts'].append((vx,vy,vz,lit))
+                # Mesh faces keep FILE winding + order (no v2<->v3 swap: mesh
+                # quads are initMesh-style, same as Lara's — the room-quad
+                # swap would invert winding). TR statics' two-sided surfaces
+                # (plants etc.) exist as mirrored face PAIRS in the data, so
+                # the kernel backface cull keeps exactly the visible side.
+                for (v,tex) in mq:
+                    rm['quads'].append(dict(v=[vb+_i2 for _i2 in v],tex=tex,swapped=False))
+                for (v,tex) in mt:
+                    rm['tris'].append(dict(v=[vb+_i2 for _i2 in v],tex=tex))
+                n_placed+=1
+        print("STATICS: baked %d placements (%d meshes; %d missing IDs) into rooms"
+              % (n_placed, len(smesh), n_missing))
+        for rm in rooms:
+            if rm.get('statics') and len(rm['verts'])>500:
+                print("  !! room %d pre-subdiv verts %d > 500 (needs make STATICS=1 vtxcache bump)"
+                      % (rm['i'], len(rm['verts'])))
+
     # ---- decoders ----
     def clut_rgb555(ci,nib):
         o=cluts_off+ci*CLUT_BYTES+nib*2
@@ -508,11 +627,16 @@ def main():
     used_pairs=set()
     for rm in rooms:
         for q in rm['quads']:
-            room_tex.add(q['tex']); q['lvl']=_face_lvl(rm,q)
+            room_tex.add(q['tex'])
+            q['lvl']=3 if RAMP_PAL else _face_lvl(rm,q)
             used_pairs.add((q['tex'],q['lvl']))
         for t in rm['tris']:
-            room_tex.add(t['tex']); t['lvl']=_face_lvl(rm,t)
+            room_tex.add(t['tex'])
+            t['lvl']=3 if RAMP_PAL else _face_lvl(rm,t)
             used_pairs.add((t['tex'],t['lvl']))
+    # RAMP_PAL: every face uses the single full-bright (lvl 3) tile copy; the
+    # darkening that lvl used to bake moves to the runtime shade pass, driven
+    # by the per-vertex light already emitted in the VERTS records.
     for f in lara['quads']:
         if not f['colored']: quad_tex.add(f['tex']); used_pairs.add((f['tex'],3))
     for f in lara['tris']:
@@ -563,7 +687,71 @@ def main():
     #   242..245 Lara flat-shade swatch
     #   246..253 Lara colored-face tones
     #   254..255 UI black/white
-    if len(uniq)>240:
+    if RAMP_PAL:
+        # ---- ramp palette: RAMP_K bases x RAMP_M shades ----------------
+        # Weighted Lloyd (k-means) over the FULL-BRIGHT colour histogram.
+        # Lara keeps guaranteed seats (8 of the K bases are fit to her
+        # colours alone) for the same reason as the legacy branch: level
+        # browns outvote her skin. Measured on Caves shipped params:
+        # 130 full-bright colours -> K=30 weighted RMS err 1.77 RGB555.
+        def _rgb(c): return ((c>>11)&31, (c>>1)&31, (c>>6)&31)
+        def _lloyd(h, K, iters=12):
+            # log-damped weights (2026-07-20): raw pixel counts made the fit
+            # subdivision-dependent — coarse SUBDIV kills tile dedup, rock
+            # pixels flooded the histogram and evicted the browns (the
+            # "Death Star" regression). log2 keeps every material's vote
+            # within a factor of ~20 instead of ~2000.
+            import math
+            pts=[(_rgb(c),1+int(math.log2(1+n))) for c,n in h.most_common()]
+            if not pts: return []
+            seeds=[p[0] for p in pts[:K]]
+            for _ in range(iters):
+                buck=[[0,0,0,0] for _ in seeds]
+                for (c,n) in pts:
+                    bi=min(range(len(seeds)),
+                           key=lambda i:(c[0]-seeds[i][0])**2
+                                       +(c[1]-seeds[i][1])**2
+                                       +(c[2]-seeds[i][2])**2)
+                    b=buck[bi]; b[0]+=c[0]*n; b[1]+=c[1]*n; b[2]+=c[2]*n; b[3]+=n
+                seeds=[(round(b[0]/b[3]),round(b[1]/b[3]),round(b[2]/b[3]))
+                       for b in buck if b[3]]
+            return seeds
+        LARA_BASES=8 if hist_lara else 0
+        _lb=_lloyd(hist_lara,LARA_BASES)
+        _wb=_lloyd(hist,RAMP_K-LARA_BASES)
+        # force the darkest WORLD base to true black (void/clear renders
+        # slot 0). Never a Lara seat: blackening her hair base collapsed
+        # her hair tones (reported as hair artifacts).
+        if _wb:
+            _di=min(range(len(_wb)),key=lambda i:299*_wb[i][0]+587*_wb[i][1]+114*_wb[i][2])
+            _wb[_di]=(0,0,0)
+        bases=(_lb+_wb)[:RAMP_K]
+        # base 0 MUST be the darkest base (2026-07-20): the rect-shade pass
+        # ORs k into whole rows, including cleared (index-0) void pixels that
+        # nothing repaints (cave mouths). index k lands in base 0's ramp, so
+        # base 0 dark => void stays dark; a bright base 0 painted the cave
+        # mouth white. Sort whole ramp order dark->bright (order is free:
+        # texel assignment below is nearest-base, independent of order).
+        bases.sort(key=lambda c:299*c[0]+587*c[1]+114*c[2])
+        print("RAMP base0 luma=%d (blackened world base sorts first)"
+              % ((299*bases[0][0]+587*bases[0][1]+114*bases[0][2])//1000))
+        # ~x0.845 per step, spans the legacy SHADE_FACT range (256..~80)
+        FACM=[256,216,183,155,131,111,94,79][:RAMP_M]
+        idx_of={}
+        for c in uniq:
+            r,g2,b=_rgb(c)
+            bi=min(range(len(bases)),
+                   key=lambda i:(r-bases[i][0])**2+(g2-bases[i][1])**2
+                               +(b-bases[i][2])**2)
+            idx_of[c]=bi*RAMP_M          # atlas byte = ramp base = BRIGHTEST
+        palette=[0]*256
+        for bi,(r,g2,b) in enumerate(bases):
+            for s in range(RAMP_M):
+                f=FACM[s]
+                palette[bi*RAMP_M+s]=jag16((r*f)>>8,(g2*f)>>8,(b*f)>>8)
+        print("RAMP palette: %d bases x %d shades, %d colours mapped"
+              % (len(bases),RAMP_M,len(uniq)))
+    elif len(uniq)>240:
         keep_l=[c for c,_ in hist_lara.most_common(64)]
         _kl=set(keep_l)
         keep=keep_l+[c for c,_ in hist.most_common() if c not in _kl][:240-len(keep_l)]
@@ -591,8 +779,9 @@ def main():
                     np.append(ppx)
             t['px']=np
         uniq=keep
-    palette=sorted(uniq)[:240]; idx_of={c:i for i,c in enumerate(palette)}
-    while len(palette)<256: palette.append(0)
+    if not RAMP_PAL:
+        palette=sorted(uniq)[:240]; idx_of={c:i for i,c in enumerate(palette)}
+        while len(palette)<256: palette.append(0)
     print("palette colours:", len(uniq))
 
     # ---- shelf-pack tiles into width-256 atlas ----
@@ -725,6 +914,7 @@ def main():
 
     # ---- build per-room geometry + sector blobs ----
     geom=bytearray(); sect=bytearray(); index=[]
+    _khist={}    # RAMP_PAL face-shade histogram (k=0 faces skip the shade blit)
     def _face_sort(rm):
         # STATIC PAINTER ORDER (kernel draws faces in data order, no depth
         # sort): shell first, interior verticals LAST. Key: XZ distance of
@@ -820,12 +1010,66 @@ def main():
             # everything to 248..255 (uniformly-bright rooms).
             s=light; s=0 if s<0 else (255 if s>255 else s)
             b+=struct.pack(">hhhH", x,y,z,s)
+        def face_k(f):
+            # RAMP_PAL: per-face shade delta 0..7 (0 = full bright) packed
+            # into u[0] bits 13-15 (real u < 256). Kernel SHADEPASS extracts
+            # it and ORs k into the span (texel = base*8 walks the ramp).
+            # Mapping matches the legacy SHADE_FACT bands: light >= 192 is
+            # FULL BRIGHT (k=0) — those faces skip the second blit entirely,
+            # which is also the fps lever (HW: always-shade cost -17%).
+            if not RAMP_PAL: return 0
+            vs=[verts[i][3] for i in f['v']]
+            avg=sum(vs)//len(vs)
+            k=(223-avg)>>5
+            k=0 if k<0 else (7 if k>7 else k)
+            _khist[k]=_khist.get(k,0)+1
+            return k
+        def vert_k(vi):
+            # per-VERTEX shade delta (task 6 vertical Gouraud): same curve as
+            # face_k but per corner. verts[] carries light 0..255 (255=bright).
+            if not RAMP_PAL: return 0
+            k=(223-verts[vi][3])>>5
+            return 0 if k<0 else (7 if k>7 else k)
+        def pack_uv(f):
+            # EVERY corner's u carries its own vertex k in bits 13-15 (u<8192;
+            # the kernel extracts per corner into K_BUF and interpolates along
+            # the A edge chain). face_k() still feeds the k histogram.
+            o=bytearray(); face_k(f)
+            for j,(u,v) in enumerate(f['uv']):
+                o+=struct.pack(">HH", u|(vert_k(f['v'][j])<<13), v)
+            return o
+        def face_plane(f):
+            # STAGEDIET: 12-byte plane PREPENDED to the face record so the
+            # kernel can backface-cull before staging verts/UVs.
+            #   long0 = (ny<<16)|(nx&0xFFFF)   long1 = nz&0xFFFF   long2 = d
+            # Kernel culls iff N.C < d, C = camera in room-local units.
+            # N is quantized to |comp|<=127 so imult products against a
+            # clamped s16 camera fit s32; d = min(N.v_i) over the face's
+            # verts (handles bent quads) minus SLACK*|N| (conservative
+            # margin for quantization — the exact screen cull stays the
+            # final gate, this test must only take clear backfaces).
+            vv=[verts[i] for i in f['v']]
+            x0,y0,z0=vv[0][:3]; x1,y1,z1=vv[1][:3]; x2,y2,z2=vv[2][:3]
+            ax,ay,az=x1-x0,y1-y0,z1-z0
+            bx,by,bz=x2-x0,y2-y0,z2-z0
+            nx=ay*bz-az*by; ny=az*bx-ax*bz; nz=ax*by-ay*bx
+            if FACE_PLANES_SIGN<0: nx,ny,nz=-nx,-ny,-nz
+            while max(abs(nx),abs(ny),abs(nz))>127:
+                nx>>=1; ny>>=1; nz>>=1
+            if nx==0 and ny==0 and nz==0:
+                return struct.pack(">IIi",0,0,-(1<<27))  # degenerate: never cull
+                # (-2^27 not INT32_MIN: kernel cmp N.C-d must not overflow)
+            d=min(nx*v[0]+ny*v[1]+nz*v[2] for v in vv)
+            d-=FACE_PLANES_SLACK*math.isqrt(nx*nx+ny*ny+nz*nz)
+            return struct.pack(">IIi",((ny&0xFFFF)<<16)|(nx&0xFFFF),nz&0xFFFF,d)
         for q in quads:
+            if FACE_PLANES: b+=face_plane(q)
             b+=struct.pack(">HHHH", *q['v'])
-            for (u,v) in q['uv']: b+=struct.pack(">HH",u,v)
+            b+=pack_uv(q)
         for t in tris:
+            if FACE_PLANES: b+=face_plane(t)
             b+=struct.pack(">HHH", *t['v'])
-            for (u,v) in t['uv']: b+=struct.pack(">HH",u,v)
+            b+=pack_uv(t)
         while len(b)&7: b+=b'\0'
         geom+=b
         soff=len(sect)
@@ -925,12 +1169,56 @@ def main():
         _nq0,len(lquads),_nt0,len(ltris),_MINAREA))
     lb+=struct.pack(">HHHHHH", vcount, len(lquads), len(ltris),
                     nframes, ATLAS_W, atlas_h)
+    # LARA WINDING FIX (2026-07-20): TR1 character meshes contain mirrored /
+    # inconsistently-wound faces (the PSX never backface-culls models); the
+    # Jaguar kernel DOES cull, which broke her elbows and opened see-through
+    # gaps. Reorient every face outward (normal vs mesh centroid, T-pose
+    # coords) so the cull keeps the visible side. Faces that are genuinely
+    # two-sided exist as mirrored PAIRS in the data — reorienting preserves
+    # one face per side, which is exactly right. LARA_WINDFIX=0 disables;
+    # LARA_WINDSIGN flips the outward convention if the kernel's cull sense
+    # ever changes.
+    _WINDFIX=int(os.environ.get("LARA_WINDFIX","1"))
+    _WSIGN=float(os.environ.get("LARA_WINDSIGN","1"))
+    _mcen={}
+    for _mi in range(len(_vb)):
+        _mvs=lara['mesh_verts'][_mi]
+        if _mvs:
+            _mcen[_mi]=tuple(sum(c[i] for c in _mvs)/len(_mvs) for i in range(3))
+        else:
+            _mcen[_mi]=(0,0,0)
+    _nflip=[0]; _fliphist={}
+    # never reorient the HEAD mesh (14): its face/hair region is concave, the
+    # outward-centroid test misjudges it, and flipping the face polys painted
+    # her FACE over the back of her hair ("head is turned", user 2026-07-20).
+    # Same delicacy the old face diet learned (LARA_KEEPMESH=14).
+    _WSKIP=set(int(x) for x in os.environ.get("LARA_WINDSKIP","14").split(",") if x!="")
+    def _windfix(vl, uvl):
+        if not _WINDFIX: return vl, uvl
+        if _meshof(vl) in _WSKIP: return vl, uvl
+        p=[_allv[i] for i in vl[:3]]
+        ux,uy,uz=p[1][0]-p[0][0],p[1][1]-p[0][1],p[1][2]-p[0][2]
+        wx,wy,wz=p[2][0]-p[0][0],p[2][1]-p[0][1],p[2][2]-p[0][2]
+        nx=uy*wz-uz*wy; ny=uz*wx-ux*wz; nz=ux*wy-uy*wx
+        mc=_mcen[_meshof(vl)]
+        fx=sum(_allv[i][0] for i in vl)/len(vl)-mc[0]
+        fy=sum(_allv[i][1] for i in vl)/len(vl)-mc[1]
+        fz=sum(_allv[i][2] for i in vl)/len(vl)-mc[2]
+        if (nx*fx+ny*fy+nz*fz)*_WSIGN < 0:
+            _nflip[0]+=1
+            _fliphist[_meshof(vl)]=_fliphist.get(_meshof(vl),0)+1
+            return vl[0:1]+vl[:0:-1], uvl[0:1]+uvl[:0:-1]
+        return vl, uvl
     for f in lquads:
-        lb+=struct.pack(">HHHH", *f['v'])       # file order (no swap)
-        for (u,vv) in lara_quad_uv(f): lb+=struct.pack(">HH",u,vv)
+        vv4,uv4=_windfix(list(f['v']), list(lara_quad_uv(f)))
+        lb+=struct.pack(">HHHH", *vv4)
+        for (u,vv) in uv4: lb+=struct.pack(">HH",u,vv)
     for f in ltris:
-        lb+=struct.pack(">HHH", *f['v'])
-        for (u,vv) in lara_tri_uv(f): lb+=struct.pack(">HH",u,vv)
+        vv3,uv3=_windfix(list(f['v']), list(lara_tri_uv(f)))
+        lb+=struct.pack(">HHH", *vv3)
+        for (u,vv) in uv3: lb+=struct.pack(">HH",u,vv)
+    if _WINDFIX: print("LARA WINDING FIX: reoriented %d of %d faces (sign %g) per-mesh %s"%(
+        _nflip[0], len(lquads)+len(ltris), _WSIGN, _fliphist))
     # NOTE: baked posed frames are GONE — Lara is posed at runtime from mrt_lskin.
 
     # ---- mrt_lskin.bin: skeleton + ALL-animation joint angles (runtime skin) --
@@ -1041,6 +1329,12 @@ def main():
         f.write("#define MRT_ROOMCOUNT   %d\n" % len(rooms))
         f.write("#define MRT_ATLAS_W     %d\n" % ATLAS_W)
         f.write("#define MRT_ATLAS_H     %d\n" % atlas_h)
+        if RAMP_PAL:
+            f.write("// ramp palette: slot = base*RAMP_M + shade, 0=brightest;\n")
+            f.write("// runtime shade pass adds k (0..RAMP_M-1) to the texel index\n")
+            f.write("#define MRT_RAMP_K      %d\n" % RAMP_K)
+            f.write("#define MRT_RAMP_M      %d\n" % RAMP_M)
+        f.write("#define MRT_FACE_PLANES %d\n" % FACE_PLANES)
         f.write("#define MRT_LARA_IDX_BASE %d\n" % LARA_IDX_BASE)
         f.write("#define MRT_LARA_N        %d\n" % LARA_N)
         f.write("#define MRT_LARA_CELL     %d\n" % LARA_CELL)
@@ -1111,6 +1405,10 @@ def main():
     print("rooms         :", order)
     print("atlas         : %dx%d = %.1f KB" % (ATLAS_W,atlas_h,len(atlas)/1024.0))
     print("geom blob     : %d bytes  sect blob: %d bytes" % (len(geom),len(sect)))
+    if RAMP_PAL and _khist:
+        _tot=sum(_khist.values())
+        print("face-shade k histogram:", " ".join("k%d:%d"%(k,_khist[k]) for k in sorted(_khist)),
+              "| k=0 (skip) = %.0f%%" % (100.0*_khist.get(0,0)/_tot))
     print("total data    : %.1f KB" % ((len(atlas)+len(pal)+len(geom)+len(sect))/1024.0))
     for k,rm in enumerate(rooms):
         g,s=index[k]
