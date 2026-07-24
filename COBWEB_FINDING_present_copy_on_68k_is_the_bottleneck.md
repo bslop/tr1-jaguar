@@ -51,14 +51,15 @@ The port has three present strategies. The two cheap ones are real and correct:
 | HALFRES | `blit_double()` — Blitter line-doubles 120->240     | ~zero    |
 | **MULTIROOM full-res (profiled)** | **68k `move.b` copy of the whole FB** | **~64%** |
 
-The full-res MULTIROOM path can't use the LOWRES OP scaler — it blanks the
-display under heavy multiroom fill (documented in `video.h`), and per the
-maintainer that route is **off the table**, don't chase it. But the baseline is
-*also* not routing its present through `blit_double()` / the Blitter — it falls
-back to a plain byte copy on the 68k. That's the defect: not that a copy happens,
-but that it's the slowest possible copy on the slowest master.
+The full-res MULTIROOM path evidently isn't using the LOWRES OP scaler — your
+own `video.h` documents that the OP hardware vertical scaler blanks the display
+under heavy multiroom fill, which is presumably why the full-res path doesn't
+lean on it. But the baseline is *also* not routing its present through
+`blit_double()` / the Blitter — it falls back to a plain byte copy on the 68k.
+That's the defect: not that a copy happens, but that it's the slowest possible
+copy on the slowest master.
 
-## The fix — get the present onto the Blitter (NOT the OP scaler)
+## The fix — get the present off the 68k
 
 In rough order of payoff:
 
@@ -73,8 +74,11 @@ In rough order of payoff:
    won't do), at minimum make it phrase-wide: `move.b` -> `move.l` is 4x fewer bus
    cycles for the same bytes, and a Blitter copy is far better still — it's a DMA
    engine built for exactly this.
-3. **Do NOT** try to rescue the OP hardware scaler for full-res — it bus-starves
-   and blanks under heavy fill; that's a known dead end.
+3. **OP hardware scaler for full-res** is the other theoretical route (it's how
+   LOWRES presents for zero cost), but your `video.h` notes it blanks under heavy
+   multiroom fill — so if you go this way it needs the bus-starvation solved
+   first. The Blitter present sidesteps that entirely, which is why it's ranked
+   first here — but this isn't ruled out, it's just the harder path.
 
 ## Why this is safe to do now (corroborating silicon work, this session)
 
