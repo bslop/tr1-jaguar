@@ -162,20 +162,40 @@ NEAR		.equ	64		; raised 32->64: shrinks the near-face SMEAR
 
 ; SRAM layout (packed; see header comment)
 PARAMS		.equ	$F03F00
-SX_BUF		.equ	$F03E00
-SY_BUF		.equ	$F03E10
-U_BUF		.equ	$F03E20
-V_BUF		.equ	$F03E30
+SX_BUF		.equ	$F03F24		; MOVED from $F03E00 (2026-07-20) into the
+					; free hole after SHADEK to raise the code
+					; ceiling 3584->3600 for the SHADEPASS code.
+					; $F03F24-$F03F33; $F03F34-3F still free.
+					; (Single-var move, NOT the reverted repack;
+					; verified 0-px on the PROFILE+AUTOSTART
+					; multi-room dispatch build.)
+; SY/U/V RELOCATED 2026-07-20 into the freed dispatch-list tail (list is
+; 5 entries now, ends $F03FC8): raises the code floor F03E10 -> F03E40,
+; ceiling 3600 -> 3648 bytes. v3: buffers END at $F03FF7 — the range the
+; old 8-entry dispatch list proved writable on silicon; $F03FF8+ is
+; UNPROVEN (v1 put V_BUF's last long there = streak suspect). SH_Y0
+; lives in the $F03F38 scrap.
+SY_BUF		.equ	$F03FC8
+U_BUF		.equ	$F03FD8
+V_BUF		.equ	$F03FE8
+; !!! $F03F74-$F03FF7 is the PER-FRAME DISPATCH LIST (gpu.c copies count +
+; 8 room entries there each kick) — it is NOT free scratch. A relocation
+; onto it broke multi-room dispatch (2026-07-20). Real leftover scraps:
+; $F03F20 (4B, ex-SHADEK), $F03F38-3F (8B), $F03EF0-FF (16B, PROFGPU=0
+; builds only). Task 6 needs a 5-entry list + code diet to fit.
 ; chain A u/v DDA state
-AU		.equ	$F03E40
-AUSL		.equ	$F03E44
-AV		.equ	$F03E48
-AVSL		.equ	$F03E4C
+; AU/BU blocks moved into the tail freed by the 3-entry dispatch list
+; (list ends $F03FA4; F03FA8-C7 free) -> code floor F03E40 -> F03E60,
+; ceiling 3680.
+AU		.equ	$F03FA8
+AUSL		.equ	$F03FAC
+AV		.equ	$F03FB0
+AVSL		.equ	$F03FB4
 ; chain B u/v DDA state
-BU		.equ	$F03E50
-BUSL		.equ	$F03E54
-BV		.equ	$F03E58
-BVSL		.equ	$F03E5C
+BU		.equ	$F03FB8
+BUSL		.equ	$F03FBC
+BV		.equ	$F03FC0
+BVSL		.equ	$F03FC4
 ; staged world packet + camera + iterator state
 WBUF		.equ	$F03E60		; hdr + 4*3 world = 13 longs
 CAM_BUF		.equ	$F03E98		; 7 longs
@@ -195,8 +215,24 @@ RET_PHASE	.equ	$F03EE0
 GRDF		.equ	$F03EE4		; 1 = GDU/GDV valid for this poly
 GDU		.equ	$F03EE8
 GDV		.equ	$F03EEC
+NCULF		.equ	$F03F34		; per-packet no-cull flag (dispatch ptr
+					; bit0; Lara's packet sets it)
+; rect-shade accumulator (2026-07-20): the dispatch list shrank 8->5 entries
+; (gpu.c/main.c), freeing $F03FC8-FF. Per face we accumulate the UNION rect
+; of its spans and shade it in ONE multi-row blit at pkt_done instead of a
+; blit per scanline — launch overhead was the silicon-real shade cost.
+SH_Y0		.equ	$F03F38		; rect-shade: clipped y0 of the face
+					; being rastered; -1 = disarmed (face
+					; culled/empty -> no shade blit)
+SHADEK		.equ	$F03F20		; per-face shade-k byte pattern (SHADEPASS;
+					; 0 = full bright = skip the second blit)
 RUNC		.equ	$F03F40		; scanline-run countdown (rows to next
 					; chain event; chains checked per RUN)
+; FARD ($F03F3C) RETIRED 2026-07-21: FARDIAL per-vert far cull measured NULL
+; on silicon; its 14B funded the XCULL x SHADEPASS reconciliation. Slot free.
+RUNHIST_BUF	.equ	$1C0000		; RUNHIST=1 probe only (emu telemetry):
+					; 32-long DRAM histogram of run starts;
+					; free gap between BSS end and stack
 BEHINDF		.equ	$F03F48		; any-staged-vert-behind flag (per face)
 VCACHE_PRM	.equ	$F03F08		; params[2] = vertex-cache DRAM base
 RSAVE		.equ	$F03F4C		; r15 (byend) stash during span section
@@ -220,6 +256,11 @@ TS0V		.equ	$F03EF0		; VC at section start
 TACC_X		.equ	$F03EF4		; accumulated transform/setup halflines
 TACC_R		.equ	$F03EF8		; accumulated raster (yloop) halflines
 NSCAN		.equ	$F03EFC		; scanline (yloop iteration) counter
+; STAGEDIET early backface cull: camera in ROOM-LOCAL units + validity flag.
+; REUSES the PROFGPU block $F03EF0-FF — PROFGPU=1 + STAGEDIET=1 is FORBIDDEN
+; (Makefile guards). Face records carry a 12B plane prefix (see extractor
+; FACE_PLANES): {(ny<<16)|nx, nz, d}; cull iff N.C < d.
+CAMLOC		.equ	$F03EF0		; cx,cy,cz,ok (ok!=0 -> keep-all room)
 VC_REG		.equ	$F00006
 
 	.gpu
@@ -238,6 +279,33 @@ start:
 	movei	#LISTMODE,r0
 	moveq	#0,r2
 	store	r2,(r0)
+	.if BANKDIET=1
+	; ALTERNATE-BANK residents (BANKDIET, PACING step 4): the second
+	; register file was 100% unused. Park the span loop's hot constants
+	; there once per kick; the row path replaces 6-byte/2-cycle moveis
+	; with 2-byte/1-cycle movefas. alt-r1=$FFFF0000 alt-r2=$FFFF
+	; alt-r3=BLIT_GUARD.
+	movei	#$FFFF0000,r0
+	moveta	r0,r1
+	shrq	#16,r0			; $0000FFFF
+	moveta	r0,r2
+	movei	#BLIT_GUARD,r0
+	moveta	r0,r3
+	movei	#sp_run,r0
+	moveta	r0,r5			; alt-r5 = sp_run (hot loop-back target)
+	movei	#imul32,r0
+	moveta	r0,r12			; alt-r12 = imul32 (23 call sites)
+	movei	#SY_BUF,r0
+	moveta	r0,r10			; alt-r10 = SY_BUF (scan/chain hot)
+	movei	#SX_BUF,r0
+	moveta	r0,r11			; alt-r11 = SX_BUF
+	.endif
+	.if NOBLIT=0
+	movei	#SH_Y0,r0		; same uninitialized-read hazard class
+	subq	#1,r2
+	store	r2,(r0)			; rect-shade disarmed (-1) until a
+	addq	#1,r2			; face actually rasters
+	.endif
 	; --- self-test guard ---------------------------------------------------
 	; gpu_init() self-tests EVERY kernel via gpu_spanfill(G_SRAM,0,..), which
 	; passes params[0]=$F03000 (this GPU's own SRAM) as the "room".  That is
@@ -249,7 +317,6 @@ start:
 	cmp	r0,r4			; room - G_SRAM
 	movei	#done,r22
 	jump	EQ,(r22)		; room == $F03000 -> self-test, just report done
-	nop
 	nop
 	; -----------------------------------------------------------------------
 	; (waitstate benchmark DELETED - banked: ~1.3 cyc/instr)
@@ -279,7 +346,6 @@ cam_cpy:
 	movei	#cam_cpy,r22
 	jump	NE,(r22)
 	nop
-	nop
 	load	(r1),r8			; [5] atlas base
 	addq	#4,r1			; -> [6]
 	nop
@@ -302,15 +368,12 @@ wid_e:
 	movei	#wid_e_done,r22
 	jump	EQ,(r22)		; t == 1 -> e = floor(log2 w)
 	nop
-	nop
 	jump	MI,(r22)		; t == 0 guard
 	nop
-	nop
 	shrq	#1,r1
-	addq	#1,r2			; e++
 	movei	#wid_e,r22
 	jump	T,(r22)
-	nop
+        addq	#1,r2
 	nop
 wid_e_done:
 	move	r2,r8			; e
@@ -321,15 +384,12 @@ wid_m:
 	movei	#wid_m_done,r22
 	jump	EQ,(r22)
 	nop
-	nop
 	jump	MI,(r22)		; guard e < 2
 	nop
-	nop
 	shrq	#1,r9
-	subq	#1,r8
 	movei	#wid_m,r22
 	jump	T,(r22)
-	nop
+        subq	#1,r8
 	nop
 wid_m_done:
 	moveq	#3,r3
@@ -367,7 +427,6 @@ wid_m_done:
 	movei	#hdr_parse,r22
 	jump	EQ,(r22)		; no list -> legacy single-room path
 	nop
-	nop
 	moveq	#1,r2
 	movei	#LISTMODE,r1		; (r1 drifted to VCDEF via the stash inserts:
 					;  storing 1 into VCDEF bus-wedged every
@@ -388,15 +447,14 @@ room_next:
 	movei	#alldone,r22
 	jump	EQ,(r22)		; list exhausted
 	nop
-	nop
 	subq	#1,r2
 	store	r2,(r1)
 	movei	#DISPCUR,r1
 	load	(r1),r0
 	nop
 	nop
-	load	(r0),r4			; room ptr
-	addq	#4,r0
+	load	(r0),r4			; room ptr (bit0 = per-packet NO-CULL:
+	addq	#4,r0			;   TR1 character meshes are double-sided)
 	load	(r0),r2			; packed clip x
 	addq	#4,r0
 	load	(r0),r3			; packed clip y
@@ -404,6 +462,9 @@ room_next:
 	load	(r0),r21		; cache ptr (0 = self-transform)
 	addq	#4,r0
 	store	r0,(r1)			; advance cursor (r1 = DISPCUR)
+	bclr	#0,r4			; blob ptr bit0 (ex NO-CULL flag) is
+					; never set since the Lara winding fix;
+					; plumbing removed 2026-07-20 for bytes
 	movei	#VCPTR,r1
 	store	r21,(r1)
 	move	r2,r5
@@ -448,12 +509,19 @@ hdr_parse:
 	shlq	#3,r1			; vcount*8
 	move	r0,r2
 	add	r1,r2			; r2 = QBASE
-	; TRIS base = QBASE + qcount*24  (24 = q*16 + q*8)
+	; TRIS base = QBASE + qcount*24 (36 with the STAGEDIET plane prefix)
+.if STAGEDIET=1
+	move	r7,r3
+	shlq	#5,r3			; q*32
+	move	r7,r12
+	shlq	#2,r12			; q*4
+.else
 	move	r7,r3
 	shlq	#4,r3			; q*16
 	move	r7,r12
 	shlq	#3,r12			; q*8
-	add	r12,r3			; q*24
+.endif
+	add	r12,r3			; q*24 (or *36)
 	move	r2,r13
 	add	r3,r13			; r13 = TBASE
 	; offX<<8 (sign-correct), offZ<<8
@@ -478,6 +546,32 @@ hdr_parse:
 	store	r9,(r14)
 	movei	#OFFZW,r14
 	store	r10,(r14)
+.if STAGEDIET=1
+	; CAMLOC = camera in ROOM-LOCAL units (r9/r10 still hold offX/offZ<<8
+	; = full-unit room origin; rooms have offY=0 so cy = camy). ok!=0 when
+	; any component exceeds s16 — imult in the face test would wrap, so
+	; such rooms skip the early cull entirely (keep-all, still correct).
+	movei	#CAM_BUF+16,r14
+	load	(r14),r0		; camx (world units)
+	load	(r14+1),r1		; camy
+	load	(r14+2),r2		; camz
+	sub	r9,r0			; cx
+	sub	r10,r2			; cz
+	move	r0,r3
+	abs	r3
+	move	r1,r11
+	abs	r11
+	or	r11,r3
+	move	r2,r11
+	abs	r11
+	or	r11,r3
+	shrq	#15,r3			; !=0 iff any |c| >= 32768
+	movei	#CAMLOC,r14
+	store	r0,(r14)
+	store	r1,(r14+1)
+	store	r2,(r14+2)
+	store	r3,(r14+3)
+.endif
 
 	; mailbox[1] = hello
 	movei	#MAGIC_HELLO,r0
@@ -497,7 +591,6 @@ hdr_parse:
 	cmpq	#0,r18
 	movei	#vc_self,r22
 	jump	EQ,(r22)		; self-transform room
-	nop
 	nop
 	move	r18,r1
 	subq	#4,r1			; flag address
@@ -527,13 +620,11 @@ vc_jwait:
 	movei	#vc_self,r22		; guard exhausted -> self-transform
 	jump	T,(r22)
 	nop
-	nop
 vc_jok:
 	movei	#VCACHE_PRM,r0
 	store	r18,(r0)		; faces read Jerry's cache
 	movei	#vc_done,r22
 	jump	T,(r22)			; skip the whole pre-pass
-	nop
 	nop
 vc_self:
 	movei	#VCDEF,r0
@@ -567,7 +658,6 @@ vc_self:
 	movei	#vc_done,r22
 	jump	EQ,(r22)
 	nop
-	nop
 vc_loop:
 	loadw	(r10),r8		; x
 	addq	#2,r10
@@ -592,77 +682,101 @@ vc_loop:
 	sub	r16,r9			; dy
 	sub	r17,r20			; dz
 	move	r8,r0
-	move	r11,r1
 	movei	#vcf1,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
 	movei	#imul32,r22
+	.endif
 	jump	T,(r22)
-	nop
+        move	r11,r1
 	nop
 vcf1:
 	move	r0,r21
 	move	r20,r0
-	move	r12,r1
 	movei	#vcf2,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
 	movei	#imul32,r22
+	.endif
 	jump	T,(r22)
-	nop
+        move	r12,r1
 	nop
 vcf2:
 	sub	r0,r21
 	sharq	#12,r21			; rx
 	move	r8,r0
-	move	r12,r1
 	movei	#vcf3,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
 	movei	#imul32,r22
+	.endif
 	jump	T,(r22)
-	nop
+        move	r12,r1
 	nop
 vcf3:
 	move	r0,r23
 	move	r20,r0
-	move	r11,r1
 	movei	#vcf4,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
 	movei	#imul32,r22
+	.endif
 	jump	T,(r22)
-	nop
+        move	r11,r1
 	nop
 vcf4:
 	add	r0,r23
 	sharq	#12,r23			; rz
 	move	r9,r0
-	move	r13,r1
 	movei	#vcf5,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
 	movei	#imul32,r22
+	.endif
 	jump	T,(r22)
-	nop
+        move	r13,r1
 	nop
 vcf5:
 	move	r0,r24
 	move	r23,r0
-	move	r14,r1
 	movei	#vcf6,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
 	movei	#imul32,r22
+	.endif
 	jump	T,(r22)
-	nop
+        move	r14,r1
 	nop
 vcf6:
 	sub	r0,r24
 	sharq	#12,r24			; ry
 	move	r9,r0
-	move	r14,r1
 	movei	#vcf7,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
 	movei	#imul32,r22
+	.endif
 	jump	T,(r22)
-	nop
+        move	r14,r1
 	nop
 vcf7:
 	move	r0,r25
 	move	r23,r0
-	move	r13,r1
 	movei	#vcf8,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
 	movei	#imul32,r22
+	.endif
 	jump	T,(r22)
-	nop
+        move	r13,r1
 	nop
 vcf8:
 	add	r0,r25
@@ -676,13 +790,17 @@ vcf8:
 	movei	#vc_behind,r22
 	jump	MI,(r22)
 	nop
-	nop
-	move	r21,r0
+	; (FARDIAL per-vert far cull lived here 2026-07-21 only: measured NULL
+	; on silicon, removed same day for the XCULL x SHADEPASS byte budget.)
 	movei	#FOCAL,r1
 	movei	#vcf9,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
 	movei	#imul32,r22
+	.endif
 	jump	T,(r22)
-	nop
+        move	r21,r0
 	nop
 vcf9:
 	move	r0,r29
@@ -691,18 +809,20 @@ vcf9:
 	cmpq	#0,r29
 	jr	PL,vc_sxp
 	nop
-	nop
 	neg	r0
 vc_sxp:
 	movei	#CENTER_X,r1
 	add	r1,r0
 	store	r0,(r18)		; cache sx
-	move	r24,r0
 	movei	#FOCAL_Y,r1
 	movei	#vcf10,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
 	movei	#imul32,r22
+	.endif
 	jump	T,(r22)
-	nop
+        move	r24,r0
 	nop
 vcf10:
 	move	r0,r29
@@ -711,17 +831,15 @@ vcf10:
 	cmpq	#0,r29
 	jr	PL,vc_syp
 	nop
-	nop
 	neg	r0
 vc_syp:
 	movei	#CENTER_Y,r1
 	add	r1,r0
 	addq	#4,r18
 	store	r0,(r18)		; cache sy
-	addq	#4,r18
 	movei	#vc_next,r22
 	jump	T,(r22)
-	nop
+        addq	#4,r18
 	nop
 vc_behind:
 	movei	#$07FFFFFF,r0
@@ -731,7 +849,6 @@ vc_next:
 	subq	#1,r31
 	movei	#vc_loop,r22
 	jump	NE,(r22)
-	nop
 	nop
 vc_done:
 	; fall into quad_setup
@@ -761,7 +878,6 @@ quad_setup:
 	movei	#face_loop,r22
 	jump	T,(r22)
 	nop
-	nop
 
 tri_setup:
 	movei	#TCNT,r0
@@ -783,13 +899,20 @@ tri_setup:
 	movei	#face_loop,r22
 	jump	T,(r22)
 	nop
-	nop
 
 ;=====================================================================
 ; face_loop: stage ONE face (world verts -> WBUF, UVs -> U_BUF/V_BUF) then
 ; hand it to render_pkt.  render_pkt returns to face_loop via pkt_done.
 ;=====================================================================
 face_loop:
+	.if PREPASSONLY=1
+	; PROBE: skip the entire face loop -> GPU time = vertex pre-pass only.
+	; ALLCULL - PREPASSONLY = the per-face-loop setup cost (what cluster-
+	; cull can recover); PREPASSONLY = the O(vcount) pre-pass (LOD-only).
+	movei	#alldone,r22
+	jump	T,(r22)
+	nop
+	.endif
 	; --- section profile: TACC_S += (VC now) - TS0V is handled at render_pkt;
 	; here we just stamp TS0V so [face fetch + stage_vert DRAM staging] is
 	; the section closed by render_pkt's existing TACC accounting. ---
@@ -808,14 +931,12 @@ face_loop:
 	movei	#fl_go,r22
 	jump	NE,(r22)		; faces remain -> process
 	nop
-	nop
 	; phase exhausted -> jump RET_PHASE (tri_setup or done)
 	movei	#RET_PHASE,r0
 	load	(r0),r1
 	nop
 	nop
 	jump	T,(r1)
-	nop
 	nop
 fl_go:
 	; geometry constants for stage_vert
@@ -832,6 +953,44 @@ fl_go:
 	load	(r0),r20		; face record ptr
 	nop
 	nop
+.if STAGEDIET=1
+	; EARLY BACKFACE CULL: 12B plane prefix {(ny<<16)|nx, nz, d} on every
+	; record; cull iff N.C < d, C = CAMLOC (room-local, |c|<=s16 or the
+	; ok flag keeps everything). Runtime blobs (Lara/props/title) carry
+	; dummy planes {0,0,INT32_MIN} = never culled by this test.
+	movei	#CAMLOC,r14
+	load	(r20),r1		; (ny<<16)|nx
+	addq	#4,r20
+	load	(r20),r2		; nz
+	addq	#4,r20
+	load	(r20),r3		; d
+	addq	#4,r20			; r20 -> vertex indices (BOTH paths)
+	load	(r14+3),r0		; ok flag
+	load	(r14),r5		; cx
+	cmpq	#0,r0
+	movei	#sd_keep,r22
+	jump	NE,(r22)		; camera out of s16 range -> stage all
+	move	r1,r4			; slot: dup plane long0 (benign)
+	imult	r5,r4			; nx*cx (both s16 in low word)
+	load	(r14+1),r5		; cy
+	sharq	#16,r1			; ny
+	load	(r14+2),r0		; cz
+	imult	r5,r1			; ny*cy
+	imult	r0,r2			; nz*cz
+	add	r4,r1
+	nop
+	add	r2,r1			; N.C
+	cmp	r3,r1			; N.C - d
+	movei	#sd_keep,r22
+	jump	PL,(r22)		; front-facing -> stage normally
+	nop
+	; fallthrough = backface: advance cursor/count, back to face_loop
+	movei	#face_loop,r22
+	movei	#face_adv,r1
+	jump	T,(r1)
+	nop
+sd_keep:
+.endif
 	; header (n<<16) -> WBUF ; r14 = WBUF+4 (world write ptr)
 	move	r21,r0
 	shlq	#16,r0
@@ -842,15 +1001,35 @@ fl_go:
 	move	r21,r7
 	shlq	#1,r7
 	add	r20,r7
+	.if SHADEPASS=1
+	; per-face shade k rides in u[0] bits 13-15 (extractor RAMP_PAL packing;
+	; u < 8192 so the bits are free). Build the replicated byte pattern
+	; once per face into SHADEK; 0 = full bright = sp_fill skips the pass.
+	; (u[0] now carries corner-0's VERTEX k — a fine per-face proxy.)
+	loadw	(r7),r0
+	movei	#SHADEK,r2
+	shrq	#13,r0			; k (0..7)
+	move	r0,r1
+	shlq	#8,r1
+	or	r1,r0			; k | k<<8
+	move	r0,r1
+	shlq	#16,r1
+	or	r1,r0			; k in all 4 bytes
+	.if NOBLIT=1
+	moveq	#0,r0			; BISECT: force k=0 -> launcher never fires
+	.endif
+	store	r0,(r2)
+	.endif
+.if BEXIT=0
 	movei	#BEHINDF,r0
 	moveq	#0,r1
 	store	r1,(r0)			; no behind verts staged yet
+.endif
 	moveq	#0,r6			; j = 0
 stage_loop:
 	cmp	r21,r6			; j - n
 	movei	#stage_done,r22
 	jump	EQ,(r22)
-	nop
 	nop
 	; idx = loadw(rec + 2*j)
 	move	r6,r0
@@ -862,30 +1041,38 @@ stage_loop:
 	movei	#stage_vert,r22
 	jump	T,(r22)
 	nop
-	nop
 sv_ret:
+	or	r1,r1			; consume the idx load for the hazard
+					; checker (stage_vert already did; jas
+					; cannot see through the indirect call)
 	; per-vertex (u,v) = loadw(uvbase + 4*j) - passed straight through, untransformed
 	move	r6,r0
 	shlq	#2,r0
 	add	r7,r0			; &u[j]
-	loadw	(r0),r2			; u (int atlas texel col)
+	loadw	(r0),r2			; u (bits 13-15 = this corner's vertex k)
 	addq	#2,r0
 	loadw	(r0),r3			; v (int atlas texel row)
 	move	r6,r1
 	shlq	#2,r1			; j*4
+	.if SHADEPASS=1
+	shlq	#19,r2			; strip the per-corner k bits from u
+	shrq	#19,r2
+	.endif
 	movei	#U_BUF,r0
 	add	r1,r0
 	store	r2,(r0)			; U_BUF[j] = u
 	movei	#V_BUF,r0
 	add	r1,r0
 	store	r3,(r0)			; V_BUF[j] = v
-	addq	#1,r6			; j++
 	movei	#stage_loop,r22
 	jump	T,(r22)
-	nop
+        addq	#1,r6
 	nop
 stage_done:
-	; FACE_CUR += 6*n  (record size); FACE_LEFT--
+	movei	#render_pkt,r22		; face_adv exits through (r22)
+face_adv:
+	; FACE_CUR += record size (6n, +12 plane under STAGEDIET); FACE_LEFT--
+	; then jump (r22): render_pkt (staged) or face_loop (early-culled).
 	movei	#FACE_CUR,r0
 	load	(r0),r1
 	move	r21,r2
@@ -893,19 +1080,17 @@ stage_done:
 	move	r21,r3
 	shlq	#1,r3			; 2n
 	add	r3,r2			; 6n
-	add	r2,r1			; FACE_CUR + 6n
+.if STAGEDIET=1
+	addq	#12,r2			; + plane prefix
+.endif
+	add	r2,r1			; FACE_CUR + record size
 	store	r1,(r0)
 	movei	#FACE_LEFT,r0
 	load	(r0),r1
-	nop
-	nop
+	movei	#WBUF,r4		; render_pkt arg (benign on skip path)
 	subq	#1,r1
 	store	r1,(r0)
-	; render this face; render_pkt returns to face_loop (pkt_done)
-	movei	#WBUF,r4
-	movei	#render_pkt,r22
 	jump	T,(r22)
-	nop
 	nop
 
 ;=====================================================================
@@ -916,6 +1101,17 @@ stage_done:
 ;   completion / any skip -> pkt_done -> face_loop.
 ;=====================================================================
 render_pkt:
+	.if CULLCOUNT=1
+	; n_staged++ : a face reaching here passed the N.C world backface cull
+	; and is being fully transformed+screen-tested (the "staged" cost).
+	; r0 free at entry (header load overwrites it next). $1C0000 DRAM.
+	movei	#$001C0000,r0
+	load	(r0),r1
+	nop
+	nop
+	addq	#1,r1
+	store	r1,(r0)
+	.endif
 	; --- section profile: close STAGING section (face fetch + stage_vert
 	; DRAM reads) into GDV, then stamp TS0V for the TRANSFORM section ---
 	.if PROFGPU=1
@@ -929,7 +1125,6 @@ render_pkt:
 	sub	r2,r0
 	cmpq	#0,r0
 	jr	PL,vcs_ok
-	nop
 	nop
 	movei	#525,r2
 	add	r2,r0
@@ -959,6 +1154,7 @@ vcs_ok:
 	or	r0,r7			; r7 = replicated low16 (unused by textured span)
 
 	; VERTEX CACHE: SX/SY filled during staging; transform vloop GONE.
+.if BEXIT=0
 	movei	#BEHINDF,r0
 	load	(r0),r19
 	nop
@@ -968,50 +1164,117 @@ vcs_ok:
 	movei	#pkt_done,r22
 	jump	NE,(r22)
 	nop
-	nop
+.endif
+	; (BEXIT=1: stage_vert aborts the face at the FIRST behind-sentinel
+	; vert — no face with a behind vert ever reaches render_pkt, so the
+	; BEHINDF flag and this check are compiled out entirely.)
 
 	; ---- backface cull: ar = (sx1-sx0)*(sy2-sy0)-(sx2-sx0)*(sy1-sy0) ----
+	.if BANKDIET=1
+	movefa	r11,r0			; SX_BUF (bank-1)
+	.else
 	movei	#SX_BUF,r0
+	.endif
 	load	(r0),r8			; sx0
 	addq	#4,r0
 	load	(r0),r9			; sx1
 	addq	#4,r0
 	load	(r0),r20		; sx2
+	.if BANKDIET=1
+	movefa	r10,r0			; SY_BUF (bank-1)
+	.else
 	movei	#SY_BUF,r0
+	.endif
 	load	(r0),r21		; sy0
 	addq	#4,r0
 	load	(r0),r23		; sy1
 	addq	#4,r0
 	load	(r0),r24		; sy2
+.if XCULL=1
+	; FACE X-CULL (BUCKET guard 1): a face whose verts are ALL left or ALL
+	; right of the clip window still walks its whole y-range paying full
+	; per-row edge/uv/clamp cost for spans that clamp empty (up to 240
+	; rows). Reject it here, pixel-exact: the 2px margin absorbs edge-DDA
+	; truncation jitter. For tris SX_BUF[3] is stale — a stale term can
+	; only make the all-outside AND/OR test MORE conservative, never wrong.
+	.if BANKDIET=1
+	movefa	r11,r14			; SX_BUF (bank-1)
+	.else
+	movei	#SX_BUF,r14
+	.endif
+	load	(r14+3),r1		; sx3 (stale for tris: conservative)
+	movei	#CLIPX0,r14
+	load	(r14),r2		; clipx0
+	load	(r14+1),r3		; clipx1
+	subq	#1,r2			; L: sx-L<0 for all <=> all sx<=clipx0-2
+	move	r8,r0
+	sub	r2,r0			; sx0-L
+	move	r9,r14
+	sub	r2,r14
+	and	r14,r0
+	move	r20,r14
+	sub	r2,r14
+	and	r14,r0
+	move	r1,r14
+	sub	r2,r14
+	and	r14,r0			; sign set iff ALL four left of window
+	movei	#pkt_done,r22
+	cmpq	#0,r0
+	jump	MI,(r22)		; whole face left of clip -> skip
+	addq	#2,r3			; slot: R = clipx1+2 (harmless if taken)
+	move	r8,r0
+	sub	r3,r0
+	move	r9,r14
+	sub	r3,r14
+	or	r14,r0
+	move	r20,r14
+	sub	r3,r14
+	or	r14,r0
+	move	r1,r14
+	sub	r3,r14
+	or	r14,r0			; sign CLEAR iff ALL four right of window
+	cmpq	#0,r0
+	jump	PL,(r22)		; whole face right of clip -> skip
+	nop
+.endif
 	sub	r8,r9			; sx1 - sx0
 	sub	r8,r20			; sx2 - sx0
 	sub	r21,r23			; sy1 - sy0
 	sub	r21,r24			; sy2 - sy0
 	move	r9,r0
-	move	r24,r1
 	movei	#bc1,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
 	movei	#imul32,r22
+	.endif
 	jump	T,(r22)
-	nop
+        move	r24,r1
 	nop
 bc1:
 	move	r0,r25			; p1 = (sx1-sx0)*(sy2-sy0)
 	move	r20,r0
-	move	r23,r1
 	movei	#bc2,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
 	movei	#imul32,r22
+	.endif
 	jump	T,(r22)
-	nop
+        move	r23,r1
 	nop
 bc2:
 	sub	r0,r25			; ar = p1 - p2
-	cmpq	#0,r25
 	movei	#pkt_done,r22
+	cmpq	#0,r25
+	.if ALLCULL=1
+	jump	T,(r22)			; LADDER PROBE: cull EVERY face after
+	nop				; the stage+project+cull-test cost
+	.endif
 	jump	MI,(r22)		; ar < 0 -> backface, skip
 	nop				;  *** FLIP CULL SENSE: change MI<->PL here if room0_tex
 	nop				;      winding turns rooms inside-out ***
 	jump	EQ,(r22)		; ar == 0 -> degenerate, skip
-	nop
 	nop
 
 	; 16.16 divide mode for the edge-walk slope divides (chain_step + uv_edge)
@@ -1025,7 +1288,11 @@ bc2:
 ; Blitter affinely texture-maps.  (bltex's next_poly targets become pkt_done.)
 ;---------------------------------------------------------------------
 	; itop = first strict-min sy; ymin; ymax
+	.if BANKDIET=1
+	movefa	r10,r0			; SY_BUF (bank-1)
+	.else
 	movei	#SY_BUF,r0
+	.endif
 	load	(r0),r1			; sy[0]
 	moveq	#0,r20			; itop = 0
 	nop
@@ -1037,10 +1304,13 @@ scan_loop:
 	movei	#scan_done,r22
 	jump	EQ,(r22)
 	nop
-	nop
 	move	r24,r0
 	shlq	#2,r0
+	.if BANKDIET=1
+	movefa	r10,r1			; SY_BUF (bank-1)
+	.else
 	movei	#SY_BUF,r1
+	.endif
 	add	r1,r0
 	load	(r0),r1			; sy[i]
 	nop
@@ -1048,23 +1318,19 @@ scan_loop:
 	cmp	r2,r1			; sy[i] - ymin
 	jr	PL,not_min		; >= ymin -> keep first min
 	nop
-	nop
 	move	r1,r2			; ymin = sy[i]
 	move	r24,r20			; itop = i
 not_min:
 	cmp	r3,r1			; sy[i] - ymax
 	jr	MI,not_max		; < ymax
 	nop
-	nop
 	jr	EQ,not_max		; == ymax
-	nop
 	nop
 	move	r1,r3			; ymax = sy[i]
 not_max:
-	addq	#1,r24
 	movei	#scan_loop,r22
 	jump	T,(r22)
-	nop
+        addq	#1,r24
 	nop
 scan_done:
 	; y0 = max(ymin,CLIPY0) -> r10 ; y1 = min(ymax,CLIPY1) -> r11
@@ -1075,7 +1341,6 @@ scan_done:
 	nop
 	cmp	r1,r10			; ymin - clipy0
 	jr	PL,y0_ok
-	nop
 	nop
 	move	r1,r10
 y0_ok:
@@ -1091,9 +1356,7 @@ y0_ok:
 	cmp	r0,r11			; ymax - clipy1
 	jr	MI,y1_ok		; < clipy1 keep
 	nop
-	nop
 	jr	EQ,y1_ok		; == clipy1 keep
-	nop
 	nop
 	move	r0,r11			; y1 = clipy1
 y1_ok:
@@ -1102,8 +1365,41 @@ y1_ok:
 	movei	#pkt_done,r22
 	jump	MI,(r22)
 	nop
+	.if CULLCOUNT=1
+	; n_rastered++ : passed N.C + BEXIT + screen-area + XCULL + non-empty
+	; y-range -> this face WILL raster >=1 span. cullable = 1 - rast/staged.
+	movei	#$001C0004,r0
+	load	(r0),r1
 	nop
+	nop
+	addq	#1,r1
+	store	r1,(r0)
+	.endif
+	.if SHADEPASS=1
+	.if NOBLIT=0
+	movei	#SH_Y0,r0		; ARM the rect shade: this face rasters;
+	store	r10,(r0)		; pkt_done shades bbox rows y0..y1
+	.endif
+	.endif
 
+.if XCULL=1
+	; init chain u/v DDA state to 0 (recomputed on first edge step).
+	; XCULL byte diet (2026-07-21): AU..BVSL are 8 CONTIGUOUS longs at
+	; $F03FA8-C4, so one indexed-store run replaces the 8 movei+store
+	; pairs below (-40B; funds XCULL alongside SHADEPASS). Runs BEFORE
+	; the chain init because it borrows r14 (ayend not yet live). Gated
+	; on XCULL only so every flags-off build stays byte-identical.
+	moveq	#0,r0
+	movei	#AU,r14
+	store	r0,(r14)		; AU
+	store	r0,(r14+1)		; AUSL
+	store	r0,(r14+2)		; AV
+	store	r0,(r14+3)		; AVSL
+	store	r0,(r14+4)		; BU
+	store	r0,(r14+5)		; BUSL
+	store	r0,(r14+6)		; BV
+	store	r0,(r14+7)		; BVSL
+.endif
 	; init chains: aci=bci=itop; ayend=byend=ymin(r2); ax=bx=aslope=bslope=0
 	move	r20,r12			; aci
 	move	r20,r13			; bci
@@ -1114,6 +1410,7 @@ y1_ok:
 	moveq	#0,r18			; aslope
 	moveq	#0,r19			; bslope
 
+.if XCULL=0
 	; init chain u/v DDA state to 0 (recomputed on first edge step)
 	moveq	#0,r0
 	movei	#AU,r1
@@ -1132,6 +1429,7 @@ y1_ok:
 	store	r0,(r1)
 	movei	#BVSL,r1
 	store	r0,(r1)
+.endif
 	; --- section profile: close TRANSFORM, open RASTER ---
 	.if PROFGPU=1
 	movei	#VC_REG,r1
@@ -1144,7 +1442,6 @@ y1_ok:
 	sub	r2,r0
 	cmpq	#0,r0
 	jr	PL,vcx_ok
-	nop
 	nop
 	movei	#525,r2
 	add	r2,r0
@@ -1179,23 +1476,19 @@ lchain:
 	movei	#lchain_done,r22
 	jump	MI,(r22)		; y < ayend -> stop
 	nop
-	nop
 	cmp	r6,r21			; guard - n
 	jr	EQ,lchain_cont		; guard == n -> allowed
-	nop
 	nop
 	movei	#lchain_done,r22
 	jump	PL,(r22)		; guard > n -> stop
 	nop
-	nop
 lchain_cont:
 	addq	#1,r21			; guard++
 	move	r12,r24			; cur = aci
-	moveq	#1,r9			; dir +1
 	movei	#lc_ret,r8
 	movei	#chain_step,r22
 	jump	T,(r22)
-	nop
+        moveq	#1,r9
 	nop
 lc_ret:
 	move	r29,r14			; ayend = sy[ni]
@@ -1203,17 +1496,15 @@ lc_ret:
 	move	r23,r18			; aslope
 	move	r12,r0			; cur   = old aci
 	move	r24,r1			; ni
-	move	r24,r12			; aci = ni  (uv_edge reads cur/ni from r0/r1)
 	movei	#AU,r7			; chain A u/v block
 	movei	#lc_uv,r20		; return addr
 	movei	#uv_edge,r22
 	jump	T,(r22)
-	nop
+        move	r24,r12
 	nop
 lc_uv:
 	movei	#lchain,r22
 	jump	T,(r22)
-	nop
 	nop
 lchain_done:
 
@@ -1224,23 +1515,19 @@ rchain:
 	movei	#rchain_done,r22
 	jump	MI,(r22)
 	nop
-	nop
 	cmp	r6,r21
 	jr	EQ,rchain_cont
-	nop
 	nop
 	movei	#rchain_done,r22
 	jump	PL,(r22)
 	nop
-	nop
 rchain_cont:
 	addq	#1,r21
-	move	r13,r24			; cur = bci
 	movei	#-1,r9			; dir -1
 	movei	#rc_ret,r8
 	movei	#chain_step,r22
 	jump	T,(r22)
-	nop
+        move	r13,r24
 	nop
 rc_ret:
 	move	r29,r15			; byend = sy[ni]
@@ -1248,17 +1535,15 @@ rc_ret:
 	move	r23,r19			; bslope
 	move	r13,r0			; cur = old bci
 	move	r24,r1			; ni
-	move	r24,r13			; bci = ni
 	movei	#BU,r7			; chain B u/v block
 	movei	#rc_uv,r20		; return addr
 	movei	#uv_edge,r22
 	jump	T,(r22)
-	nop
+        move	r24,r13
 	nop
 rc_uv:
 	movei	#rchain,r22
 	jump	T,(r22)
-	nop
 	nop
 rchain_done:
 	; SCANLINE-RUN BATCH: rows until the next chain event (or bottom+1).
@@ -1268,7 +1553,6 @@ rchain_done:
 	cmp	r15,r0			; ayend - byend
 	jr	MI,rb_amin		; ayend smaller -> keep
 	nop
-	nop
 	move	r15,r0
 rb_amin:
 	move	r11,r1			; y1
@@ -1276,12 +1560,37 @@ rb_amin:
 	cmp	r1,r0
 	jr	MI,rb_ymin
 	nop
-	nop
 	move	r1,r0
 rb_ymin:
 	sub	r10,r0			; nrun = min(ayend,byend,y1+1) - y  (>=1)
+	.if BANKDIET=1
+	moveta	r0,r4			; run countdown lives in bank-1 r4
+	.else
 	movei	#RUNC,r1
 	store	r0,(r1)
+	.endif
+	.if RUNHIST=1
+	; emu-only probe: RUNHIST_BUF[min(nrun,31)]++  (r1-r3 dead until sp_run)
+	move	r0,r2			; nrun
+	moveq	#31,r1
+	cmp	r1,r2			; nrun - 31
+	jr	MI,rh_ok		; nrun < 31: keep
+	nop
+	move	r1,r2			; clamp to 31
+rh_ok:
+	shlq	#2,r2
+	movei	#RUNHIST_BUF,r1
+	add	r1,r2
+	load	(r2),r3
+	nop
+	nop
+	addq	#1,r3
+	store	r3,(r2)
+	.endif
+	.if TRAPEZOID=1
+	moveq	#0,r21			; BATCHC = 0 (r21 = guardB is dead from
+					; here to run end; re-inited per chain)
+	.endif
 
 ;---------------------------------------------------------------------
 ; SPAN: choose left/right chain, build affine (u,v) gradient, Blitter fill
@@ -1289,13 +1598,75 @@ rb_ymin:
 	; SPAN SECTION register borrow (UNIFIED): r14 (ayend) = DDA base AU..BVSL,
 	; r15 (byend) = blitter reg base — both dormant until next scanline's
 	; chain checks. Kills 16 movei per scanline vs the address-per-access form.
+	.if BANKDIET=1
+	moveta	r14,r13			; ayend stash -> bank-1 (was the GDU
+	moveta	r15,r14			; slot + RSAVE: 2 movei+store SRAM
+					; round-trips per run, now 2 moveta)
+	.else
 	movei	#GDU,r0
 	store	r14,(r0)
 	movei	#RSAVE,r0
 	store	r15,(r0)
+	.endif
 	movei	#AU,r14
 	movei	#$F02200,r15
+	.if RUNBATCH=1
+	; RUNBATCH gate, ONCE PER RUN (the tz autopsy: per-row gates ate the
+	; win on the 79% of steps that can never batch). Batch only SLOPE-0
+	; runs — axis-aligned edges, floors never move, the stable-floor
+	; histogram's fat tail (46% of rows) — whose texture drift per row
+	; is under the tz bound (1/32 texel: <=1 texel shear over 32 rows).
+	; RUNBATCH gate, once per run. EXACT-K era (the stale-xl law: +-1px
+	; edge error = +-du TEXELS on minified faces — only exact floor-stable
+	; batches are texture-safe). Gate = cheap prefilter only: texture
+	; drift under the tz bound (shear <= k*2048 <= 1 texel at k<=31);
+	; the launch row computes exact k from the edge fracs.
+	moveq	#0,r1
+	bset	#11,r1			; 2048 = 1/32 texel/row
+	moveq	#0,r0
+	moveta	r0,r7			; default: not batchable
+	load	(r14+1),r0		; AUSL
+	load	(r14+5),r2		; BUSL
+	load	(r14+3),r3		; AVSL
+	sub	r0,r2			; dUSL
+	load	(r14+7),r0		; BVSL
+	abs	r2
+	sub	r3,r0			; dVSL
+	abs	r0
+	or	r2,r0			; both under 2048 == OR under 2048
+	cmp	r1,r0
+	jr	PL,rbg_no		; texture drifts too fast
+	moveq	#1,r0			; slot: benign on exit
+	moveta	r0,r7			; batchable run
+rbg_no:
+	.endif
+	.if ROWDIET=1
+	; ROWDIET run-level invariants (PERFHUNT_CAMPAIGN.md): set integer
+	; DIVCTRL ONCE per run (the only in-run divides are the span du/dv;
+	; uv_edge/chain_step 16.16 divides happen at chain events, outside the
+	; run — 16.16 restored at run exit) and hold the packet clip window in
+	; r4/r21 (both dead in-run at TRAPEZOID=0: guards re-init per chain,
+	; LEFTP/BATCHC are TRAPEZOID-only; imul32 preserves r4-r25).
+	movei	#G_DIVCTRL,r0
+	moveq	#0,r1
+	store	r1,(r0)
+	movei	#CLIPX0,r0
+	load	(r0),r4
+	movei	#CLIPX1,r0
+	load	(r0),r21
+	.endif
 sp_run:
+	.if TRAPEZOID=1
+	; BATCHC skip: this row was already drawn by a multi-row blit —
+	; advance the loop state only (sp_tail), no span setup/launch.
+	cmpq	#0,r21
+	jr	EQ,tz_live
+	nop
+	movei	#sp_tail,r22
+	jump	T,(r22)
+	subq	#1,r21			; slot: BATCHC--
+tz_live:
+	.endif
 	move	r16,r0
 	sharq	#16,r0			; xa
 	move	r17,r1
@@ -1304,22 +1675,32 @@ sp_run:
 	movei	#sp_bleft,r22
 	jump	PL,(r22)		; xa >= xb -> chain B is LEFT
 	nop
-	nop
 	; --- chain A is LEFT ---
 	move	r0,r2			; xl_raw = xa
-	move	r1,r3			; xr_raw = xb
+	.if TRAPEZOID=1
+	move	r14,r4			; LEFTP = &AUSL (indexed loads need
+	addq	#4,r4			; r14/r15 base -> keep a direct ptr)
+	.endif
 	load	(r14),r24		; uL = AU
 	load	(r14+2),r25		; vL = AV
 	load	(r14+4),r26		; uR = BU
 	load	(r14+6),r27		; vR = BV
 	movei	#sp_have,r22
 	jump	T,(r22)
-	nop
+        move	r1,r3
 	nop
 sp_bleft:
 	; --- chain B is LEFT ---
 	move	r1,r2			; xl_raw = xb
 	move	r0,r3			; xr_raw = xa
+	.if TRAPEZOID=1
+	move	r14,r4			; LEFTP = &BUSL
+	addq	#20,r4
+	.endif
+	or	r24,r24			; consumes for the hazard checker: the
+	or	r25,r25			; A-left loads it thinks are pending are
+	or	r26,r26			; on the OTHER branch of the 1325 jump
+	or	r27,r27			; (path-insensitive scan; reported to cobweb)
 	load	(r14+4),r24		; uL = BU
 	load	(r14+6),r25		; vL = BV
 	load	(r14),r26		; uR = AU
@@ -1331,11 +1712,26 @@ sp_have:
 	move	r3,r7
 	sub	r2,r7			; r7 = denom
 	; integer divide mode for the per-span du/dv divide
+	.if ROWDIET=0
 	movei	#G_DIVCTRL,r0
 	moveq	#0,r1
 	store	r1,(r0)
+	.endif
 	; (denom==0 single-column spans flow through: div-by-zero returns
 	;  garbage du/dv, which one-pixel spans never consume)
+	.if DIVHIDE=1
+	; DIVHIDE (PACING step 4): both quotients cook in r28/r27 (dead on the
+	; off==0 fast path) instead of r0, so the ENTIRE span setup — clamps,
+	; off, bwait, A1_PIXEL/FPIXEL packs — runs under the divides. Sign
+	; fixes move to the consume points in sp_fill; rd_off1 gets a shim.
+	; Requires ROWDIET=1 (Makefile-enforced), TRAPEZOID=0.
+	; du = (uR - uL) / denom   (16.16), quotient parks in r28
+	move	r26,r28
+	sub	r24,r28			; uR - uL
+	move	r28,r8			; keep SIGN in r8 (fixed at consume)
+	abs	r28
+	div	r7,r28			; |num|/denom COOKS in r28; r0 stays free
+	.else
 	; du = (uR - uL) / denom   (16.16)
 	move	r26,r0
 	sub	r24,r0			; uR - uL
@@ -1343,7 +1739,15 @@ sp_have:
 	abs	r0
 	div	r7,r0			; |num| / denom  (integer mode; COOKS while
 					;  the clamps below run - div-hide, minimal)
+	.endif
 	; xl = max(xl_raw,CLIPX0) -> r29   (r5 scratch; r0 is the div dest)
+	.if ROWDIET=1
+	move	r2,r29
+	cmp	r4,r29			; r4 = CLIPX0 (run-resident)
+	jr	PL,sp_xlok
+	nop
+	move	r4,r29
+	.else
 	move	r2,r29
 	movei	#CLIPX0,r5
 	load	(r5),r5
@@ -1352,10 +1756,19 @@ sp_have:
 	cmp	r5,r29
 	jr	PL,sp_xlok
 	nop
-	nop
 	move	r5,r29
+	.endif
 sp_xlok:
 	; xr = min(xr_raw,CLIPX1) -> r23
+	.if ROWDIET=1
+	move	r3,r23
+	cmp	r21,r23			; r21 = CLIPX1 (run-resident)
+	jr	MI,sp_xrok
+	nop
+	jr	EQ,sp_xrok
+	nop
+	move	r21,r23
+	.else
 	move	r3,r23
 	movei	#CLIPX1,r5
 	load	(r5),r5
@@ -1364,15 +1777,22 @@ sp_xlok:
 	cmp	r5,r23
 	jr	MI,sp_xrok
 	nop
-	nop
 	jr	EQ,sp_xrok
 	nop
-	nop
 	move	r5,r23
+	.endif
 sp_xrok:
+	.if DIVHIDE=1
+	; dv = (vR - vL) / denom — issue stalls only until du's divider frees
+	; (~4 cycles left after the clamps); then dv cooks in r27 under the
+	; skip/off checks + bwait + A1_PIXEL/FPIXEL packs in sp_fill.
+	sub	r25,r27			; vR - vL in place (r27 = quotient reg)
+	move	r27,r9			; SIGN parks in r9
+	abs	r27
+	div	r7,r27			; |dv| cooks in r27
+	.else
 	cmpq	#0,r8
 	jr	PL,sp_dup		; short fwd branch (jr saves the movei)
-	nop
 	nop
 	neg	r0
 sp_dup:
@@ -1386,23 +1806,25 @@ sp_dup:
 	cmpq	#0,r9
 	jr	PL,sp_dvp		; short fwd branch
 	nop
-	nop
 	neg	r0
 sp_dvp:
 	move	r0,r9			; dv -> r9
+	.endif
 	; (dead jr-to-next deleted for near-band bytes; the alignment-luck
 	;  argument died when the band code re-rolled the layout anyway)
 sp_clamp:
 	; restore 16.16 divide mode for the next scanline's edge slopes
+	; (ROWDIET: hoisted to the run exit — no divides until a chain event)
+	.if ROWDIET=0
 	movei	#G_DIVCTRL,r0
 	moveq	#1,r1
 	store	r1,(r0)
+	.endif
 	; (x clamps hoisted between the du issue and read - div-hide)
 	; if xr < xl -> skip span
 	cmp	r29,r23			; xr - xl
 	movei	#sp_skip,r22
 	jump	MI,(r22)
-	nop
 	nop
 
 	; off = xl - xl_raw  (>=0; advance the gradient over any left clamp)
@@ -1410,58 +1832,171 @@ sp_clamp:
 	sub	r2,r1			; off (kept in r1; imul32 preserves r1)
 	; FAST PATH: off == 0 for every span that doesn't cross the left screen
 	; edge (nearly all) -> u0/v0 are just uL/vL; skip BOTH imul32 calls.
+	.if ROWDIET=1
+	; ROWDIET: the fast path FALLS THROUGH to sp_fill (the multiply path
+	; moved out of line to rd_off1, after pkt_done) — one taken jump per
+	; span removed from the hot row loop.
+	cmpq	#0,r1
+	movei	#rd_off1,r22
+	jump	NE,(r22)		; off != 0 -> out-of-line multiply path
+	move	r24,r7			; slot: u0 = uL (harmless off-path:
+					; rd_off1 rewrites r7)
+	move	r25,r20			; v0 = vL; fall through
+	.else
 	cmpq	#0,r1
 	jr	NE,sp_off1		; off != 0 -> full multiply path
 	nop
-	nop
 	move	r24,r7			; u0 = uL
-	move	r25,r20			; v0 = vL
 	movei	#sp_fill,r22
 	jump	T,(r22)
-	nop
+        move	r25,r20
 	nop
 sp_off1:
 	; u0 = uL + du*off
-	move	r8,r0			; du
 	movei	#sp_u0,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
 	movei	#imul32,r22
+	.endif
 	jump	T,(r22)
-	nop
+        move	r8,r0
 	nop
 sp_u0:
 	add	r24,r0			; u0 = uL + du*off
 	move	r0,r7			; u0 (16.16) -> r7
 	; v0 = vL + dv*off   (r1 still = off)
-	move	r9,r0			; dv
 	movei	#sp_v0,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
 	movei	#imul32,r22
+	.endif
 	jump	T,(r22)
-	nop
+        move	r9,r0
 	nop
 sp_v0:
 	add	r25,r0			; v0 = vL + dv*off
 	move	r0,r20			; v0 (16.16) -> r20
+	.endif
 sp_fill:
+	.if TRAPEZOID=1
+	; ---- TRAPEZOID: texture drift gates FIRST — du/dv change per row =
+	; (RSL-LSL)/w; batch only while |BUSL-AUSL| and |BVSL-AVSL| < 2048
+	; (1/32 texel per row -> <1 texel right-edge shear over 32 rows).
+	; A gate failure forces n=1 so the lookahead exits with k=1 (no
+	; extra branch). r24-r27 (uL..vR) are dead here; r0-r3/r5 scratch.
+	movei	#RUNC,r5
+	load	(r5),r0			; n = rows left in this run
+	load	(r14+1),r1		; AUSL
+	load	(r14+5),r2		; BUSL
+	load	(r14+3),r3		; AVSL
+	sub	r1,r2			; BUSL-AUSL
+	load	(r14+7),r1		; BVSL
+	abs	r2
+	sub	r3,r1			; BVSL-AVSL
+	abs	r1
+	moveq	#0,r3
+	.if DRIFTLOOSE=1
+	bset	#16,r3			; DIAG ONLY: 1 texel/row drift allowed
+	.else
+	bset	#11,r3			; 2048 = 1/32 texel/row
+	.endif
+	cmp	r3,r2			; |dUSL| - 2048
+	jr	PL,tz_gfail		; u gradient drifts too fast
+	cmp	r3,r1			; slot: v-test flags
+	jr	MI,tz_gok		; v ok -> gates passed
+	nop
+tz_gfail:
+	moveq	#1,r0			; n = 1: lookahead yields k=1
+tz_gok:
+	; ---- rectangle-run lookahead: k (r5) = rows, starting with this
+	; one, whose floor(ax) AND floor(bx) both stay put; capped by n.
+	move	r16,r26
+	sharq	#16,r26			; fa = floor(ax)
+	move	r17,r27
+	sharq	#16,r27			; fb = floor(bx)
+	move	r16,r24
+	add	r18,r24			; ta = ax + aslope
+	move	r17,r25
+	add	r19,r25			; tb = bx + bslope
+	moveq	#1,r5			; k = 1
+tz_look:
+	cmp	r0,r5			; k - n
+	jr	PL,tz_kdone		; k >= n: run exhausted
+	move	r24,r3			; slot: harmless on exit (r3 scratch)
+	sharq	#16,r3
+	cmp	r26,r3
+	jr	NE,tz_kdone		; left edge about to move
+	move	r25,r3			; slot: harmless on exit
+	sharq	#16,r3
+	cmp	r27,r3
+	jr	NE,tz_kdone		; right edge about to move
+	add	r18,r24			; slot: harmless on exit (r24 dead)
+	add	r19,r25
+	jr	T,tz_look
+	addq	#1,r5			; slot: k++
+tz_kdone:
+	.endif
 
 ;---- Blitter textured-span fill (gpu_bltex, BYTE-IDENTICAL) -----------
 ; live: r29=xl r23=xr r10=y  r7=u0(16.16) r20=v0(16.16) r8=du(16.16) r9=dv(16.16)
+;       [TRAPEZOID=1: + r5=k rows batchable, r4=LEFTP]
+	.if DIVHIDE=1
+	; DIVHIDE: spin on r5, NOT r0 — a load into r0 while the (pre-DIVHIDE)
+	; divide had r0 as destination was the WAW trap; with quotients in
+	; r28/r27 the spin itself now runs UNDER the dv divide.
+	.if BANKDIET=1
+	movefa	r3,r2			; BLIT_GUARD (bank-1 resident)
+	.else
 	movei	#BLIT_GUARD,r2
+	.endif
+	load	(r15+14),r5		; prime the first status read
 bwait:
-	; TIGHT spin (measured 21k spins/frame; the old fat loop cost ~25cyc/spin
-	; while stealing bus from the blitter it waits on). 9 slots/iteration.
-	load	(r15+14),r0		; B_CMD status
-	subq	#1,r2			; guard--
-	nop
-	btst	#0,r0			; idle? (bit0 set = idle)
+	btst	#0,r5			; idle? (bit0 set = idle)
 	jr	NE,bwait_done		; idle -> proceed
-	nop
+	subq	#1,r2			; slot: guard-- (benign on exit)
 	cmpq	#0,r2
 	jr	NE,bwait		; guard remaining -> spin again
-	nop
+	load	(r15+14),r5		; slot: NEXT status read (benign on exit)
 bwait_done:
+	or	r5,r5			; settle the in-flight slot load
+	.else
+	.if BANKDIET=1
+	movefa	r3,r2			; BLIT_GUARD (bank-1 resident)
+	.else
+	movei	#BLIT_GUARD,r2
+	.endif
+	load	(r15+14),r0		; prime the first status read
+bwait:
+	; SOFTWARE-PIPELINED spin (2026-07-20): the next status load rides the
+	; loop-back delay slot, the guard decrement rides the exit slot —
+	; 5 slots/iteration (was 9), no wasted delay slots. Both slot
+	; instructions are harmless on the exit paths.
+	btst	#0,r0			; idle? (bit0 set = idle)
+	jr	NE,bwait_done		; idle -> proceed
+	subq	#1,r2			; slot: guard-- (benign on exit)
+	cmpq	#0,r2
+	jr	NE,bwait		; guard remaining -> spin again
+	load	(r15+14),r0		; slot: NEXT status read (benign on exit)
+bwait_done:
+	or	r0,r0			; settle the in-flight slot load before
+					; r0 is rewritten (jas-caught TRM bug 13)
+	.endif
+	.if PHRASESHADE=1
+	; A2 back to PIXEL xadd for the textured span (the shade blit at
+	; pkt_done flips it to PHRASE; blitter is idle here so the store is
+	; safe; ~2 instr/span, dwarfed by span cost)
+	movei	#$00014218,r1		; PITCH1|PIXEL8|WID320|XADDPIX
+	store	r1,(r15+10)
+	.endif
 	; A1_PIXEL = (v0 & $FFFF0000) | (u0 >> 16)   integer texel start (v<<16)|u
 	move	r20,r0
+	.if BANKDIET=1
+	movefa	r1,r1			; $FFFF0000 (bank-1 resident)
+	.else
 	movei	#$FFFF0000,r1
+	.endif
 	and	r1,r0			; v0 integer part in bits 16-31
 	move	r7,r2
 	shrq	#16,r2			; u0 integer part in bits 0-15
@@ -1471,13 +2006,37 @@ bwait_done:
 	move	r20,r0
 	shlq	#16,r0			; v0 fraction in bits 16-31
 	move	r7,r2
+	.if BANKDIET=1
+	movefa	r2,r3			; $0000FFFF (bank-1 resident)
+	.else
 	movei	#$0000FFFF,r3
+	.endif
 	and	r3,r2			; u0 fraction in bits 0-15
 	or	r2,r0
 	store	r0,(r15+6)
+	.if DIVHIDE=1
+	; consume the cooked quotients: apply the parked signs. r28 (du) has
+	; been done for ~25 cycles; r27 (dv) cooked under the bwait + packs.
+	cmpq	#0,r8
+	jr	PL,dh_dup
+	nop
+	neg	r28
+dh_dup:
+	cmpq	#0,r9
+	jr	PL,dh_dvp
+	move	r28,r8			; slot: du (signed) commit — benign
+					; both paths (r28 final either way)
+	neg	r27
+dh_dvp:
+	move	r27,r9			; dv (signed 16.16) -> r9
+	.endif
 	; A1_INC = (dv & $FFFF0000) | (du >> 16)     integer per-pixel U:V step
 	move	r9,r0
+	.if BANKDIET=1
+	movefa	r1,r1			; $FFFF0000 (bank-1 resident)
+	.else
 	movei	#$FFFF0000,r1
+	.endif
 	and	r1,r0			; dv integer step in bits 16-31
 	move	r8,r2
 	shrq	#16,r2			; du integer step in bits 0-15
@@ -1487,7 +2046,11 @@ bwait_done:
 	move	r9,r0
 	shlq	#16,r0			; dv fraction step in bits 16-31
 	move	r8,r2
+	.if BANKDIET=1
+	movefa	r2,r3			; $0000FFFF (bank-1 resident)
+	.else
 	movei	#$0000FFFF,r3
+	.endif
 	and	r3,r2			; du fraction step in bits 0-15
 	or	r2,r0
 	store	r0,(r15+8)
@@ -1496,11 +2059,20 @@ bwait_done:
 	shlq	#16,r0
 	or	r29,r0
 	store	r0,(r15+12)
-	; B_COUNT = (1<<16) | (xr - xl + 1)          1 line, span-width pixels
+	; B_COUNT = (k<<16) | (xr - xl + 1)   k rows (1 unless TRAPEZOID batch)
 	move	r23,r0
 	sub	r29,r0
 	addq	#1,r0			; npix = xr-xl+1
+	.if TRAPEZOID=1
+	move	r5,r1
+	shlq	#16,r1
+	move	r0,r3			; npix copy for the batch epilogue
+	.else
+	.if RUNBATCH=1
+	move	r0,r3			; npix copy for the batch path
+	.endif
 	movei	#$00010000,r1
+	.endif
 	or	r1,r0
 	store	r0,(r15+15)
 	; B_CMD = SRCEN|LFU_REPLACE|DSTA2 -> LAUNCH
@@ -1510,9 +2082,293 @@ bwait_done:
 	btst	#0,r10
 	jr	NE,sp_nolaunch
 	nop
+	.endif
+	.if TRAPEZOID=1
+	cmpq	#1,r5
+	movei	#tz_plain,r22
+	jump	EQ,(r22)		; k == 1: classic single-row launch
+	moveq	#0,r1			; slot: benign on both paths
+	; ---- batched k-row launch (d=0 rectangle run) ----
+	; A2_STEP = (1<<16)|((-npix)&$FFFF): +1 row, X re-home (v4b pattern,
+	; UPDA2-steps-DSTA2-dest silicon-confirmed; (r15+13)=$F02234)
+	bset	#17,r1			; $20000  (r3 = npix, saved at B_COUNT)
+	sub	r3,r1
+	store	r1,(r15+13)		; A2_STEP
+	; A1_STEP/FSTEP = (LVSL,LUSL) - npix*(dv,du): the npix*d term cancels
+	; the inner loop's own pointer advance, so row i starts EXACTLY at
+	; (uL,vL) + i*(LUSL,LVSL) — even w=1 garbage-du spans stay exact.
+	load	(r4),r24		; LUSL (r4 = &LUSL, set at chain pick)
+	addq	#8,r4
+	load	(r4),r25		; LVSL
+	move	r3,r1			; npix (imul32 preserves r1)
+	movei	#tz_mu,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
+	movei	#imul32,r22
+	.endif
+	jump	T,(r22)
+        move	r8,r0			; slot: du
+tz_mu:
+	sub	r0,r24			; su = LUSL - npix*du
+	movei	#tz_mv,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
+	movei	#imul32,r22
+	.endif
+	jump	T,(r22)
+        move	r9,r0			; slot: dv
+tz_mv:
+	sub	r0,r25			; sv = LVSL - npix*dv
+	; pack 16.16 pair -> A1_STEP (ints) / A1_FSTEP (fracs), v:u
+	move	r25,r0
+	shrq	#16,r0
+	shlq	#16,r0			; sv int bits 16-31, low cleared
+	move	r24,r2
+	shrq	#16,r2
+	or	r2,r0
+	store	r0,(r15+4)		; A1_STEP  ($F02210)
+	move	r25,r0
+	shlq	#16,r0			; sv frac bits 16-31
+	move	r24,r2
+	shlq	#16,r2
+	shrq	#16,r2			; su frac bits 0-15
+	or	r2,r0
+	store	r0,(r15+5)		; A1_FSTEP ($F02214)
+	move	r5,r21			; BATCHC = k-1 rows to skip
+	subq	#1,r21
+	movei	#$01800F01,r0		; BCMD_TEX|UPDA1F|UPDA1|UPDA2
+	jr	T,tz_store		; LAUNCH k rows
+	nop
+tz_plain:
+	.endif
+	.if RUNBATCH=1
+	; K-ROW LAUNCH: on a batchable run, one blit draws ALL k remaining
+	; rows of the run (B_COUNT rows field + UPDA2 row-rehome from v4b +
+	; UPDA1/UPDA1F per-row texture stepping from the tz machinery — both
+	; silicon-proven). The next k-1 loop iterations skip via BATCHC.
+	movefa	r7,r1			; batchable run?
+	cmpq	#0,r1
+	movei	#rb_single,r22
+	jump	EQ,(r22)		; drift-hostile run: per-row spans
+	move	r16,r0			; slot: kcalc arg (benign on exit)
+	; EXACT k, DIV-HIDDEN (silicon lesson: the GPU divide has NO dest
+	; interlock — an early quotient read is GARBAGE and the real quotient
+	; lands up to ~38 cycles LATER over whatever now owns the register;
+	; the emu's value-correct model hid this and silicon crawled at
+	; 0.14 fps). Unified formula, no post-fix:
+	;   slope>0: k = (($10000-frac)+slope-1)/slope   (ceil)
+	;   slope<0: k = (frac+|slope|)/|slope|          (floor(frac/|s|)+1)
+	;   slope=0: k = 31
+	; Schedule: issue divA -> prep B (hide) -> issue divB (the divider-
+	; busy stall completes A) -> read A -> RUNC/31 min (hide) -> read B.
+	; r0 = ax (from the slot above).
+	shlq	#16,r0
+	shrq	#16,r0			; frac(ax)
+	move	r18,r1			; aslope
+	moveq	#31,r24			; k_a default (slope 0)
+	cmpq	#0,r1
+	jr	EQ,rb_kb0		; slope 0: skip div A
+	nop
+	jr	MI,rb_ka1
+	nop
+	moveq	#0,r2
+	bset	#16,r2
+	sub	r0,r2			; $10000 - frac
+	add	r1,r2
+	subq	#1,r2
+	jr	T,rb_ka2
+	move	r2,r24			; slot: numerator -> r24 (div dest)
+rb_ka1:
+	neg	r1			; |aslope|
+	move	r0,r24
+	add	r1,r24			; frac + |slope|
+rb_ka2:
+	div	r1,r24			; k_a COOKS in r24
+rb_kb0:
+	; --- edge B prep (this IS div A's hide window) ---
+	move	r17,r0
+	shlq	#16,r0
+	shrq	#16,r0			; frac(bx)
+	move	r19,r1			; bslope
+	moveq	#31,r25			; k_b default (slope 0)
+	cmpq	#0,r1
+	jr	EQ,rb_kbz		; slope 0: skip div B
+	nop
+	jr	MI,rb_kb1
+	nop
+	moveq	#0,r2
+	bset	#16,r2
+	sub	r0,r2
+	add	r1,r2
+	subq	#1,r2
+	jr	T,rb_kb2
+	move	r2,r25			; slot: numerator -> r25
+rb_kb1:
+	neg	r1
+	move	r0,r25
+	add	r1,r25
+rb_kb2:
+	div	r1,r25			; k_b COOKS (issue-stall retires div A)
+rb_kbz:
+	; --- div B's HIDE WINDOW: all k-INDEPENDENT batch setup runs here
+	; (~50 cycles) so both quotients are long retired before any read.
+	; r24/r25 are the COOKING div dests: nothing below touches them —
+	; LUSL/LVSL live in r5/r20 (both dead: k unset, v0 consumed).
+	moveq	#0,r1
+	bset	#17,r1
+	sub	r3,r1			; (1<<16)|((-npix)&$FFFF)
+	store	r1,(r15+13)		; A2_STEP: +1 row, X re-home
+	move	r3,r7			; npix -> r7: imul32 CLOBBERS r3 (bLo
+					; scratch) and B_COUNT packs after the
+					; imuls now — r3-garbage npix launched
+					; runaway 65K-px blits (silicon wedge)
+	; which chain is LEFT: re-derive from the LIVE DDAs (r2/xl_raw is
+	; pack-clobbered — the slab lesson). B-left iff floor(ax)>=floor(bx).
+	move	r16,r1
+	sharq	#16,r1			; floor(ax)
+	move	r17,r2
+	sharq	#16,r2			; floor(bx)
+	cmp	r2,r1			; xa - xb
+	jr	MI,rb_la		; xa < xb: A is left
+	moveq	#0,r1			; slot: offset = A block
+	moveq	#16,r1			; B block
+rb_la:
+	add	r1,r14
+	load	(r14+1),r5		; LUSL (NOT r24/r25 — divs cooking!)
+	load	(r14+3),r20		; LVSL
+	sub	r1,r14			; r14 -> AU base again
+	or	r5,r5			; settle both loads before the imul32
+	or	r20,r20			; jumps (load-across-jump erratum)
+	move	r3,r1			; npix (imul32 preserves r1)
+	movei	#rb_mu,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
+	movei	#imul32,r22
+	.endif
+	jump	T,(r22)
+	move	r8,r0			; slot: du (bank-0)
+rb_mu:
+	sub	r0,r5			; su = LUSL - npix*du: row i starts
+	movei	#rb_mv,r28		; EXACTLY at (uL,vL)+i*(LUSL,LVSL)
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
+	movei	#imul32,r22
+	.endif
+	jump	T,(r22)
+	move	r9,r0			; slot: dv
+rb_mv:
+	sub	r0,r20			; sv = LVSL - npix*dv
+	move	r20,r0
+	shrq	#16,r0
+	shlq	#16,r0
+	move	r5,r2
+	shrq	#16,r2
+	or	r2,r0
+	store	r0,(r15+4)		; A1_STEP  (v:u ints)
+	move	r20,r0
+	shlq	#16,r0
+	move	r5,r2
+	shlq	#16,r2
+	shrq	#16,r2
+	or	r2,r0
+	store	r0,(r15+5)		; A1_FSTEP (v:u fracs)
+	; --- NOW consume k: both divides retired ~40+ cycles ago ---
+	movefa	r4,r0			; RUNC (rows left incl this one)
+	moveq	#31,r2
+	cmp	r2,r0
+	jr	MI,rb_m1		; RUNC < 31: keep
+	nop
+	move	r2,r0			; bound = min(RUNC,31)
+rb_m1:
+	cmp	r0,r24			; k_a - bound
+	jr	MI,rb_m2
+	nop
+	move	r0,r24
+rb_m2:
+	cmp	r24,r25			; k_b - k_a
+	jr	PL,rb_m3
+	nop
+	move	r25,r24			; k = min(k_a, k_b, RUNC, 31)
+rb_m3:
+	move	r24,r1
+	cmpq	#4,r1
+	movei	#rb_single,r22
+	jr	PL,rb_go		; k >= 4: batch (jump cost ~200 cyc
+	nop				;   loses on k=2-3)
+	moveq	#0,r2			; hostile fracs: stop paying kcalc on
+	moveta	r2,r7			; this run's later rows
+	jump	T,(r22)			; -> single-row launch (the A2_STEP/
+	nop				;    A1_STEP stores above are inert:
+					;    BCMD_TEX has no UPDA1/UPDA2)
+rb_go:
+	move	r1,r5
+	subq	#1,r5			; k-1 -> r5 (su packed; r5 free again)
+	shlq	#16,r1
+	or	r7,r1			; npix from r7 (r3 died in imul32)
+	store	r1,(r15+15)		; B_COUNT = (k<<16)|npix (overwrites
+					; the single-row value stored earlier)
+	movei	#$01800F01,r0		; BCMD_TEX|UPDA1F|UPDA1|UPDA2
+	store	r0,(r15+14)		; LAUNCH k rows (blitter draws while
+					; the DDA-jump below runs)
+	; --- DDA-JUMP: advance ALL loop state k-1 rows arithmetically ---
+	; (replaces BATCHC row-skipping: no per-row check tax on live rows,
+	; no walked sp_tail per skipped row. r5 = k-1.)
+	movefa	r12,r22			; imul32 (r22 was rb_single here!)
+	move	r5,r1			; k-1 (imul32 preserves r1)
+	movei	#rj_xa,r28
+	jump	T,(r22)
+	move	r18,r0			; slot: aslope
+rj_xa:
+	add	r0,r16			; ax += (k-1)*aslope
+	movei	#rj_xb,r28
+	jump	T,(r22)
+	move	r19,r0			; slot: bslope
+rj_xb:
+	add	r0,r17			; bx += (k-1)*bslope
+	; uv DDAs: walk the 4 (val,slope) pairs at AU..BVSL via r14 itself
+	; (indexed loads allow only r14/r15 bases); restore base after.
+	.if RBNOUV=1
+	movei	#rj_skipuv,r28		; [BISECT] uv-jump disabled: batches
+	jump	T,(r28)			; smear textures but isolate the wedge
 	nop
 	.endif
+	moveq	#3,r25			; 4 slots (r24/r25 dead: LUSL consumed)
+rj_uv:
+	load	(r14+1),r0		; slope of this slot
+	movei	#rj_uv1,r28
+	or	r0,r0			; SETTLE the load before the taken jump
+					; (Tom erratum: a load consumed across
+					; a jump is garbage on silicon — the
+					; kernel's own or-settle idiom)
+	jump	T,(r22)
+	move	r5,r1			; slot: k-1
+rj_uv1:
+	load	(r14),r2
+	nop
+	add	r0,r2			; val += (k-1)*slope
+	store	r2,(r14)
+	addq	#8,r14
+	subq	#1,r25
+	jr	NE,rj_uv
+	nop
+	subq	#32,r14			; r14 -> AU base again
+	.if RBNOUV=1
+rj_skipuv:
+	.endif
+	add	r5,r10			; y += k-1
+	movefa	r4,r0
+	sub	r5,r0
+	moveta	r0,r4			; RUNC -= k-1
+	jr	T,sp_skip		; final row's advance happens in
+	nop				; sp_tail as normal (total = k rows)
+rb_single:
+	.endif
 	movei	#BCMD_TEX,r0
+tz_store:
 	store	r0,(r15+14)
 sp_nolaunch:
 	.endif
@@ -1522,6 +2378,58 @@ sp_tail:
 	; advance the two x DDAs ...
 	add	r18,r16			; ax += aslope
 	add	r19,r17			; bx += bslope
+	.if RUNHIST=1
+	; STABLE-FLOOR sub-run probe (RUNBATCH kill-check v2): histogram at
+	; RUNHIST_BUF+$100 of consecutive rows where floor(ax) AND floor(bx)
+	; both held still across the step — the exact batchable-row criterion.
+	; Streak cell at +$200. r0-r3 scratch here (uv-DDA reloads them below).
+	movei	#rh2_moved,r22
+	move	r16,r0
+	sub	r18,r0			; old ax
+	sharq	#16,r0			; old floor
+	move	r16,r1
+	sharq	#16,r1
+	cmp	r0,r1
+	jump	NE,(r22)
+	nop
+	move	r17,r0
+	sub	r19,r0
+	sharq	#16,r0
+	move	r17,r1
+	sharq	#16,r1
+	cmp	r0,r1
+	jump	NE,(r22)
+	nop
+	movei	#RUNHIST_BUF+$200,r1
+	load	(r1),r2
+	movei	#rh2_done,r22
+	nop
+	addq	#1,r2
+	store	r2,(r1)
+	jump	T,(r22)
+	nop
+rh2_moved:
+	movei	#RUNHIST_BUF+$200,r1
+	load	(r1),r2
+	moveq	#31,r0
+	nop
+	cmp	r0,r2
+	jr	MI,rh2_c
+	nop
+	move	r0,r2
+rh2_c:
+	shlq	#2,r2
+	movei	#RUNHIST_BUF+$100,r0
+	add	r0,r2
+	load	(r2),r3
+	moveq	#0,r0
+	nop
+	addq	#1,r3
+	store	r3,(r2)
+	movei	#RUNHIST_BUF+$200,r1
+	store	r0,(r1)
+rh2_done:
+	.endif
 	; ... and the four u/v DDAs via r14-INDEXED addressing (AU..BVSL are 8
 	; consecutive longs). r14 (ayend) is dormant between chain updates;
 	; stashed in the dead GDU slot for the duration.
@@ -1543,38 +2451,182 @@ sp_tail:
 	store	r2,(r14+6)		; BV += BVSL
 	; y++ and the RUN countdown: stay in the tight span loop (r14 = AU,
 	; r15 = blitter base persist) until the next chain event row
-	addq	#1,r10			; y++
+	.if BANKDIET=1
+	movefa	r4,r1			; run countdown (bank-1 resident: the
+	addq	#1,r10			; y++    movei+load+store SRAM RMW gone)
+	movefa	r5,r22			; sp_run target (bank-1 resident)
+	subq	#1,r1
+	moveta	r1,r4
+	cmpq	#0,r1
+	jump	NE,(r22)		; rows left in this run -> next span
+	nop
+	.else
 	movei	#RUNC,r0
 	load	(r0),r1
-	nop
-	nop
+	addq	#1,r10			; y++ (fills RUNC load latency)
+	movei	#sp_run,r22		; hoisted target (fills 2nd slot)
 	subq	#1,r1
 	store	r1,(r0)
 	cmpq	#0,r1
-	movei	#sp_run,r22
 	jump	NE,(r22)		; rows left in this run -> next span
 	nop
-	nop
+	.endif
 	; run ended: restore ayend/byend for the chain checks
+	.if BANKDIET=1
+	movefa	r13,r14			; restore ayend (bank-1 stash)
+	movefa	r14,r15			; restore byend
+	.else
 	movei	#GDU,r0
+	movei	#RSAVE,r1
 	load	(r0),r14		; restore ayend
-	movei	#RSAVE,r0
-	load	(r0),r15		; restore byend
-	nop
-	nop
-	cmp	r11,r10			; y - y1
+	load	(r1),r15		; restore byend
+	.endif
+	.if ROWDIET=1
+	movei	#G_DIVCTRL,r2		; restore 16.16 divide mode for the
+	moveq	#1,r3			; chain/uv_edge divides (also hides
+	store	r3,(r2)			; the r14/r15 load latency)
+	.endif
+	cmp	r11,r10			; y - y1 (fills the load latency)
 	movei	#yloop,r22
 	jump	MI,(r22)		; y < y1 -> chains again
 	nop
-	nop
 	jump	EQ,(r22)		; y == y1 -> last line
-	nop
 	nop
 	; fall through to pkt_done
 
 ;---------------------------------------------------------------------
 ; pkt_done: face rendered (or skipped) -> back to the face iterator.
 pkt_done:
+	.if NOBLIT=0
+	.if SHADEPASS=1
+	; RECT-SHADE LAUNCH v4b: ONE multi-row OR blit per face over the
+	; face-tight vertex bbox (SX_BUF x r6), clamped to the packet clip.
+	; r14 = SHADEK base for indexed var access ((r14+6) = SH_Y0); r15
+	; becomes the Blitter base. Both are dead chain state at pkt_done.
+	or	r14,r14			; settle the run-end restore's in-flight
+					; load into r14 (jas-caught TRM bug 13)
+	movei	#SHADEK,r14
+	load	(r14),r2		; k pattern
+	load	(r14+6),r0		; SH_Y0: clipped y0, -1 = never rastered
+	movei	#shx_none,r22
+	cmpq	#0,r2
+	jump	EQ,(r22)		; k = 0: full bright
+	cmpq	#0,r0			; slot: arm-flag flags (safe both paths)
+	jump	MI,(r22)		; culled/empty face: not armed
+	nop
+	; bbox: r3 = min sx, r4 = max sx over n staged verts
+	.if BANKDIET=1
+	movefa	r11,r1			; SX_BUF (bank-1)
+	.else
+	movei	#SX_BUF,r1
+	.endif
+	load	(r1),r3
+	move	r6,r5			; n = face vert count (live)
+	subq	#1,r5
+	move	r3,r4			; XL = XR = sx[0]
+shx_vl:
+	addq	#4,r1
+	load	(r1),r7
+	subq	#1,r5
+	cmp	r7,r3			; XL - sx (load latency: subq+this)
+	jr	MI,shx_v1		; XL < sx: keep
+	cmp	r7,r4			; slot: XR-test flags (move keeps flags)
+	move	r7,r3			; XL = min
+shx_v1:
+	jr	PL,shx_v2		; XR >= sx: keep
+	cmpq	#0,r5			; slot: loop-counter flags
+	move	r7,r4			; XR = max
+shx_v2:
+	jr	NE,shx_vl
+	nop
+	; clamp to the packet clip rect (behind-camera verts project garbage)
+	.if PHRASESHADE=1
+	; (CLIPX0/1 = SHADEK+$30/$34: indexed loads off live r14 — the 12B
+	; this saves vs two moveis FUNDS the PHRASESHADE code below. Gated so
+	; flags-off stays byte-identical to the shipped kernel.)
+	load	(r14+12),r5		; CLIPX0
+	load	(r14+13),r1		; CLIPX1
+	.else
+	movei	#CLIPX0,r1
+	load	(r1),r5
+	movei	#CLIPX1,r1
+	load	(r1),r1
+	.endif
+	cmp	r5,r3			; XL - clipx0
+	jr	PL,shx_c1		; XL >= clipx0: keep
+	cmp	r1,r4			; slot: XR-vs-clipx1 flags
+	move	r5,r3			; XL = clipx0
+shx_c1:
+	jr	MI,shx_c2		; XR < clipx1: keep
+	nop
+	move	r1,r4			; XR = clipx1
+shx_c2:
+	.if PHRASESHADE=1
+	; PHRASE-MODE shade (PACING campaign step 4): the OR pass was the
+	; kernel's only pixel-mode DSTEN blit — 1 RMW bus pair PER PIXEL.
+	; Phrase mode does 8 px per RMW pair. X start aligns DOWN to a
+	; phrase, width rounds UP to whole phrases: <=7px of extra OR-bleed
+	; each side of a rect that already overshoots (vertex bbox), same
+	; artifact class as v4b. A2_STEP keeps PIXEL units (width8);
+	; B_COUNT inner count becomes PHRASES (width8>>3).
+	cmp	r3,r4			; XR - XL
+	jump	MI,(r22)		; fully clipped out: skip
+	moveq	#7,r5			; slot: mask seed (benign on exit)
+	not	r5			; r5 = ~7
+	and	r5,r3			; XL &= ~7: phrase-aligned start
+	sub	r3,r4			; XR - XLa
+	addq	#8,r4			; +1 (width) +7 (round-up)
+	and	r5,r4			; width8 = whole phrases in pixels
+	.else
+	cmp	r3,r4			; XR - XL
+	jump	MI,(r22)		; fully clipped out: skip (width would
+	sub	r3,r4			; slot: width-1     wrap huge = disaster)
+	addq	#1,r4			; width = XR-XL+1
+	.endif
+	movei	#A1_BASE,r15		; Blitter base for indexed stores
+shx_bw:
+	load	(r15+14),r1		; blit status
+	move	r11,r5			; slot-fill: rows = y1 (r11 live) ...
+	sub	r0,r5			;   ... - y0 (recomputed per spin: fine)
+	btst	#0,r1
+	jr	EQ,shx_bw
+	nop
+	addq	#1,r5			; rows = y1-y0+1
+	.if PHRASESHADE=1
+	movei	#$00004218,r1		; A2_FLAGS -> PHRASE xadd (PITCH1|
+	store	r1,(r15+10)		;   PIXEL8|WID320|XADDPHR); blitter
+					;   idle here (spin above). Restored
+					;   per-span at bwait_done.
+	.endif
+	shlq	#16,r0
+	or	r3,r0
+	store	r0,(r15+12)		; A2_PIXEL = (y0<<16)|XL (phrase-
+					;   aligned under PHRASESHADE)
+	moveq	#0,r1
+	bset	#17,r1			; $20000
+	sub	r4,r1			; = (1<<16)|((-width)&$FFFF)
+	store	r1,(r15+13)		; A2_STEP ($F02234! NOT +8=$F02220=
+					; A1_FINC — the A2 register file is
+					; not parallel to A1: A2_MASK at $2C)
+	shlq	#16,r5
+	or	r4,r5
+	store	r5,(r15+15)		; B_COUNT = (rows<<16)|width — PIXELS
+					; even under PHRASESHADE (the counter
+					; is always pixels; XADDPHR only packs
+					; the ACCESSES into phrases — confirmed
+					; against jag-core blit.rs, and a /8
+					; count made A2_STEP drag X negative
+					; every row = fb-wide OR garbage)
+	store	r2,(r15+16)		; B_SRCD  = k pattern
+	store	r2,(r15+17)
+	movei	#$01C00E08,r1		; DSTEN|LFU(S|D)|DSTA2|UPDA1|UPDA2
+	store	r1,(r15+14)		; LAUNCH (next face's bwait covers it)
+shx_none:
+	moveq	#0,r1
+	subq	#1,r1
+	store	r1,(r14+6)		; disarm SH_Y0 until the next raster
+	.endif
+	.endif
 	; --- section profile: close RASTER section ---
 	.if PROFGPU=1
 	movei	#VC_REG,r1
@@ -1588,7 +2640,6 @@ pkt_done:
 	cmpq	#0,r0
 	jr	PL,vcr_ok
 	nop
-	nop
 	movei	#525,r2
 	add	r2,r0
 vcr_ok:
@@ -1601,7 +2652,94 @@ vcr_ok:
 	movei	#face_loop,r22
 	jump	T,(r22)
 	nop
+
+
+	.if ROWDIET=1
+;---------------------------------------------------------------------
+; rd_off1 (ROWDIET): out-of-line left-clamp multiply path — the rare
+; off != 0 span (crosses the left clip edge).  Entered from the off
+; check with r1 = off, r8 = du, r9 = dv, r24 = uL, r25 = vL (imul32
+; preserves r1/r4-r25).  Returns to sp_fill with r7 = u0, r20 = v0.
+;---------------------------------------------------------------------
+rd_off1:
+	.if DIVHIDE=1
+	; DIVHIDE arm: |quotients| are STILL COOKING in r28/r27 (~32-tick div;
+	; we are ~10 ticks past dv's issue). READS of a cooking dest are
+	; value-correct; the ONE fatal act is a WRITE into r27/r28 before the
+	; divide lands (TRM bug 13: the quotient re-lands LAST, corrupting
+	; whatever wrote there — imul32's r27/r28 scratch did exactly that).
+	; So: NO imul32 here. off <= 320 fits 16 bits, so |q|*off inlines as
+	; two 16x16 mults using only r0/r2 — write-free w.r.t. r27/r28, and
+	; smaller than the two imul32 call frames it replaces. Signs stay
+	; parked in r8/r9 for the dh consume in sp_fill (shared with the
+	; fast path; r8/r9 here hold SIGNED NUMERATORS, sign is all we need).
+	; u0 = uL +- |du|*off   (r28 = |du| 16.16, r1 = off)
+	move	r28,r0
+	shrq	#16,r0			; |du| hi
+	mult	r1,r0			; hi*off
+	shlq	#16,r0
+	move	r28,r2
+	shlq	#16,r2
+	shrq	#16,r2			; |du| lo
+	mult	r1,r2			; lo*off
+	add	r2,r0			; |du|*off (16.16)
+	cmpq	#0,r8			; du sign (parked numerator)
+	jr	PL,rq_up
 	nop
+	neg	r0
+rq_up:
+	add	r24,r0			; u0 = uL +- |du|*off
+	move	r0,r7
+	; v0 = vL +- |dv|*off   (r27 = |dv| 16.16)
+	move	r27,r0
+	shrq	#16,r0
+	mult	r1,r0
+	shlq	#16,r0
+	move	r27,r2
+	shlq	#16,r2
+	shrq	#16,r2
+	mult	r1,r2
+	add	r2,r0
+	cmpq	#0,r9			; dv sign
+	jr	PL,rq_vp
+	nop
+	neg	r0
+rq_vp:
+	add	r25,r0			; v0 = vL +- |dv|*off
+	move	r0,r20
+	movei	#sp_fill,r22
+	jump	T,(r22)
+	nop
+	.else
+	movei	#rd_u0,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
+	movei	#imul32,r22
+	.endif
+	jump	T,(r22)
+        move	r8,r0
+	nop
+rd_u0:
+	add	r24,r0			; u0 = uL + du*off
+	move	r0,r7
+	movei	#rd_v0,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
+	movei	#imul32,r22
+	.endif
+	jump	T,(r22)
+        move	r9,r0
+	nop
+rd_v0:
+	add	r25,r0			; v0 = vL + dv*off
+	move	r0,r20
+	movei	#sp_fill,r22
+	jump	T,(r22)
+	nop
+	.endif
+	.endif
 
 ;=====================================================================
 ; uv_edge: compute the (u,v) DDA state for one edge cur->ni into the chain
@@ -1616,10 +2754,18 @@ uv_edge:
 	shlq	#2,r24			; cur*4
 	move	r1,r25
 	shlq	#2,r25			; ni*4
+	.if BANKDIET=1
+	movefa	r10,r2			; SY_BUF (bank-1)
+	.else
 	movei	#SY_BUF,r2
+	.endif
 	add	r24,r2
 	load	(r2),r26		; sy[cur]
+	.if BANKDIET=1
+	movefa	r10,r3			; SY_BUF (bank-1)
+	.else
 	movei	#SY_BUF,r3
+	.endif
 	add	r25,r3
 	load	(r3),r27		; sy[ni]
 	nop
@@ -1628,15 +2774,12 @@ uv_edge:
 	sub	r26,r0			; dy = sy[ni]-sy[cur]
 	move	r10,r1
 	sub	r26,r1			; delta = y - sy[cur]
-	move	r0,r23			; dy    (persist)
-	move	r1,r29			; delta (persist)
 	cmpq	#0,r0
 	movei	#uve_flat,r22
 	jump	MI,(r22)		; dy < 0
-	nop
-	nop
+        move	r0,r23
 	jump	EQ,(r22)		; dy == 0
-	nop
+        move	r1,r29
 	nop
 	; ---- dy > 0: U ----
 	movei	#U_BUF,r2
@@ -1657,18 +2800,20 @@ uv_edge:
 	movei	#uve_us_pos,r22
 	jump	PL,(r22)
 	nop
-	nop
 	neg	r1
 uve_us_pos:
 	move	r7,r2
 	addq	#4,r2
 	store	r1,(r2)			; USL = uslope
 	move	r1,r0			; uslope
-	move	r29,r1			; delta
 	movei	#uve_u_ret,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
 	movei	#imul32,r22
+	.endif
 	jump	T,(r22)
-	nop
+        move	r29,r1
 	nop
 uve_u_ret:
 	add	r9,r0			; u = u[cur]<<16 + uslope*delta
@@ -1692,18 +2837,20 @@ uve_u_ret:
 	movei	#uve_vs_pos,r22
 	jump	PL,(r22)
 	nop
-	nop
 	neg	r1
 uve_vs_pos:
 	move	r7,r2
 	addq	#12,r2
 	store	r1,(r2)			; VSL = vslope
 	move	r1,r0			; vslope
-	move	r29,r1			; delta
 	movei	#uve_v_ret,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
 	movei	#imul32,r22
+	.endif
 	jump	T,(r22)
-	nop
+        move	r29,r1
 	nop
 uve_v_ret:
 	add	r9,r0			; v = v[cur]<<16 + vslope*delta
@@ -1711,7 +2858,6 @@ uve_v_ret:
 	addq	#8,r2
 	store	r0,(r2)			; V
 	jump	T,(r20)
-	nop
 	nop
 uve_flat:
 	; dy <= 0: slopes 0, u/v snap to the ni endpoint (matches gw_flat for x)
@@ -1738,7 +2884,6 @@ uve_flat:
 	store	r1,(r2)			; V
 	jump	T,(r20)
 	nop
-	nop
 
 ;=====================================================================
 ; chain_step: advance ONE edge of a chain (VERBATIM; identical in both sources).
@@ -1753,13 +2898,11 @@ chain_step:
 	movei	#gw_m1,r22
 	jump	PL,(r22)
 	nop
-	nop
 	add	r6,r24			; wrapped below 0
 gw_m1:
 	cmp	r6,r24			; ni - n
 	movei	#gw_m2,r22
 	jump	MI,(r22)
-	nop
 	nop
 	sub	r6,r24			; wrapped past n-1
 gw_m2:
@@ -1767,16 +2910,32 @@ gw_m2:
 	shlq	#2,r0			; cur*4
 	move	r24,r1
 	shlq	#2,r1			; ni*4
+	.if BANKDIET=1
+	movefa	r10,r2			; SY_BUF (bank-1)
+	.else
 	movei	#SY_BUF,r2
+	.endif
 	add	r0,r2
 	load	(r2),r27		; sy[cur]
+	.if BANKDIET=1
+	movefa	r10,r3			; SY_BUF (bank-1)
+	.else
 	movei	#SY_BUF,r3
+	.endif
 	add	r1,r3
 	load	(r3),r29		; sy[ni]  (= yend)
+	.if BANKDIET=1
+	movefa	r11,r2			; SX_BUF (bank-1)
+	.else
 	movei	#SX_BUF,r2
+	.endif
 	add	r0,r2
 	load	(r2),r25		; sx[cur]
+	.if BANKDIET=1
+	movefa	r11,r3			; SX_BUF (bank-1)
+	.else
 	movei	#SX_BUF,r3
+	.endif
 	add	r1,r3
 	load	(r3),r23		; sx[ni]
 	move	r29,r0
@@ -1785,9 +2944,7 @@ gw_m2:
 	movei	#gw_flat,r22
 	jump	MI,(r22)		; dy < 0
 	nop
-	nop
 	jump	EQ,(r22)		; dy == 0
-	nop
 	nop
 	; --- dy > 0: slope = ((sx[ni]-sx[cur])<<16)/dy ---
 	move	r23,r1
@@ -1800,11 +2957,9 @@ gw_m2:
 	movei	#gw_div,r26
 	jump	CS,(r26)		; (ua>>16) < dy -> divide
 	nop
-	nop
 	movei	#$7FFFFFFF,r1		; saturate (only if dx would overflow)
 	movei	#gw_sign,r26
 	jump	T,(r26)
-	nop
 	nop
 gw_div:
 	div	r0,r1			; (ua<<16)/dy  [16.16]
@@ -1813,31 +2968,31 @@ gw_sign:
 	movei	#gw_pos,r26
 	jump	PL,(r26)
 	nop
-	nop
 	neg	r1
 gw_pos:
 	move	r1,r23			; slope
 	shlq	#16,r25			; sx[cur]<<16 (survivor)
 	move	r10,r1
 	sub	r27,r1			; delta = y - sy[cur]
-	move	r23,r0			; slope
 	movei	#gw_xret,r28
+	.if BANKDIET=1
+	movefa	r12,r22			; imul32 (bank-1 resident)
+	.else
 	movei	#imul32,r22
+	.endif
 	jump	T,(r22)
-	nop
+        move	r23,r0
 	nop
 gw_xret:
 	add	r25,r0			; x = sx[cur]<<16 + slope*delta
-	move	r0,r25			; output x
 	jump	T,(r8)
-	nop
+        move	r0,r25
 	nop
 gw_flat:
 	move	r23,r25
 	shlq	#16,r25			; x = sx[ni]<<16
-	moveq	#0,r23			; slope = 0
 	jump	T,(r8)
-	nop
+        moveq	#0,r23
 	nop
 
 ;=====================================================================
@@ -1858,9 +3013,8 @@ imul32:
 	nop
 	add	r26,r0			; cross
 	shlq	#16,r0
-	add	r2,r0			; low32
 	jump	T,(r28)
-	nop
+        add	r2,r0
 	nop
 
 ;=====================================================================
@@ -1884,23 +3038,40 @@ stage_vert:
 	load	(r1),r3			; sy
 	move	r6,r9			; j (preserved by convention)
 	shlq	#2,r9
+	.if BANKDIET=1
+	movefa	r11,r0			; SX_BUF (bank-1)
+	.else
 	movei	#SX_BUF,r0
+	.endif
 	add	r9,r0
 	store	r2,(r0)
+	.if BANKDIET=1
+	movefa	r10,r0			; SY_BUF (bank-1)
+	.else
 	movei	#SY_BUF,r0
+	.endif
 	add	r9,r0
 	store	r3,(r0)
 	movei	#$07FFFFFF,r0
 	cmp	r0,r2
 	jr	NE,sv_ok
 	nop
+.if BEXIT=1
+	; BEHIND EARLY-EXIT (BUCKET guard 2): abort the face at the FIRST
+	; behind/far-sentinel vertex — the face would only be BEHINDF-skipped
+	; after full staging anyway. r21 (n) is live for face_adv's record
+	; advance; r22 = where face_adv jumps after advancing the cursor.
+	movei	#face_loop,r22
+	movei	#face_adv,r0
+	jump	T,(r0)
 	nop
+.else
 	movei	#BEHINDF,r0
 	moveq	#1,r2
 	store	r2,(r0)
+.endif
 sv_ok:
 	jump	T,(r8)
-	nop
 	nop
 
 ;=====================================================================
@@ -1913,7 +3084,6 @@ done:
 	cmpq	#0,r1
 	movei	#room_next,r22
 	jump	NE,(r22)
-	nop
 	nop
 alldone:
 	movei	#MAGIC_DONE,r0
@@ -1931,5 +3101,4 @@ alldone:
 halt:
 	nop
 	jr	T,halt
-	nop
 	nop

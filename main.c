@@ -63,7 +63,10 @@ typedef int32_t fix;
  * are palette indices; I reserve CLUT[254]=black, [255]=white for the blink. */
 #ifdef FB8
 typedef uint8_t fbpix;
-#define CLEAR_IDX 254
+#define CLEAR_IDX 0     /* was 254: the rect-shade pass ORs k into cleared
+                           void pixels, and 254|k hit 255 = the white blink
+                           reserve (white cave mouths). Palette base 0 is
+                           now sorted darkest-first, so 0|k stays black. */
 #define BLINK_ON  255
 #define BLINK_OFF 254
 #else
@@ -151,12 +154,78 @@ static int g_floorwater;  /* 1 if that floor is a WATER-SURFACE cell. Read from
    returned *floorY is always kept even, so callers must use THIS flag, never
    (floorY & 1), to detect water. */
 static int room_reachable(int a, int b);   /* fwd (defined after S_adj) */
+static int room_within3(int a, int b);     /* fwd: b within 3 portal hops of a */
 static int g_flr_limit;   /* 1 = only search current room + portal neighbours
    (gameplay walking; stops stair-casing up stacked rooms' floors at region
-   boundaries — the "launched to the top crossing onto the rug" bug) */
+   boundaries — the "launched to the top crossing onto the rug" bug).
+   0 = AIRBORNE: was a full all-rooms scan; now limited to 3 portal hops
+   (room_within3) — a fall can only cross portal-connected rooms, and the
+   long-drop "fell through the bottom" case is 2 hops. The all-rooms scan's
+   sector-table DRAM traffic doubled 68k logic time during descents on
+   silicon (hl_logic 31->63ms, 2026-07-21) while jsim saw nothing — the
+   bus-price class of cost. */
 static int g_curroom_fwd(void);
 /* ceiling of the CURRENT room's sector at (wx,wz): grab targets ABOVE this
    are through solid geometry (the courtyard->roof "fly to the top" chain). */
+/* 16x16 hardware multiply (muls.w) — see pose-loop note below: both operands
+ * must fit signed 16 bits. Hoisted above the collision helpers 2026-07-20:
+ * the sector-index (lx>>10)*zS compiled to __mulsi3 (~246 cycles vs ~70) at
+ * ~440 calls/render — the 68k pc-histogram's top game-code entry. */
+static inline int32_t mul16(int32_t a, int32_t b){
+    __asm__("muls.w %1,%0" : "+d"(a) : "d"(b));
+    return a;
+}
+
+/* M68DIET AUTOPSY SUB-FLAGS (2026-07-22, see PERFHUNT_CAMPAIGN.md):
+ * silicon convicted the combined M68DIET at -62% wall while every one of
+ * its own 68k segments measured equal-or-faster (hl telemetry) — the
+ * mechanism is indirect.  The three pieces now key off SEPARATE defines
+ * so silicon can bisect them:
+ *   M68D_A1 = portal_rect split-multiply    (PMUL / mul32x16)
+ *   M68D_A2 = painter sort on admitted subset (order[] prefilter)
+ *   M68D_A3 = lara_finish word-read centroids + reciprocal divides
+ * -DM68DIET still means all three (the convicted combination, byte-
+ * identical repro).  mul32x16 itself is needed by A1 and A3. */
+#ifdef M68DIET
+#ifndef M68D_A1
+#define M68D_A1 1
+#endif
+#ifndef M68D_A2
+#define M68D_A2 1
+#endif
+#ifndef M68D_A3
+#define M68D_A3 1
+#endif
+#endif
+
+#ifdef M68D_A2
+static int g_m68d_nord;        /* rooms in order[] (A2 candidate subset) */
+#define M68D_ORD_N g_m68d_nord
+#else
+#define M68D_ORD_N roomCount   /* legacy token — codegen identical */
+#endif
+
+#if defined(M68D_A1) || defined(M68D_A3)
+/* PERFHUNT A1 (see PERFHUNT_CAMPAIGN.md): exact 32x16 multiply from two
+ * hardware muls (muls.w high half + mulu.w low half + sign fix), for
+ * |b| <= 32767 and |a*b| < 2^31.  ~110 cycles vs ~270+ for the gcc
+ * __mulsi3 shift-add loop.  Used by portal_rect (the visibility rect
+ * chain was 94% of all steady-state __mulsi3 calls) and lara_finish. */
+static inline int32_t mul32x16(int32_t a, int32_t b){
+    uint32_t lo = (uint16_t)a;
+    int32_t  hi = (int32_t)(int16_t)((uint32_t)a >> 16);
+    __asm__("mulu.w %1,%0" : "+d"(lo) : "d"(b));
+    __asm__("muls.w %1,%0" : "+d"(hi) : "d"(b));
+    if (b < 0) lo -= (uint32_t)(uint16_t)a << 16;
+    return (int32_t)(((uint32_t)hi << 16) + lo);
+}
+#endif
+#ifdef M68D_A1
+#define PMUL(a,b) mul32x16((a),(b))
+#else
+#define PMUL(a,b) ((a)*(b))
+#endif
+
 static int room_ceil_at(const uint8_t *sp, int wx, int wz, int *ceilY)
 {
     int xS = (sp[0]<<8)|sp[1], zS = (sp[2]<<8)|sp[3];
@@ -165,7 +234,7 @@ static int room_ceil_at(const uint8_t *sp, int wx, int wz, int *ceilY)
     int lx = wx - ix, lz = wz - iz;
     const uint8_t *e;
     if (lx < 0 || lx >= xS*1024 || lz < 0 || lz >= zS*1024) return 0;
-    e = sp + 12 + ((lx>>10)*zS + (lz>>10))*6;
+    e = sp + 12 + (mul16(lx>>10, zS) + (lz>>10))*6;
     *ceilY = (int16_t)(((uint16_t)e[2]<<8)|e[3]);
     return 1;
 }
@@ -190,10 +259,10 @@ static int portal_rect(const long *pr, int *rx0, int *rx1, int *ry0, int *ry1)
         int32_t dy = (int32_t)pr[1+i*3+1] - pcl_camy;
         int32_t dz = (int32_t)pr[1+i*3+2] - pcl_camz;
         int32_t rx, rz, ry, rz2, sx, sy;
-        rx  = (dx*pcl_cY4 - dz*pcl_sY4) >> 12;
-        rz  = (dx*pcl_sY4 + dz*pcl_cY4) >> 12;
-        ry  = (dy*pcl_cP4 - rz*pcl_sP4) >> 12;
-        rz2 = (dy*pcl_sP4 + rz*pcl_cP4) >> 12;
+        rx  = (PMUL(dx,pcl_cY4) - PMUL(dz,pcl_sY4)) >> 12;
+        rz  = (PMUL(dx,pcl_sY4) + PMUL(dz,pcl_cY4)) >> 12;
+        ry  = (PMUL(dy,pcl_cP4) - PMUL(rz,pcl_sP4)) >> 12;
+        rz2 = (PMUL(dy,pcl_sP4) + PMUL(rz,pcl_cP4)) >> 12;
         if (rz2 < 32) {
             behind++;
             if (rz2 > -1024) behind |= 0x100;   /* CROSSING the plane, not
@@ -256,7 +325,7 @@ static int room_wall_at(const uint8_t *sp, int wx, int wz)
     int lx = wx - ix, lz = wz - iz;
     const uint8_t *e;
     if (lx < 0 || lx >= xS*1024 || lz < 0 || lz >= zS*1024) return 0;
-    e = sp + 12 + ((lx>>10)*zS + (lz>>10))*6;
+    e = sp + 12 + (mul16(lx>>10, zS) + (lz>>10))*6;
     return (int16_t)(((uint16_t)e[0]<<8)|e[1]) == 0x7FFF;
 }
 static int g_flr_grab;    /* 1 = ledge-search mode: plain closest-floor (the
@@ -274,14 +343,15 @@ static int room_floor_mr(const uint8_t **rsect, int n, int wx, int wz, int *floo
     for (r = 0; r < n; r++) {
         const uint8_t *sp = rsect[r];
         int xS, zS;
-        if (g_flr_limit && !room_reachable(g_curroom_fwd(), r)) continue;
+        if (g_flr_limit ? !room_reachable(g_curroom_fwd(), r)
+                        : !room_within3(g_curroom_fwd(), r)) continue;
         xS = (sp[0]<<8)|sp[1]; zS = (sp[2]<<8)|sp[3];
         int ix = (int)(((uint32_t)sp[4]<<24)|((uint32_t)sp[5]<<16)|((uint32_t)sp[6]<<8)|sp[7]);
         int iz = (int)(((uint32_t)sp[8]<<24)|((uint32_t)sp[9]<<16)|((uint32_t)sp[10]<<8)|sp[11]);
         int lx = wx - ix, lz = wz - iz;
         const uint8_t *e; int fy, dx, dz, sxs, szs, w;
         if (lx < 0 || lx >= xS*1024 || lz < 0 || lz >= zS*1024) continue;
-        e = sp + 12 + ((lx>>10)*zS + (lz>>10))*6;   /* cell stride 6 (slant added) */
+        e = sp + 12 + (mul16(lx>>10, zS) + (lz>>10))*6;   /* cell stride 6 (slant added) */
         fy = (int16_t)(((uint16_t)e[0]<<8)|e[1]);
         if (fy >= 0x7FFE) continue;   /* 7FFF wall / 7FFE floor OPENING: the
                                          room below supplies the floor */
@@ -294,8 +364,11 @@ static int room_floor_mr(const uint8_t **rsect, int n, int wx, int wz, int *floo
          * getFloorInfo so ramps read as a smooth surface (walk up slanted rock). */
         dx = lx & 1023; dz = lz & 1023;
         sxs = (int8_t)e[4]; szs = (int8_t)e[5];
-        fy -= (sxs * (sxs > 0 ? (dx - 1023) : dx)) >> 2;
-        fy -= (szs * (szs > 0 ? (dz - 1023) : dz)) >> 2;
+        /* mul16: slant s8 x frac <=1023 both fit s16 — this multiply ran as
+           __mulsi3 per CANDIDATE CELL of every floor search (~400/render,
+           the pc-histogram's #1 game-code cost after the bars fix) */
+        fy -= mul16(sxs, (sxs > 0 ? (dx - 1023) : dx)) >> 2;
+        fy -= mul16(szs, (szs > 0 ? (dz - 1023) : dz)) >> 2;
         /* rooms overlap at portals: pick the LOWEST floor (largest Y, +Y down)
          * so Lara stands on the actual ground, not a phantom higher surface
          * from an adjoining room (that caused her to float near walls). */
@@ -398,6 +471,88 @@ static uint8_t lbehind[512];
  * gpu_geotex kernel draws her over the textured room (no separate kernel).
  * Verts use the offX/offZ split (world = local + off<<8) so they fit s16;
  * every face's UVs point at one solid Lara swatch cell (flat colour). */
+/* STAGEDIET: the geotex kernel expects a 12-byte plane prefix on EVERY face
+   record (room bins carry real planes from the extractor's FACE_PLANES=1).
+   Runtime-built blobs (Lara/props/title) are posed per frame, so baked
+   normals don't exist — they emit a DUMMY plane {N=0, d=INT32_MIN}, which
+   the kernel's early cull can never take (0 >= -2^27; not INT32_MIN —
+   that overflows the kernel's 32-bit compare). */
+#ifdef ABLADDER
+/* content-ladder troubleshooting (2026-07-20, user-directed): find where
+   the frame time lives by starting from Lara alone and admitting the
+   world back one room at a time, live from the pad. */
+#ifndef ABBOOT
+#define ABBOOT 0
+#endif
+static int g_abrooms = ABBOOT;   /* boots Lara-only (0) unless -DABBOOT=N */
+#endif
+#ifdef FARDIAL
+static int g_fardist = 9000;   /* per-vert kernel far cull; OPTION+UP/DOWN */
+#endif
+#ifdef HOPDIAL
+/* live draw-distance dial (user experiment 2026-07-21): OPTION+RIGHT/LEFT
+   raises/lowers the portal-hop dispatch cap. 4 = uncapped;
+   1 = current room + neighbours only (the user's room±1 proposal —
+   EYE-CLEARED no black doorways + dips 5.7->8.5-11.6 + ceiling
+   21.5->23.8, silicon 2026-07-21; HOPBOOT sets the boot value). */
+#ifndef HOPBOOT
+#define HOPBOOT 4
+#endif
+static int g_hopcap = HOPBOOT;
+static int g_hop_cached_a = -1;
+static uint8_t g_hop_inset[64];
+#ifdef GOVERNOR
+/* FRAME GOVERNOR (2026-07-22, PERFHUNT_CAMPAIGN.md smoothness campaign):
+   VARIANCE tool, opt-in.  Measures each frame's VBL span at the loop top
+   (frame_count delta — the PROFILE pfA machinery replicated for free);
+   one frame longer than GOV_HI fields clamps g_hopcap to 1 for the
+   following frames; GOV_K consecutive frames at/below GOV_LO restore the
+   dial's cap.  Hysteresis: GOV_LO < GOV_HI plus the K-count — after a
+   restore the worst oscillation is ONE over-budget probe frame per K calm
+   frames (bounded ~1/K duty).  In persistently heavy views calm never
+   accumulates and the clamp simply stays on (the intent).  Inactive by
+   construction in steady light views (span never crosses GOV_HI), so
+   steady-view rendering is untouched. */
+#ifndef GOV_HI
+#define GOV_HI 6     /* fields: a frame LONGER than this trips the clamp */
+#endif
+#ifndef GOV_LO
+#define GOV_LO 4     /* fields: frames at/below this count as calm */
+#endif
+#ifndef GOV_K
+#define GOV_K 20     /* consecutive calm frames before the cap restores */
+#endif
+static int g_gov_user = HOPBOOT;   /* the dial-chosen cap (restore target) */
+static int g_gov_on;               /* clamp currently engaged */
+static int g_gov_calm;             /* consecutive calm frames while clamped */
+static uint32_t g_gov_trips;       /* telemetry: engagements */
+#endif
+#endif
+#ifdef PIPELINE
+/* frame N's LAST dispatch batch is still on Tom while frame N+1's 68k
+   logic runs; collected (sync+flip) at the loop-top collect point.
+   TWO flags: g_tominflight = kernel unsynced (a mid-frame consumer may
+   clear it, e.g. the !lara_disp fallback kick); g_pipeframe = a frame
+   awaits its deferred flip (ALWAYS flipped at the collect — conflating
+   the two ate the flip whenever the fallback fired: boot hang). */
+static int g_tominflight;
+static int g_pipeframe;
+#endif
+#ifdef STAGEDIET
+#define LARA_BLOB_SZ 16896   /* 12288 + 375 faces * 12B plane prefix */
+#define EMIT_PLANE(w) do { (w)[0]=0;(w)[1]=0;(w)[2]=0;(w)[3]=0; \
+                           (w)[4]=0xF800;(w)[5]=0; (w)+=6; } while (0)
+/* d = -(1<<27), NOT INT32_MIN: the kernel's cmp computes N.C - d and
+   INT32_MIN overflows it (sign flips -> face wrongly culled; cost Lara). */
+#define QREC 36
+#define TREC 30
+#else
+#define LARA_BLOB_SZ 12288
+#define EMIT_PLANE(w) do { } while (0)
+#define QREC 24
+#define TREC 18
+#endif
+
 static void build_lara_blob(uint8_t *buf, int atlasW)
 {
     fix laC = COS(g_layaw), laS = SIN(g_layaw);
@@ -431,6 +586,7 @@ static void build_lara_blob(uint8_t *buf, int atlasW)
         const uint16_t *qv = g_lquads[i].v;
         int s = sh[i];
         int uL = s*LARA_CELL_ + 1, uH = s*LARA_CELL_ + LARA_CELL_ - 2;
+        EMIT_PLANE(w);
         w[0]=qv[0]; w[1]=qv[1]; w[2]=qv[2]; w[3]=qv[3];
         w[4]=(uint16_t)uL; w[5]=(uint16_t)vL;
         w[6]=(uint16_t)uH; w[7]=(uint16_t)vL;
@@ -443,6 +599,7 @@ static void build_lara_blob(uint8_t *buf, int atlasW)
         const uint16_t *tv = g_ltris[i].v;
         int s = sh[g_lnq + i];
         int uL = s*LARA_CELL_ + 1, uH = s*LARA_CELL_ + LARA_CELL_ - 2;
+        EMIT_PLANE(w);
         w[0]=tv[0]; w[1]=tv[1]; w[2]=tv[2];
         w[3]=(uint16_t)uL; w[4]=(uint16_t)vL;
         w[5]=(uint16_t)uH; w[6]=(uint16_t)vL;
@@ -492,10 +649,7 @@ static int rd16(const uint8_t *p){ return (int16_t)(((uint16_t)p[0]<<8)|p[1]); }
  * multiply has both operands within signed 16 bits (matrix .12 <=4096, cos/sin
  * <=4096, mesh verts small), so a single hardware muls.w replaces the whole
  * software routine — the pose loop's dominant cost. */
-static inline int32_t mul16(int32_t a, int32_t b){
-    __asm__("muls.w %1,%0" : "+d"(a) : "d"(b));
-    return a;
-}
+/* mul16 hoisted above the collision helpers (see there) */
 
 typedef struct { int32_t R[3][3]; int32_t t[3]; } SkMat;   /* R in .12 fixed */
 static void sk_ident(SkMat *m){
@@ -600,10 +754,14 @@ static void build_lara_part(uint8_t *buf, int atlasW, int m0, int m1)
       int mo, x;
       for (mo=0;mo<mc;mo++){ int mm=morder[mo];
         for (x=mq_start[mm];x<mq_start[mm+1];x++){
-            const uint16_t *s=qb+mq_list[x]*12; for(k=0;k<12;k++) w[k]=s[k]; w+=12; } }
+            const uint16_t *s=qb+mq_list[x]*12;
+            EMIT_PLANE(w);
+            for(k=0;k<12;k++) w[k]=s[k]; w+=12; } }
       for (mo=0;mo<mc;mo++){ int mm=morder[mo];
         for (x=mt_start[mm];x<mt_start[mm+1];x++){
-            const uint16_t *s=tb+mt_list[x]*9; for(k=0;k<9;k++) w[k]=s[k]; w+=9; } }
+            const uint16_t *s=tb+mt_list[x]*9;
+            EMIT_PLANE(w);
+            for(k=0;k<9;k++) w[k]=s[k]; w+=9; } }
     }
 #undef mdepth
 #undef morder
@@ -643,12 +801,130 @@ static void sfx_play(int voice, int id)
    for the 68k-side cost (coarse vbl buckets can't see it). */
 static uint32_t hlm[10]; static uint32_t hla[10];
 static uint32_t g_lemits;
+/* HONEST fps (2026-07-22, PACING campaign): fps100's pftt window opens at
+   pfA (AFTER game logic) — it excludes the logic phase entirely and
+   overstated fps ~4.7x at spawn (fps100=2500 while wall-clocked block
+   cadence — 60 renders per fps-block — measured 11-12s = 5.3 fps TRUE).
+   pftt2 spans loop-top to loop-top; fpsT is the number to trust. */
+static uint32_t pftt2, pftop;
 #define HLP(i) (hlm[i] = frame_count*525u + (uint32_t)VC)
+
+/* ROOMS-BLOCK sub-profile. The coarse vbl bars say the frame is 100% "rooms";
+   these split that block into its four phases. NOTE the hla[] trap: a probe
+   inside an `if` goes STALE when the branch is skipped, and the d<60000 guard
+   (1.9s!) is far too loose to catch it — that is why hla[7] read a bogus 99.9%.
+   RP_ALL() stamps every slot at block entry, so a phase that does not run
+   contributes exactly 0 instead of a multi-frame delta. */
+static uint32_t g_rp[10]; static uint32_t g_rpa[10];
+#define RP(i)   (g_rp[i] = frame_count*525u + (uint32_t)VC)
+#define RP_ALL() do { uint32_t _t = frame_count*525u + (uint32_t)VC; \
+                      int _i; for (_i=0;_i<10;_i++) g_rp[_i]=_t; } while (0)
+#ifdef PACEPROBE
+/* PACING discriminator (PACING_CAMPAIGN.md step 2): hl_clear is a 3-way
+   blend (collect-wait + safe-VC dodge + clear blit) and NOTHING measures
+   Tom's real render span under PIPELINE ("hl_tom" = dispatch..kick only).
+   pp_wait = 68k halflines asleep in the loop-top collect; pp_span = Tom
+   kick -> collect-return (>= Tom's true render span; == it when pp_wait>0);
+   pp_safe/pp_blit split the rest of hl_clear; pp_mid counts mid-frame
+   fallback collects (the 3685 site) that would invalidate the model. */
+static uint32_t pp_kick, pp_wait, pp_span, pp_safe, pp_blit, pp_mid;
+/* rev 2: fps100's window (pfA..loop-end) EXCLUDES the logic phase — it
+   overstates. pp_per/pp_pmax = HONEST wall period between consecutive
+   render passes (loop-top deltas); pp_coll = how many loop-top collects
+   actually ran (the missing denominator for pp_wait/pp_span averages);
+   pp_wmax/pp_smax = worst single collect-wait / kick->collect span (the
+   monster-stall tail that per-block averages smear away). */
+static uint32_t pp_prev0, pp_per, pp_pmax, pp_coll, pp_wmax, pp_smax;
+#define PPNOW() (frame_count*525u + (uint32_t)VC)
+#define PPADD(acc, d) do { uint32_t _d = (d); if (_d < 60000u) (acc) += _d; } while (0)
+#endif
 #else
 #define HLP(i) ((void)0)
+#define RP(i) ((void)0)
+#define RP_ALL() ((void)0)
 #endif
 
 static int32_t g_mtpos[16*3] __attribute__((aligned(8)));  /* Jerry: mesh T per pose */
+
+#ifdef LEMITDIET
+/* LARA EMIT DIET (2026-07-22, PERFHUNT_CAMPAIGN.md): the face re-emit on a
+ * mesh-order flip fires on MOST driven renders (order changed in 61% of
+ * 5-field windows while turning, measured in-emu) and copied ~13KB via a
+ * per-face gather (mq_list[x]*12 random reads + per-record plane writes).
+ * Diet, three stacked cuts:
+ *  1. PAYLOAD-ONLY RE-EMIT: record slots are fixed-size, so the STAGEDIET
+ *     12B plane prefixes sit at ORDER-INDEPENDENT offsets and are constant
+ *     -> written once at init, never re-emitted (-33% of writes).
+ *  2. PRE-GROUPED BANK: payloads packed per-mesh at init; re-emit copies
+ *     are sequential movem.l bursts (lemit_qcopy/tcopy in cpu68k.S), no
+ *     per-face pointer math, ~1 fetch word per 3 data words.
+ *  3. CHANGED-WINDOW EMIT: only mesh positions first-diff..last-diff are
+ *     re-copied.  The untouched prefix has identical meshes at identical
+ *     offsets; the untouched suffix holds the same meshes at the same
+ *     offsets because [fd..ld] is a permutation of the same mesh set
+ *     (prefix equal + suffix equal => middle multisets equal).  Measured
+ *     driven window: median 12/15 (turn churn) — worth ~20%, the floor.
+ * Byte-for-byte the same blob content as the legacy emit. */
+extern void lemit_qcopy(void *dst, const void *src, int n, int stride);
+extern void lemit_tcopy(void *dst, const void *src, int n, int stride);
+static uint8_t  lemit_qbank[MRT_LARA_QCOUNT*24] __attribute__((aligned(4)));
+static uint8_t  lemit_tbank[MRT_LARA_TCOUNT*18] __attribute__((aligned(4)));
+static uint16_t lemit_qoff[MRT_LSKIN_MCOUNT+1], lemit_toff[MRT_LSKIN_MCOUNT+1];
+
+static void lemit_init(uint8_t *buf)
+{
+    int mc = g_sk_mcount, m, x;
+    const uint16_t *qb=(const uint16_t*)g_ltx_quads;
+    const uint16_t *tb=(const uint16_t*)g_ltx_tris;
+    uint8_t *qo = lemit_qbank, *to = lemit_tbank;
+    for (m = 0; m < mc; m++) {
+        lemit_qoff[m] = (uint16_t)(qo - lemit_qbank);
+        for (x = mq_start[m]; x < mq_start[m+1]; x++) {
+            const uint32_t *s=(const uint32_t*)(qb+mq_list[x]*12);
+            uint32_t *d=(uint32_t*)qo;
+            d[0]=s[0]; d[1]=s[1]; d[2]=s[2]; d[3]=s[3]; d[4]=s[4]; d[5]=s[5];
+            qo += 24;
+        }
+        lemit_toff[m] = (uint16_t)(to - lemit_tbank);
+        for (x = mt_start[m]; x < mt_start[m+1]; x++) {
+            const uint16_t *s=tb+mt_list[x]*9;
+            uint32_t *d=(uint32_t*)to;
+            d[0]=((const uint32_t*)s)[0]; d[1]=((const uint32_t*)s)[1];
+            d[2]=((const uint32_t*)s)[2]; d[3]=((const uint32_t*)s)[3];
+            ((uint16_t*)to)[8]=s[8];
+            to += 18;
+        }
+    }
+#ifdef STAGEDIET
+    {   /* constant plane prefixes, one-time (see note 1 above) */
+        uint16_t *w = (uint16_t *)(buf + 16) + g_lnv*4;
+        int k;
+        for (k = 0; k < g_lnq; k++) { EMIT_PLANE(w); w += 12; }
+        for (k = 0; k < g_lnt; k++) { EMIT_PLANE(w); w += 9;  }
+    }
+#else
+    (void)buf;
+#endif
+}
+
+static void lemit_range(uint8_t *buf, int fd, int ld)
+{
+    uint8_t *qregion = buf + 16 + (uint32_t)g_lnv*8;
+    uint8_t *tregion = qregion + (uint32_t)g_lnq*QREC;
+    int p, qslot = 0, tslot = 0;
+    for (p = 0; p < fd; p++) { int mm = ps_morder[p];
+        qslot += mq_start[mm+1]-mq_start[mm];
+        tslot += mt_start[mm+1]-mt_start[mm]; }
+    { uint8_t *qd = qregion + qslot*QREC + (QREC-24);
+      uint8_t *td = tregion + tslot*TREC + (TREC-18);
+      for (p = fd; p <= ld; p++) { int mm = ps_morder[p];
+          int nq = mq_start[mm+1]-mq_start[mm];
+          int nt = mt_start[mm+1]-mt_start[mm];
+          if (nq) { lemit_qcopy(qd, lemit_qbank+lemit_qoff[mm], nq, QREC); qd += nq*QREC; }
+          if (nt) { lemit_tcopy(td, lemit_tbank+lemit_toff[mm], nt, TREC); td += nt*TREC; }
+      } }
+}
+#endif /* LEMITDIET */
 
 static void lara_finish(uint8_t *buf, int atlasW)
 {
@@ -661,6 +937,37 @@ static void lara_finish(uint8_t *buf, int atlasW)
        the T-export/joint-origin variant (g_mtpos, kernel block dormant via
        params[5]=0) made the sort order flip ~46/60 frames -> the face
        re-emit dominated. Centroids average the limb: stabler order. */
+#ifdef M68D_A3
+    /* PERFHUNT A3: (a) the vertex sums read the big-endian s16 fields as
+       WORDS (the blob is even-aligned; halves the DRAM accesses of the
+       hottest awake-68k loop in driven play — 9.8% of wall), (b) the 48
+       per-render __divsi3 calls (3 per mesh) become one reciprocal
+       multiply each (vlen is a per-mesh constant; recip fits s16 for
+       vlen>=3, meshes are all bigger).  Centroid rounding differs from
+       C division by <=1 unit — only exact depth TIES could reorder, and
+       the emit cache absorbs order-stability anyway. */
+    { static uint16_t ps_recip[16]; static int ps_recip_ok = 0;
+      if (!ps_recip_ok) { for (i=0;i<mc && i<16;i++)
+              ps_recip[i] = (skvl[i]>=3) ? (uint16_t)(65536u/(unsigned)skvl[i]) : 0;
+          ps_recip_ok = 1; }
+      for (i = 0; i < mc; i++) {
+        const int16_t *v = (const int16_t *)(buf + 16 + skvb[i]*8);
+        int vlen = skvl[i];
+        int32_t sx=0, sy=0, sz=0;
+        for (k = 0; k < vlen; k++) {
+            sx += v[0]; sy += v[1]; sz += v[2];
+            v += 4;
+        }
+        if (vlen>=3){ int rc=(int)ps_recip[i];
+                     int cx=wbaseX+(mul32x16(sx,rc)>>16)-g_camx;
+                     int cy=(mul32x16(sy,rc)>>16)-g_camy;
+                     int cz=wbaseZ+(mul32x16(sz,rc)>>16)-g_camz;
+                     ps_mdepth[i]=mul16(cx,cx)+mul16(cy,cy)+mul16(cz,cz); }
+        else if (vlen>0){ int cx=wbaseX+sx/vlen-g_camx, cy=sy/vlen-g_camy, cz=wbaseZ+sz/vlen-g_camz;
+                     ps_mdepth[i]=mul16(cx,cx)+mul16(cy,cy)+mul16(cz,cz); } else ps_mdepth[i]=0;
+        ps_morder[i]=i;
+      } }
+#else
     for (i = 0; i < mc; i++) {
         const uint8_t *v = buf + 16 + skvb[i]*8;
         int vlen = skvl[i];
@@ -675,10 +982,33 @@ static void lara_finish(uint8_t *buf, int atlasW)
                      ps_mdepth[i]=mul16(cx,cx)+mul16(cy,cy)+mul16(cz,cz); } else ps_mdepth[i]=0;
         ps_morder[i]=i;
     }
+#endif
     for (i=1;i<mc;i++){ int j=i, mo=ps_morder[i]; int32_t md=ps_mdepth[mo];
         while (j>0 && ps_mdepth[ps_morder[j-1]] < md){ ps_morder[j]=ps_morder[j-1]; j--; }
         ps_morder[j]=mo; }
     HLP(8);   /* depth+sort done; 8-3 = mdepth cost, 4-3 = whole finish */
+#ifdef LEMITDIET
+    (void)w;
+    /* changed-window emit (see lemit_* above): find first/last differing
+       mesh position; equal orders skip entirely (the old cache hit). */
+    { static int prev_order[16], prev_valid = 0;
+      int fd = 0, ld = mc - 1;
+      if (prev_valid) {
+          fd = -1; ld = -1;
+          for (i = 0; i < mc; i++)
+              if (prev_order[i] != ps_morder[i]) { if (fd < 0) fd = i; ld = i; }
+          if (fd < 0) return;
+      }
+      for (i = 0; i < mc; i++) prev_order[i] = ps_morder[i];
+      if (!prev_valid) lemit_init(buf);
+      prev_valid = 1;
+#ifdef PROFILE
+      g_lemits++;
+#endif
+      lemit_range(buf, fd, ld);
+    }
+    return;
+#else
     /* FACE-EMIT CACHE: the ~375 face records (7.6KB of copies) only depend on
        the mesh SORT ORDER, and the camera rides behind Lara so it rarely
        changes — skip the whole emit when the order matches last frame's
@@ -701,22 +1031,29 @@ static void lara_finish(uint8_t *buf, int atlasW)
       for (mo=0;mo<mc;mo++){ int mm=ps_morder[mo];
         for (x=mq_start[mm];x<mq_start[mm+1];x++){
             const uint32_t *s=(const uint32_t*)(qb+mq_list[x]*12);
-            uint32_t *d=(uint32_t*)w;
+            uint32_t *d;
+            EMIT_PLANE(w);
+            d=(uint32_t*)w;
             d[0]=s[0]; d[1]=s[1]; d[2]=s[2]; d[3]=s[3]; d[4]=s[4]; d[5]=s[5];
             w+=12; } }
       for (mo=0;mo<mc;mo++){ int mm=ps_morder[mo];
         for (x=mt_start[mm];x<mt_start[mm+1];x++){
             const uint16_t *s=tb+mt_list[x]*9;
-            uint32_t *d=(uint32_t*)w;
+            uint32_t *d;
+            EMIT_PLANE(w);
+            d=(uint32_t*)w;
             d[0]=((const uint32_t*)s)[0]; d[1]=((const uint32_t*)s)[1];
             d[2]=((const uint32_t*)s)[2]; d[3]=((const uint32_t*)s)[3];
             w[8]=s[8];
             w+=9; } }
     }
+#endif /* !LEMITDIET */
 }
 /* DEPTH-SORT OT: order one Jerry-cached room's faces far->near. Runs on
    the 68k while Tom rasters earlier rooms (time it used to sleep through).
-   Writes qlist/tlist of RECORD ADDRESSES; Tom's face iterator walks them. */
+   Writes qlist/tlist of RECORD ADDRESSES; Tom's face iterator walks them.
+   DEAD since JERRYX retirement (no caller) — strides here are pre-STAGEDIET
+   (24/18); fix to QREC/TREC if ever revived. */
 static void ot_sort(const uint8_t *room, uint32_t *slot)
 {
     int vc = rd16(room), qc = rd16(room+2), tc = rd16(room+4);
@@ -829,6 +1166,55 @@ static int room_reachable(int a, int b)
         if (S_adj[a][i] == b) return 1;
     return 0;
 }
+/* b within K portal hops of a. K<=3 uses the fall-cull BFS; the HOPDIAL
+   dispatch cap reuses it with its own cache. */
+static int room_withinK(int a, int b, int K, int *cached_a_p, uint8_t *inset)
+{
+    if (a != *cached_a_p || K < 0) { /* K<0 = force refresh sentinel */
+        int i, j, k, n1;
+        for (i = 0; i < 64; i++) inset[i] = 0;
+        inset[a] = 1;
+        if (K >= 1)
+        for (i = 0; i < MRT_ADJ_MAX && S_adj[a][i] != 255; i++) {
+            n1 = S_adj[a][i]; inset[n1] = 1;
+            if (K >= 2)
+            for (j = 0; j < MRT_ADJ_MAX && S_adj[n1][j] != 255; j++) {
+                int n2 = S_adj[n1][j]; inset[n2] = 1;
+                if (K >= 3)
+                for (k = 0; k < MRT_ADJ_MAX && S_adj[n2][k] != 255; k++)
+                    inset[S_adj[n2][k]] = 1;
+            }
+        }
+        *cached_a_p = a;
+    }
+    return inset[b & 63];
+}
+static int room_within3(int a, int b)
+{
+    static int cached_a = -1;
+    static uint8_t inset[64];
+    return room_withinK(a, b, 3, &cached_a, inset);
+}
+static int room_within3_dead(int a, int b)
+{
+    static int cached_a = -1;
+    static uint8_t inset[64];
+    if (a != cached_a) {
+        int i, j, k, n1;
+        for (i = 0; i < 64; i++) inset[i] = 0;
+        inset[a] = 1;
+        for (i = 0; i < MRT_ADJ_MAX && S_adj[a][i] != 255; i++) {
+            n1 = S_adj[a][i]; inset[n1] = 1;
+            for (j = 0; j < MRT_ADJ_MAX && S_adj[n1][j] != 255; j++) {
+                int n2 = S_adj[n1][j]; inset[n2] = 1;
+                for (k = 0; k < MRT_ADJ_MAX && S_adj[n2][k] != 255; k++)
+                    inset[S_adj[n2][k]] = 1;
+            }
+        }
+        cached_a = a;
+    }
+    return inset[b & 63];
+}
 #define ITEM_VL (g_swy + 1)
 #define ITEM_VH (g_swy + MRT_LARA_CELL - 2)
 static void build_item_blob(uint8_t *buf, int atlasW)
@@ -849,6 +1235,7 @@ static void build_item_blob(uint8_t *buf, int atlasW)
         w += 4;
     }
     for (i=0;i<6;i++) {
+        EMIT_PLANE(w);
         w[0]=item_q[i][0]; w[1]=item_q[i][1]; w[2]=item_q[i][2]; w[3]=item_q[i][3];
         w[4]=ITEM_UL;w[5]=ITEM_VL; w[6]=ITEM_UH;w[7]=ITEM_VL;
         w[8]=ITEM_UH;w[9]=ITEM_VH; w[10]=ITEM_UL;w[11]=ITEM_VH;
@@ -885,6 +1272,7 @@ static void build_door_blob(uint8_t *buf, int atlasW)
         w += 4;
     }
     for (i=0;i<6;i++) {
+        EMIT_PLANE(w);
         w[0]=item_q[i][0]; w[1]=item_q[i][1]; w[2]=item_q[i][2]; w[3]=item_q[i][3];
         w[4]=DOOR_UL;w[5]=DOOR_VL; w[6]=DOOR_UH;w[7]=DOOR_VL;
         w[8]=DOOR_UH;w[9]=DOOR_VH; w[10]=DOOR_UL;w[11]=DOOR_VH;
@@ -1241,6 +1629,149 @@ static void draw_lara_x(int camx, int camz, fix cY4, fix sY4)
 }
 #endif /* GEOMXFORM */
 
+#ifdef BLITPROBE
+/* GPU-driven Blitter test matrix, run MID-GAME after ~15s of proven
+ * chained rendering (the working environment) — see gpu_blitprobe.gas
+ * for the 13-round history. Never returns. */
+static void blitprobe_run(void)
+{
+    /* SRCSHADE/GOURD-on-8bpp micro-probe. Runs INSTEAD of the game (Tom and
+     * Jerry are never started, so the 68k owns the Blitter). Silicon is the
+     * only oracle here: jsim writes static B_PATD for GOURD ("computation
+     * deferred") and does not model SRCSHADE at all, and the TRM says the
+     * intensity path is "16-bit pixel mode only" — whether it does anything
+     * usable to an 8bpp pixel-mode span is exactly the open question.
+     *
+     * Each test blits 16 px into a DRAM scratch row (dest pre-filled 0xEE so
+     * a non-write is visible), source/dest A-gen config IDENTICAL to the
+     * kernel's textured span (8bpp, XADDPIX dest, DSTA2). The 68k then draws
+     * every result byte on screen as 8 bit-cells (MSB..LSB, 4px per bit),
+     * which survives the video capture byte-exactly — the fps-bar run-length
+     * trick is only good to +/-2 through the scaler.
+     * Row 0 is a calibration pattern (FF 00 AA 55 F0 0F 80 01) so the decode
+     * script can locate cell centres before reading the test rows. */
+    {
+        static uint8_t bp_src[512] __attribute__((aligned(16)));
+        static uint8_t bp_dst[512] __attribute__((aligned(16)));
+        static uint16_t bp_pal[256];
+        static uint8_t bp_res[8][8];        /* [row][byte] shown on screen */
+        static const uint8_t bp_cal[8] = { 0xFF,0x00,0xAA,0x55,0xF0,0x0F,0x80,0x01 };
+        uint32_t aflags = BLIT_PIX8 | BLIT_WID320 | BLIT_XPIX;
+        int t, i, b2;
+
+        for (i = 0; i < 256; i++) bp_pal[i] = 0;
+        bp_pal[255] = 0xFFFEu;               /* white in Jag RGB16 fb fmt */
+        video_set_clut(bp_pal);
+
+        /* PROBE v2 (2026-07-20). v1 answered the intensity question: SRCSHADE
+         * and GOURD in ALL combinations write ZEROS to an 8bpp dest on real
+         * silicon (control copy byte-perfect) — the intensity path is dead
+         * for FB8, full stop. v2 probes the ARITHMETIC fallback for ramp-
+         * palette shading: LFU-OR and ADDDSEL (dst = src + dst) in pixel and
+         * phrase mode, ADDDSEL's saturation semantics on a byte pixel, and
+         * CLIP_A1 per-pixel write-inhibit in phrase mode (needed to run the
+         * cheap phrase-wide add pass over a pixel-exact span). Row 7 re-runs
+         * GOURD with a NONZERO B_PATD poked directly (v1 scattered via B_I0,
+         * so "wrote PATD(=0)" and "zeroed" were indistinguishable — this
+         * tells the emulator folks which to model). */
+        {
+        uint32_t pflags = BLIT_PIX8 | BLIT_WID320;   /* phrase-mode (no XPIX) */
+        for (i = 0; i < 8; i++) bp_res[0][i] = bp_cal[i];
+        /* v8: SELF-DIAGNOSING HARNESS. Sentinel rows: a row still reading
+         * 0x11 = the loop never reached that test (hang upstream); 0xBB =
+         * that test's pre-wait TIMED OUT (blitter stuck busy — B_CMD never
+         * re-idled); real data = the blit ran. Post-launch B_CMD poll is
+         * GONE (blit_band, the per-frame in-game clear, never polls after
+         * launch and provably chains on silicon) — replaced by a dumb delay
+         * long enough for a 16px blit (~7us) many times over. */
+        /* v9: WHERE do blit 2's reads and writes actually go? v8 proved the
+         * later blits RUN (loop reached them, B_CMD idles, no post-poll) yet
+         * the dest bytes read 0x00. Theory: the A-gen INTERNAL pointers are
+         * not reloaded from A1_PIXEL/A2_PIXEL on silicon after a completed
+         * blit, so blit 2 reads from bp_src+16 — which was zero BSS. v9
+         * makes positions visible: dst prefilled ONCE with 0x80+i (0x00 can
+         * no longer masquerade as anything), src tail beyond the 16 real
+         * texels = 0xC3, and multiple dst windows are snapshot per blit.
+         * 3 identical control copies; display:
+         *   row1 = blit1 dst[0..7]   (expect ramp)
+         *   row2 = blit2 dst[0..7]   row3 = blit2 dst[8..15]
+         *   row4 = blit2 dst[16..23] row5 = blit2 dst[24..31]
+         *   row6 = blit3 dst[16..23] row7 = blit3 dst[32..39]
+         * ramp at +16/+32 = stale-pointer proven; 0xC3 anywhere = stale
+         * SOURCE pointer; untouched 0x80+i = that window never written. */
+        /* v13: GPU-DRIVEN matrix — see gpu_blitprobe.gas for why (twelve
+         * 68k-driven rounds proved only the FIRST 68k-programmed blit ever
+         * lands on silicon; the GPU kernel is the production-proven chained
+         * programmer and is what the shipping shade pass will use anyway).
+         * The 68k only loads the kernel, points it at the buffers, kicks,
+         * and displays the 7x8 result bytes the GPU wrote to DRAM. */
+        {
+            extern const uint8_t gpu_probe_kernel[], gpu_probe_kernel_end[];
+            static volatile uint32_t bpmail[4] __attribute__((aligned(16)));
+            volatile uint32_t *gctrl = (volatile uint32_t *)0xF02114u;
+            volatile uint32_t *gpc   = (volatile uint32_t *)0xF02110u;
+            volatile uint32_t *gsram = (volatile uint32_t *)0xF03000u;
+            volatile uint32_t *gpar  = (volatile uint32_t *)0xF03F00u;
+            const uint32_t *kp = (const uint32_t *)gpu_probe_kernel;
+            uint32_t kn = (uint32_t)(gpu_probe_kernel_end - gpu_probe_kernel) / 4;
+            uint32_t j;
+            (void)pflags;
+            *gctrl = 0;
+            for (j = 0; j < kn; j++) gsram[j] = kp[j];
+            gpar[0] = (uint32_t)bp_src;
+            gpar[1] = (uint32_t)bp_dst;
+            gpar[2] = (uint32_t)&bp_res[1][0];
+            gpar[3] = (uint32_t)bpmail;
+            /* v15: ONE test per kernel kick — the game's own idiom (it
+             * re-kicks its kernel per frame and only chains within a kick,
+             * and it demonstrably works seconds before this runs). Each of
+             * the 7 tests becomes a "first blit", the only kind that has
+             * ever landed in 14 probe rounds. */
+            { int tt;
+              for (tt = 0; tt < 7; tt++) {
+                bpmail[2] = (uint32_t)tt;   /* v16: index via DRAM — 68k
+                                               stores to GPU SRAM between
+                                               kicks don't land on silicon */
+                bpmail[0] = 0;
+                *gpc   = 0xF03000u;
+                *gctrl = 1;
+                for (j = 0; j < 400000; j++) {
+                    volatile uint32_t d2;
+                    for (d2 = 0; d2 < 40; d2++) ;
+                    if (bpmail[0] == 0x0A3DD05Eu) break;
+                }
+                *gctrl = 0;
+                if (bpmail[0] != 0x0A3DD05Eu)
+                    bp_res[1 + tt][0] = 0xDD;     /* this test timed out */
+              } }
+        }
+        /* draw forever: 8 rows x 8 bytes x 8 bit-cells, plus a coarse
+         * value-bar under each row as a sanity cross-check */
+        for (;;) {
+            uint8_t *fbp = (uint8_t *)video_backbuffer();
+            int yy, xx;
+            for (i = 0; i < RENDER_W * RENDER_H; i++) fbp[i] = 0;
+            for (t = 0; t < 8; t++) {
+                int y0 = 30 + t * 22;
+                for (i = 0; i < 8; i++) {
+                    int x0 = 8 + i * 38;
+                    uint8_t v = bp_res[t][i];
+                    for (b2 = 0; b2 < 8; b2++)
+                        if (v & (0x80u >> b2))
+                            for (yy = 0; yy < 8; yy++)
+                                for (xx = 0; xx < 4; xx++)
+                                    fbp[(y0+yy)*RENDER_W + x0 + b2*4 + xx] = 255;
+                }
+                for (xx = 0; xx < bp_res[t][7]; xx++)     /* byte7 as bar */
+                    fbp[(y0+10)*RENDER_W + 8 + xx] = 255;
+            }
+            video_flip();
+        }
+        }
+    }
+}
+#endif
+
 int main(void)
 {
     const MRHdr *mh = (const MRHdr *)rooms_data;
@@ -1273,8 +1804,22 @@ int main(void)
       /* constants -> Jerry local SRAM happens later, once skv is converted */
 #ifdef SKUNK_CONSOLE
       dbg_kv("jerry_alive", g_jerry_ok);
+#ifdef ASSETSUM
+      /* DRAM-decay diagnostic (2026-07-20 streak hunt): checksum the
+         embedded assets in place and print via skunk console. Compare
+         against the host-side sum of the same .bin files; re-print every
+         ~64 frames from the main loop to catch decay-over-time. */
+      { extern const uint8_t mrt_atlas[], mrt_geom[], mrt_sect[];
+        extern const uint16_t mrt_pal[];
+        uint32_t s1=0,s2=0;
+        const uint8_t *p;
+        for(p=mrt_atlas;p<(const uint8_t*)mrt_pal;p++) s1+=*p; /* pad sums 0 */
+        for(p=mrt_geom;p<mrt_sect;p++)  s2+=*p;
+        dbg_kv("atlas_sum", (int)s1); dbg_kv("geom_sum", (int)s2); }
+#endif
 #endif
     }
+
 
 #if defined(TEXTURED) && !defined(TEXROOM)
     /* Proof-of-concept: draw a texture-mapped quad from the embedded
@@ -1307,6 +1852,9 @@ int main(void)
 #endif
 
 #ifdef TEXROOM
+#ifdef STAGEDIET
+#error TEXROOM uses legacy room0_tex (no plane prefixes) - incompatible with STAGEDIET
+#endif
     /* Render room 0 (Caves) TEXTURED: project each vertex on the 68k, emit
      * {sx,sy,u,v} per face, Tom texture-maps the spans. Slowly orbits so the
      * whole room is visible. */
@@ -1408,11 +1956,23 @@ int main(void)
              * and continue building the next while the Blitter draws it. */
             if (primed) {
                 fbpix *done; int yy, xx;
-                fbpix bc = (fc++ & 1) ? BLINK_ON : BLINK_OFF;
+                fbpix bc; bc = (fc++ & 1) ? BLINK_ON : BLINK_OFF; /* jcc68k: no side effects in initializers */
                 gpu_sync();
                 done = video_backbuffer();
                 for (yy = 0; yy < 10; yy++) for (xx = 0; xx < 10; xx++)
                     done[yy * RENDER_W + xx] = bc;
+#ifdef CLUTGUARD
+                /* CLUT diagnostic: rewrite the CLUT every frame (heals any
+                   runtime clobber) and draw an index ramp strip on rows
+                   190-198 (the CLUT's actual contents, visible on screen:
+                   healthy = ordered dark->bright ramp bands). */
+                video_set_clut(room0_pal);
+                { volatile uint16_t *clutg = (volatile uint16_t *)0xF00400u;
+                  clutg[254]=0x0000; clutg[255]=0xFFFF; }
+                for (yy = 190; yy < 199; yy++)
+                    for (xx = 0; xx < RENDER_W; xx++)
+                        done[yy*RENDER_W+xx] = (fbpix)((xx*240)/RENDER_W);
+#endif
                 video_flip();
                 video_wait_vblank();   /* pace the flip (LOWRES scaled obj needs it) */
             }
@@ -1426,7 +1986,7 @@ int main(void)
             blit_band(fb, 0, RENDER_H, CLEAR_IDX);
             if (gpu_ok && nf)
                 gpu_textured(pk, nf, fb, room0_atlas, (uint32_t)atlasW, room0_pal);
-            {   fbpix bc = (fc++ & 1) ? BLINK_ON : BLINK_OFF; int yy, xx;
+            {   fbpix bc; bc = (fc++ & 1) ? BLINK_ON : BLINK_OFF; /* jcc68k: no side effects in initializers */ int yy, xx;
                 for (yy = 0; yy < 10; yy++) for (xx = 0; xx < 10; xx++)
                     fb[yy * RENDER_W + xx] = bc; }
             video_flip();
@@ -1452,7 +2012,7 @@ int main(void)
         int offZ = (int16_t)(((uint16_t)hp[14] << 8) | hp[15]);
         const uint8_t *vp = room0_tex + 16;
         static uint32_t camblk[8];
-        static uint8_t lara_blob[12288] __attribute__((aligned(8)));
+        static uint8_t lara_blob[LARA_BLOB_SZ] __attribute__((aligned(8)));
         int minx = 1<<30, maxx = -(1<<30), miny = 1<<30, maxy = -(1<<30);
         int minz = 1<<30, maxz = -(1<<30), i, ccx, ccy, ccz;
         uint32_t fc = 0;
@@ -1537,7 +2097,7 @@ int main(void)
                 gpu_geotex(room0_tex, fb, camblk, room0_atlas, (uint32_t)atlasW);
                 gpu_geotex(lara_blob, fb, camblk, room0_atlas, (uint32_t)atlasW);
             }
-            {   fbpix bc = (fc++ & 1) ? BLINK_ON : BLINK_OFF; int yy, xx;
+            {   fbpix bc; bc = (fc++ & 1) ? BLINK_ON : BLINK_OFF; /* jcc68k: no side effects in initializers */ int yy, xx;
                 for (yy = 0; yy < 10; yy++) for (xx = 0; xx < 10; xx++)
                     fb[yy * RENDER_W + xx] = bc; }
             video_flip();
@@ -1561,9 +2121,9 @@ int main(void)
         extern const uint16_t gym_pal[];
         extern const uint8_t  gym_lara[], gym_lskin[];
         static uint32_t camblk[8];
-        static uint8_t lara_blob[12288] __attribute__((aligned(8)));
-        static uint8_t item_blob[512] __attribute__((aligned(8)));
-        static uint8_t door_blob[512] __attribute__((aligned(8)));
+        static uint8_t lara_blob[LARA_BLOB_SZ] __attribute__((aligned(8)));
+        static uint8_t item_blob[640] __attribute__((aligned(8)));
+        static uint8_t door_blob[640] __attribute__((aligned(8)));
         const uint8_t *rgeom[64]; const uint8_t *rsect[64];
         int rcx[64], rcz[64], order[64], rrad[64], rdepth[64];
         int prv[64], prx0[64], prx1[64], pry0[64], pry1[64]; /* room windows */
@@ -1589,7 +2149,11 @@ int main(void)
              selected at front, other across the ring (farther + higher);
              every item faces with the PI flip the PSX models are authored
              for. 68k rotates the tiny vert sets into scratch blobs. */
+#ifdef STAGEDIET
+          static uint8_t rblob[2][2304] __attribute__((aligned(8)));
+#else
           static uint8_t rblob[2][1280] __attribute__((aligned(8)));
+#endif
           const uint8_t *rsrc[2]; const uint8_t *ratl[2];
           int rvcnt[2], rblen[2];
           int ringR = 0, ringT = 0;    /* current/target ring angle (1024) */
@@ -1606,7 +2170,8 @@ int main(void)
              sp starts at 0x200000 and grows DOWN into the top of BSS — the
              8KB buffers left only 208 BYTES of headroom (cold-boot crash,
              2026-07-12). Makefile now guards bss_end < 0x1FC000. */
-          static const char *mnames[2] = { "MUSIC.PCM", "/MUSIC.PCM" };
+          /* (was a static char* array with string-literal initializers —
+             address constants are outside jcc68k's supported subset) */
           int mh = -1, mplay = 0;
           int msz = 0, mleft = 0;      /* gd_fread returns 0 on SUCCESS —
                                           track position via gd_fsize */
@@ -1624,15 +2189,32 @@ int main(void)
             for (it2=0; it2<2; it2++) {
               const uint8_t *sb=rsrc[it2];
               int nv=(sb[0]<<8)|sb[1], nq=(sb[2]<<8)|sb[3], nt=(sb[4]<<8)|sb[5];
+#ifndef STAGEDIET
               int len=16+nv*8+nq*24+nt*18, i3;
               if (len > (int)sizeof(rblob[0])) len = sizeof(rblob[0]);
               for (i3=0;i3<len;i3++) rblob[it2][i3]=sb[i3];
               rvcnt[it2]=nv; rblen[it2]=len;
+#else
+              /* title assets are LEGACY format — copy record-wise, inserting
+                 the dummy plane prefix the STAGEDIET kernel expects */
+              int hdr=16+nv*8, i3, f3;
+              int len=hdr+nq*QREC+nt*TREC;
+              uint16_t *w2; const uint16_t *s2;
+              if (len > (int)sizeof(rblob[0])) { nq=0; nt=0; len=hdr; }
+              for (i3=0;i3<hdr;i3++) rblob[it2][i3]=sb[i3];
+              w2=(uint16_t*)(rblob[it2]+hdr); s2=(const uint16_t*)(sb+hdr);
+              for (f3=0;f3<nq;f3++){ EMIT_PLANE(w2);
+                  for(i3=0;i3<12;i3++) w2[i3]=s2[i3]; w2+=12; s2+=12; }
+              for (f3=0;f3<nt;f3++){ EMIT_PLANE(w2);
+                  for(i3=0;i3<9;i3++) w2[i3]=s2[i3]; w2+=9; s2+=9; }
+              rvcnt[it2]=nv; rblen[it2]=len;
+#endif
             } }
 #ifndef NO_GAMEDRIVE
           { int mi;
             for (mi = 0; mi < 2 && mh < 0; mi++)
-                mh = gd_fopen(mnames[mi], GD_FOPEN_READ | GD_FOPEN_OPEN_EXISTING);
+                mh = gd_fopen(mi ? "/MUSIC.PCM" : "MUSIC.PCM",
+                              GD_FOPEN_READ | GD_FOPEN_OPEN_EXISTING);
             if (mh >= 0) { msz = gd_fsize((unsigned)mh); mleft = msz; }
             if (mh >= 0 && msz > 0) {
                 int n = mleft < (int)sizeof(mbuf[0]) ? mleft : (int)sizeof(mbuf[0]);
@@ -1671,7 +2253,8 @@ int main(void)
                           int mi;
                           gd_fclose((unsigned)mh); mh = -1;
                           for (mi = 0; mi < 2 && mh < 0; mi++)
-                              mh = gd_fopen(mnames[mi], GD_FOPEN_READ | GD_FOPEN_OPEN_EXISTING);
+                              mh = gd_fopen(mi ? "/MUSIC.PCM" : "MUSIC.PCM",
+                              GD_FOPEN_READ | GD_FOPEN_OPEN_EXISTING);
                           mleft = mh >= 0 ? msz : 0;
                       }
                       n = mleft < (int)sizeof(mbuf[0]) ? mleft : (int)sizeof(mbuf[0]);
@@ -1715,7 +2298,7 @@ int main(void)
                       for (xx2 = 0; xx2 < RENDER_W; xx2++)
                           tfb[yy2*RENDER_W+xx2] = simg[(yy2*2)*RENDER_W+xx2]; }
 #else
-                  for (i2 = 0; i2 < RENDER_W*RENDER_H; i2++) tfb[i2] = simg[i2];
+                  blit_copy(simg, tfb, RENDER_H);   /* was a 76800-iteration 68k byte loop */
 #endif
                   shown = page;
                   /* the 3D passport (TITLE.PSX model 71), orbiting */
@@ -1773,6 +2356,11 @@ int main(void)
                   video_flip();
                   video_wait_vblank();
               }
+#ifdef AUTOSTART
+              /* headless HW/emulator profiling: auto-select New Game after a
+                 short delay so no physical A press is needed to reach the level */
+              { static int _as_ctr = 0; if (++_as_ctr > 20) { g_useset = 0; page = 0; break; } }
+#endif
               if (edge & (PAD_LEFT|PAD_RIGHT)) { page ^= 1; ringT = page ? 256 : 0;
                                                  sfx_play(1, SFX_MENU_SPIN); }
               else if (edge & PAD_A) { g_useset = page;
@@ -1880,7 +2468,7 @@ int main(void)
              (The old "find a zero entry" scan stole LEGITIMATE BLACKS that
              textures referenced: Lara's head 2026-07-12, then her shorts
              turned pickup-gold in the mansion 2026-07-13. Never guess.) */
-          (void)i2;
+          
           g_pickidx = 240;
           g_dooridx = 241; }
         int i;
@@ -1891,6 +2479,11 @@ int main(void)
 
         uint32_t g_gpuC=0, acc_gpu_rooms=0, acc_gpu_lara=0, prevtot=0;
         int bar68=0,barrm=0,barla=0,barwt=0,barfps=0;   /* on-screen profile bars (px) */
+#ifdef ASSETSUM
+        static uint32_t g_sum1=0,g_sum2=0;  /* asset sums, redrawn as bit-cells */
+        static uint32_t g_blt=0;            /* Blitter self-test result sum */
+        static uint8_t  g_bltbuf[640] __attribute__((aligned(8)));
+#endif
 #endif
         static uint8_t rwater[64];           /* per-room WATER flag */
         if (roomCount > 64) roomCount = 64;
@@ -1909,9 +2502,19 @@ int main(void)
               /* room bounding radius (half-diagonal) so the cull is CONSERVATIVE:
                  a room only culls when ENTIRELY behind/beyond, never when you're
                  standing in it or it's partly in view (that caused black bg). */
-              long long hx=(long long)xS*512, hz=(long long)zS*512;
-              long long r2=hx*hx+hz*hz; int r=1;
-              while ((long long)(r+1)*(r+1) <= r2) r++;   /* isqrt */
+              /* fast integer isqrt (bit-by-bit), 32-BIT form (jcc68k has no
+                 64-bit long long): half-diagonal at 1/4 scale — h/4 <= 16384
+                 for rooms up to 128 sectors, so (h/4)^2*2 fits uint32 — then
+                 scale the root back (+4 keeps the radius CONSERVATIVE: too
+                 big never culls a visible room). Replaces an O(sqrt) linear
+                 scan (r reached ~70k per room) that dominated level-load. */
+              uint32_t h4x=(uint32_t)xS*128u, h4z=(uint32_t)zS*128u;
+              uint32_t r2=h4x*h4x+h4z*h4z;
+              uint32_t root=0, bit=1u<<30;
+              while (bit>r2) bit>>=2;
+              while (bit){ if (r2>=root+bit){ r2-=root+bit; root=(root>>1)+bit; }
+                          else root>>=1; bit>>=2; }
+              int r=(int)(root*4u+4u); if (r<1) r=1;
               rcx[i] = ix + xS*512; rcz[i] = iz + zS*512; rrad[i] = r; }
         }
         /* Lara mesh + start in room 0 (first in the set), on the floor */
@@ -1966,9 +2569,13 @@ int main(void)
               extern void jerry_pose_setup(const int16_t*,int,const int16_t*,int,const int32_t*);
               jerry_pose_setup(skv, (g_lnv*3*2+3)/4, sknode, ((mc-1)*4*2+3)/4, SINTAB);
           }
-#if defined(JERRYPOSE) && defined(SKUNK_CONSOLE)
+#if defined(JERRYPOSE) && defined(SKUNK_CONSOLE) && !defined(QUIETFPS)
           /* JERRY MATH SELF-TEST: pose frame 0 on BOTH processors, compare
-             every vert. Definitive fixed-point verification, no eyes needed. */
+             every vert. Definitive fixed-point verification, no eyes needed.
+             QUIETFPS builds SKIP this: the rx_ leg still kicks CMD=2 (roomx,
+             DELETED from dsp_pose 2026-07-20) and can wedge Jerry so the
+             next pose sync hangs boot forever — hit on silicon (AB run 2
+             froze at rx_j1; run 1 got lucky). Play builds never ran this. */
           if (g_jerry_ok) {
               extern void jerry_pose_kick(const void*,const void*,const void*,
                   const void*,const void*,void*,int32_t,int32_t,int32_t,
@@ -2207,6 +2814,29 @@ int main(void)
         for (;;) {
             uint32_t pad;
             HLP(0);
+#ifdef PROFILE
+            { uint32_t _fc = frame_count;
+              if (pftop) pftt2 += _fc - pftop;
+              pftop = _fc; }
+#endif
+#ifdef GOVERNOR
+            /* control step: last frame's VBL span decides this frame's cap */
+            { static uint32_t gov_last;
+              uint32_t gov_now = frame_count, gov_span = gov_now - gov_last;
+              gov_last = gov_now;
+              if (!g_gov_on) {
+                  if (gov_span > GOV_HI && g_gov_user > 1) {
+                      g_gov_on = 1; g_gov_calm = 0; g_gov_trips++;
+                      g_hopcap = 1; g_hop_cached_a = -1;
+                  }
+              } else if (gov_span <= GOV_LO) {
+                  if (++g_gov_calm >= GOV_K) {
+                      g_gov_on = 0;
+                      g_hopcap = g_gov_user; g_hop_cached_a = -1;
+                  }
+              } else g_gov_calm = 0;
+            }
+#endif
 #ifdef BOOTCRUMBS
             /* METRONOME: fire a footstep every second (audible pitch check;
                the live v0-drain bar below shows the service rate) */
@@ -2217,8 +2847,11 @@ int main(void)
                   nextstep = frame_count + 60;
               } }
 #endif
-#ifdef SKUNK_CONSOLE
-            /* stream the raw probe counters every ~5s of vblanks */
+#if defined(SKUNK_CONSOLE) && !defined(QUIETFPS)
+            /* stream the raw probe counters every ~5s of vblanks.
+               QUIETFPS builds silence this: every skunk print STALLS the
+               68k, and the periodic streams throttled the game to 1.19fps
+               (vs 4.0 silent) — poisoning fps A/B runs. */
             { extern volatile uint32_t frame_count;
               static uint32_t nextvb, lws, lvc;
               if (frame_count >= nextvb) {
@@ -2281,6 +2914,55 @@ int main(void)
             }
 #endif
             pad = joypad_read();  /* no per-frame SD poll (see menu note) */
+#ifdef HOPDIAL
+            { static uint32_t hdprev;
+              if (pad & PAD_OPTION) {
+#ifdef GOVERNOR
+                  /* the dial edits the RESTORE TARGET; it lands immediately
+                     unless the governor is clamping right now */
+                  if ((pad & PAD_RIGHT) && !(hdprev & PAD_RIGHT) && g_gov_user < 4)
+                      { g_gov_user++;
+                        if (!g_gov_on) { g_hopcap = g_gov_user; g_hop_cached_a = -1; }
+                        dbg_kv("hopcap", g_gov_user); }
+                  if ((pad & PAD_LEFT) && !(hdprev & PAD_LEFT) && g_gov_user > 1)
+                      { g_gov_user--;
+                        if (!g_gov_on) { g_hopcap = g_gov_user; g_hop_cached_a = -1; }
+                        dbg_kv("hopcap", g_gov_user); }
+#else
+                  if ((pad & PAD_RIGHT) && !(hdprev & PAD_RIGHT) && g_hopcap < 4)
+                      { g_hopcap++; g_hop_cached_a = -1; dbg_kv("hopcap", g_hopcap); }
+                  if ((pad & PAD_LEFT) && !(hdprev & PAD_LEFT) && g_hopcap > 1)
+                      { g_hopcap--; g_hop_cached_a = -1; dbg_kv("hopcap", g_hopcap); }
+#endif
+#ifdef FARDIAL
+                  if ((pad & PAD_UP) && !(hdprev & PAD_UP) && g_fardist < 12000)
+                      { g_fardist += 1000; dbg_kv("fard", g_fardist); }
+                  if ((pad & PAD_DOWN) && !(hdprev & PAD_DOWN) && g_fardist > 2000)
+                      { g_fardist -= 1000; dbg_kv("fard", g_fardist); }
+                  pad &= ~(PAD_UP|PAD_DOWN);
+#endif
+                  hdprev = pad;
+                  pad &= ~(PAD_LEFT|PAD_RIGHT|PAD_OPTION);
+              } else hdprev = pad; }
+#endif
+#ifdef ABLADDER
+            /* content ladder: OPTION+UP/DOWN steps the admitted-room count
+               (0 = Lara alone). Arrows are eaten while OPTION is held so
+               Lara stands still during the sweep; each step prints
+               abrooms= to the console next to the rolling fps100=. */
+            { static uint32_t abprev;   /* dbg_kv comes from skunkdbg.h
+                                           (macro no-op when console off) */
+              if (pad & PAD_OPTION) {
+                  if ((pad & PAD_UP) && !(abprev & PAD_UP) && g_abrooms < 99)
+                      { g_abrooms++; dbg_kv("abrooms", g_abrooms); }
+                  if ((pad & PAD_DOWN) && !(abprev & PAD_DOWN) && g_abrooms > -1)
+                      { g_abrooms--; dbg_kv("abrooms", g_abrooms); }
+                  /* rung -1: Lara's dispatch is skipped too (pose still
+                     runs) — rung0-minus-rung-1 = her pure GPU render cost */
+                  abprev = pad;
+                  pad &= ~(PAD_UP|PAD_DOWN|PAD_OPTION);
+              } else abprev = pad; }
+#endif
 #ifdef HEADSPIN
             g_layaw = (uint8_t)(g_layaw + 3);   /* diagnostic: spin Lara */
 #endif
@@ -2637,6 +3319,34 @@ int main(void)
                   if (got) { prv[i]=1; prx0[i]=ux0; prx1[i]=ux1;
                              pry0[i]=uy0; pry1[i]=uy1; }
                 } }
+#ifdef M68D_A2
+            /* PERFHUNT A2: sort ONLY the rooms the admit loop can accept
+               (rdepth<=3 && prv!=0 — its own first filters), with the
+               Manhattan distance hoisted out of the O(n^2) inner loop
+               (legacy recomputed BOTH distances every inner iteration:
+               38 rooms -> 703 iters x 2 iabs pairs, the main+0x1500 hot
+               bucket).  Same comparator + same ascending scan order =
+               identical relative order of every admitted room; skipped
+               rooms never influenced comparisons.  g_m68d_nord bounds the
+               admit loop below. */
+            { int nc = 0, cdist[64];
+              for (i=0;i<roomCount;i++)
+                  if (rdepth[i]<=3 && prv[i]) {
+                      order[nc]=i;
+                      cdist[nc]=mr_iabs(rcx[i]-camx)+mr_iabs(rcz[i]-camz);
+                      nc++; }
+              for (i=0;i<nc-1;i++) {
+                  int j, best=i;
+                  for (j=i+1;j<nc;j++) {
+                      if (rdepth[order[j]]>rdepth[order[best]] ||
+                          (rdepth[order[j]]==rdepth[order[best]] &&
+                           cdist[j]>cdist[best])) best=j;
+                  }
+                  { int t=order[i]; order[i]=order[best]; order[best]=t;
+                    t=cdist[i]; cdist[i]=cdist[best]; cdist[best]=t; }
+              }
+              g_m68d_nord = nc; }
+#else
             for (i=0;i<roomCount;i++) order[i]=i;
             for (i=0;i<roomCount-1;i++) {
                 int j, best=i;
@@ -2649,23 +3359,86 @@ int main(void)
                 }
                 { int t=order[i]; order[i]=order[best]; order[best]=t; }
             }
+#endif
+#ifdef M68PAD
+            /* AUTOPSY DISCRIMINATOR (2026-07-22): burn ~M68PAD iterations of
+               DRAM-touching 68k busy-work at the exact point the M68DIET
+               savings came out of the frame (end of the hl_logic segment,
+               inside the PIPELINE overlap window).  If M68DIET+M68PAD
+               recovers ref fps on silicon, the toxin is the CHANGED 68k
+               TIMELINE (duration/phase), not the diet code itself; if it
+               stays slow, the toxin is in a specific piece (bisect via
+               M68A1/M68A2/M68A3).  ~5 instructions + 1 DRAM data read per
+               iteration; M68PAD=7000 modeled ~= the removed ~34K
+               instructions/render at spawn. */
+            { static volatile int m68pad_sink;
+              int _pi, _ps = 0;
+              for (_pi = 0; _pi < (M68PAD); _pi++) _ps += rcx[_pi & 31];
+              m68pad_sink = _ps; }
+#endif
 #ifdef PROFILE
             pfA = frame_count;
 #endif
             HLP(1);
+#if defined(PIPELINE) && PIPESTAGE >= 1
+            /* PIPELINE collect point: the logic above ran while Tom finished
+               the previous frame. Present it before any blitter (clear) or
+               pose (lara_blob) work — both would collide with a live render. */
+#ifdef PACEPROBE
+            { uint32_t _n = PPNOW();
+              if (pp_prev0) { uint32_t _d = _n - pp_prev0;
+                  if (_d < 60000u) { pp_per += _d; if (_d > pp_pmax) pp_pmax = _d; } }
+              pp_prev0 = _n; }
+#endif
+            if (g_tominflight) {
+#ifdef PACEPROBE
+                { uint32_t _t0 = PPNOW();
+                  gpu_sync(); g_tominflight = 0;
+                  { uint32_t _t1 = PPNOW();
+                    uint32_t _w = _t1 - _t0, _s = _t1 - pp_kick;
+                    pp_coll++;
+                    PPADD(pp_wait, _w);
+                    PPADD(pp_span, _s);
+                    if (_w < 60000u && _w > pp_wmax) pp_wmax = _w;
+                    if (_s < 60000u && _s > pp_smax) pp_smax = _s; } }
+#else
+                gpu_sync(); g_tominflight = 0;
+#endif
+            }
+            if (g_pipeframe)   { video_flip(); g_pipeframe = 0; }
+#endif
+#ifdef FARDIAL
+            /* kernel far-cull distance: GPU SRAM poke — MUST be post-collect
+               (Tom idle here) and pre-kick. */
+            *(volatile uint32_t *)0xF03F3Cu = (uint32_t)g_fardist;
+#endif
             fb = video_backbuffer();
             /* the ~76KB Blitter phrase-fill saturates the bus for 1-2ms; if
                it covers the vblank ISR's OP-list rebuild window the top
                scanlines drop for a field (the "bounce"). Dodge the window
                (see video_wait_safe_vc in video.c). */
+#ifdef PACEPROBE
+            { uint32_t _ta = PPNOW();
+              { extern void video_wait_safe_vc(void); video_wait_safe_vc(); }
+              { uint32_t _tb = PPNOW();
+                blit_band(fb, 0, RENDER_H, CLEAR_IDX);
+                { uint32_t _tc = PPNOW();
+                  PPADD(pp_safe, _tb - _ta);
+                  PPADD(pp_blit, _tc - _tb); } } }
+#else
             { extern void video_wait_safe_vc(void); video_wait_safe_vc(); }
             blit_band(fb, 0, RENDER_H, CLEAR_IDX);
+#endif
             HLP(2);
 #ifdef PROFILE
             pfB = frame_count;
 #endif
             if (gpu_ok) {
+                RP_ALL();
                 int ndrawn = 0;
+#ifdef ABLADDER
+                int abinc = 0;   /* rooms admitted this frame (cap g_abrooms) */
+#endif
                 int posed = 0;
                 int lara_disp = 0;
                 njx = 0;
@@ -2694,10 +3467,16 @@ int main(void)
 #endif
                 /* frustum cull: skip rooms behind the camera or past the far clip.
                    The 5-room draw was ~60% of the frame and most aren't visible. */
-                for (k=0;k<roomCount;k++) {
+                RP(1);
+                for (k=0;k<M68D_ORD_N;k++) {
                     int ri = order[k];
-                    long long dxl=(long long)(rcx[ri]-camx), dzl=(long long)(rcz[ri]-camz);
-                    int depth = (int)((dxl*(long long)sY + dzl*(long long)cY) >> 16);
+                    /* 32-bit depth (no long long under jcc68k): pre-shift
+                       so the products fit — dx/16 (<=~6250) * trig/256
+                       (<=256) then >>4 restores the >>16 scale. Precision
+                       cost <= a few hundred world units, well inside the
+                       +-rrad conservative margins below. */
+                    int dxl=(rcx[ri]-camx)>>4, dzl=(rcz[ri]-camz)>>4;
+                    int depth = (dxl*(sY>>8) + dzl*(cY>>8)) >> 4;
 #ifdef ROOMCAP
                     /* perf experiment: draw only the ROOMCAP NEAREST rooms
                        (order[] is far-first, so the nearest are the last). */
@@ -2723,6 +3502,18 @@ int main(void)
                     if (ri != g_curroom && prv[ri] == 1 &&
                         (prx1[ri] - prx0[ri] < 16 || pry1[ri] - pry0[ri] < 6))
                         continue;
+#ifdef ABLADDER
+                    /* content ladder: admit only the first g_abrooms rooms
+                       (loop order); 0 = Lara alone. OPTION+UP/DOWN live. */
+                    if (abinc >= g_abrooms) continue;
+                    abinc++;
+#endif
+#ifdef HOPDIAL
+                    /* draw-distance dial: portal-hop cap (4 = uncapped) */
+                    if (g_hopcap <= 3 &&
+                        !room_withinK(g_curroom, ri, g_hopcap,
+                                      &g_hop_cached_a, g_hop_inset)) continue;
+#endif
                     /* PORTAL-WINDOW CLIP: neighbour rooms render only inside
                        the doorway rect they're seen through; invisible
                        doorway = the room isn't drawn AT ALL. */
@@ -2756,7 +3547,20 @@ int main(void)
                         { int rqc = rd16(rgeom[ri]+2), rtc = rd16(rgeom[ri]+4);
                         /* njx cap 5: hand Jerry only what he finishes AHEAD
                            of Tom's polls; the rest self-transform (no wait) */
+#ifndef JERRYX
+                        /* RETIRED 2026-07-19: handing rooms to Jerry to co-transform
+                           ahead of Tom measured 4.59 fps vs 4.59 fps and a 0-pixel
+                           render diff — ZERO benefit — while costing a cross-chip
+                           protocol: the jcache flag arming dance, and the ordering
+                           hazard where a stale flag=2 orphaned in Jerry's posted
+                           queue could land AFTER the arm, making Tom trust last
+                           frame's cache (stale-camera "geometry towers", HW-seen).
+                           Tom self-transforms every room instead.
+                           `make JERRYX=1` restores it. */
+                        if (0) {
+#else
                         if (ndrawn > 0 && rvc <= 512 && rqc <= 448 && rtc <= 256 && njx < 5) {
+#endif
 #endif
                             cp = (uint32_t)&jcache[njx][4];
                             /* flag armed LATER (post pose-sync) — see kick */
@@ -2781,6 +3585,7 @@ int main(void)
 #else
                 /* props join the SAME dispatch (they don't depend on Jerry):
                    door then item, full-screen clips, after all rooms */
+                RP(2);
 #ifdef DEMO_PROPS
                 if (g_dooryoff > -1500 && ndrawn < 8) {
                     build_door_blob(door_blob, atlasW);
@@ -2799,7 +3604,12 @@ int main(void)
                     ndrawn++;
                 }
 #endif /* DEMO_PROPS */
+                RP(3);
+#ifdef ABLADDER
+                if (1) {   /* g_abrooms=0 must still dispatch Lara alone */
+#else
                 if (ndrawn) {
+#endif
                     /* PIPELINE: Tom starts room 0 (self-transform) while the
                        68k reads Jerry's pose; Jerry then transforms rooms
                        1..N AHEAD of Tom's raster (Tom polls per-room flags,
@@ -2818,10 +3628,10 @@ int main(void)
                         extern void jerry_pose_read(void*,int);
                         extern void jerry_roomx_kick(const void*, const void*);
                         jerry_pose_sync();
-                        HLP(3);
+                        HLP(3); RP(4);
                         /* Jerry wrote lara_blob+16 directly (params[6]) */
                         lara_finish(lara_blob, atlasW);
-                        HLP(4);
+                        HLP(4); RP(5);
                         HB(2);   /* stage 2: pose consumed */
                         if (njx) {
                             /* OT PARKED: Jerry transforms only; his flag=2
@@ -2846,7 +3656,7 @@ int main(void)
                             video_wait_safe_vc();
                             jerry_roomx_kick(jxlist, camblk);
                         }
-                        HLP(5);
+                        HLP(5); RP(6);
                         g_jerry_frame_done = 1;
                     }
 #endif
@@ -2855,7 +3665,16 @@ int main(void)
                        she paints over everything. Saves the second kick +
                        gpu_sync round-trip per frame; lara_finish completed
                        before this point so the blob is whole. */
+#ifdef ABLADDER
+                    if (g_abrooms >= 0)
+#endif
                     { uint32_t dn = displist[0];
+                      /* bit0 of the blob ptr = PER-PACKET NO-CULL (kernel
+                         NCULF). Not set anymore: the extractor's LARA
+                         WINDING FIX reorients her 11 inconsistently-wound
+                         faces (broken elbows / see-through, 2026-07-20), so
+                         she culls correctly like everything else. The flag
+                         plumbing stays for future double-sided models. */
                       displist[1+dn*4+0] = (uint32_t)lara_blob;
                       displist[1+dn*4+1] = (0u<<16) | 319u;
                       displist[1+dn*4+2] = (0u<<16) | (uint32_t)(RENDER_H-1);
@@ -2871,21 +3690,38 @@ int main(void)
                       static uint32_t batch[1+8*4];
                       while (base < total) {
                         uint32_t bn = total - base, bi;
-                        if (bn > 8) bn = 8;
+                        if (bn > 3) bn = 3;   /* matches the 3-entry SRAM list */   /* matches the shrunken SRAM
+                                                 dispatch list (gpu.c) */
                         batch[0] = bn;
                         for (bi = 0; bi < bn*4; bi++)
                             batch[1+bi] = displist[1+base*4+bi];
                         gpu_geotex_dispatch(batch, fb, camblk, S_atlas, (uint32_t)atlasW);
                         HB(1);   /* stage 1: dispatch kicked */
-                        gpu_sync();
                         base += bn;
+#ifdef PIPELINE
+                        /* inner batches must drain before the SRAM list is
+                           reused; the LAST stays IN FLIGHT — next frame's
+                           68k logic runs under it (sync at loop top). Flag
+                           set HERE so anything downstream that must own the
+                           Blitter/GPU can test-and-collect first. */
+                        if (base < total) gpu_sync();
+                        else {
+                            g_tominflight = 1;
+#ifdef PACEPROBE
+                            pp_kick = PPNOW();
+#endif
+                        }
+#else
+                        gpu_sync();
+#endif
                       } }
                     HLP(6);
                     HB(12);  /* stage 12: Tom done (all rooms) */
+                    RP(7);
                 } else if (posed < 2) {
                     build_lara_tex(lara_blob, atlasW); posed = 2;
                 }
-#ifdef PROFILE
+#if defined(PROFILE) && !defined(PIPELINE)
                 /* rooms-drawn dots (row 33, left): one 4px dot per room drawn */
                 { int d,xx; for (d=0;d<ndrawn;d++)
                     for (xx=0;xx<4;xx++) fb[33*RENDER_W + 8 + d*8 + xx] = 255; }
@@ -2910,6 +3746,14 @@ int main(void)
                 if (!lara_disp) {
                     /* fallback (dispatch list full or no rooms drawn):
                        Lara gets her own kick, painted last as before */
+#ifdef PIPELINE
+                    if (g_tominflight) {
+                        gpu_sync(); g_tominflight = 0;
+#ifdef PACEPROBE
+                        pp_mid++;
+#endif
+                    }
+#endif
                     gpu_geotex_setclip(0, 319, 0, RENDER_H-1);
                     gpu_geotex(lara_blob, fb, camblk, S_atlas, (uint32_t)atlasW);
                 }
@@ -2934,20 +3778,67 @@ int main(void)
             /* pickup counter: g_pickups white dots at top-right */
             { int d,xx; for (d=0;d<g_pickups && d<8;d++)
                 for (xx=0;xx<6;xx++) fb[3*RENDER_W + (RENDER_W-8) - d*8 + xx] = 255; }
-#ifdef PROFILE   /* white bars on a black strip; rows: 68k / 5rooms / lara / wait.
-                    255=white,254=black are reserved (not used by scene). Read the
-                    bar LENGTHS by row (each = phase_time / total_frame_time). */
-            { int yy,xx;
-              for (yy=10;yy<30;yy++) for (xx=0;xx<RENDER_W;xx++) fb[yy*RENDER_W+xx]=254;
+#if defined(PROFILE) && !defined(PIPELINE)
+                 /* white bars on a black strip; rows: 68k / 5rooms / lara / wait.
+                    PIPELINE builds draw NO on-screen instrument: the strip
+                    clear is a Blitter grab and Tom is still rendering — it
+                    wedged the kernel (the all-black pipeline bug). The
+                    console fps100 print is the instrument there. */
+            { int xx;
+              /* Blitter fill, NOT a 68k byte loop: the pc-histogram (floor
+                 campaign, 2026-07-20) showed this strip clear as the #1 68k
+                 line item — 14.2% of awake cycles drawing our own instrument. */
+              blit_band(fb, 10, 30, 254);
               for (xx=0;xx<bar68;xx++) fb[12*RENDER_W+xx]=255;
               for (xx=0;xx<barrm;xx++) fb[16*RENDER_W+xx]=255;
               for (xx=0;xx<barla;xx++) fb[20*RENDER_W+xx]=255;
               for (xx=0;xx<barwt;xx++) fb[24*RENDER_W+xx]=255;
               /* row 5 = ABSOLUTE fps (px = fps*100/3): longer = FASTER. Compare
                  builds directly by this bar's length. */
-              for (xx=0;xx<barfps;xx++) fb[28*RENDER_W+xx]=255; }
+              for (xx=0;xx<barfps;xx++) fb[28*RENDER_W+xx]=255;
+#ifdef ASSETSUM
+              { int b;
+                for (b=0;b<32;b++) for (xx=0;xx<6;xx++) {
+                  fb[32*RENDER_W + b*8+xx] = (uint8_t)(((g_sum1>>(31-b))&1) ? 255:254);
+                  fb[36*RENDER_W + b*8+xx] = (uint8_t)(((g_sum2>>(31-b))&1) ? 255:254);
+                  fb[40*RENDER_W + b*8+xx] = (uint8_t)(((g_blt >>(31-b))&1) ? 255:254); } }
 #endif
+            }
+#endif
+#ifdef BLITPROBE
+            /* after ~15s of proven in-game chained rendering, hot-swap the
+             * probe kernel into GPU SRAM and run the matrix IN the working
+             * environment (never returns) */
+            if (frame_count > 900)
+                blitprobe_run();
+#endif
+#ifdef CLUTGUARD
+            /* CLUT diagnostic (MULTIROOM loop): rewrite the CLUT every
+               frame and draw the palette index ramp on rows 190-198. */
+            video_set_clut(S_pal);
+            { volatile uint16_t *clutg = (volatile uint16_t *)0xF00400u;
+              clutg[254]=0x0000; clutg[255]=0xFFFF; }
+            { int yy,xx;
+              for (yy = 190; yy < 199; yy++)
+                for (xx = 0; xx < RENDER_W; xx++)
+                  fb[yy*RENDER_W+xx] = (fbpix)((xx*240)/RENDER_W); }
+#endif
+#ifdef PIPELINE
+            /* flip deferred: Tom may still be drawing this frame. The next
+               iteration's LOGIC runs under him; sync+flip happen at loop top
+               before any blitter/fb/pose work. PROFILE caveats: phase stamps
+               HLP(6)/HB(12) now mean "kick done" not "Tom done", and bars
+               drawn above may race Tom's spans (cosmetic, PROFILE only).
+               PIPESTAGE bisect: 0 = collect immediately (null overlap window,
+               mechanism test), 2 = full overlap (collect after next logic). */
+            g_pipeframe = 1;
+#if PIPESTAGE == 0
+            if (g_tominflight) { gpu_sync(); g_tominflight = 0; }
+            if (g_pipeframe)   { video_flip(); g_pipeframe = 0; }
+#endif
+#else
             video_flip();
+#endif
             HLP(7);
             /* FREE-RUN: no vblank wait. Triple buffering means the flip is
                latched by the vblank ISR whenever it lands; the render loop
@@ -2957,6 +3848,15 @@ int main(void)
             /* accumulate per-phase vblank deltas; recompute bars every 60 frames.
                bar length (px) = phase_vblanks / total_vblanks * (RENDER_W-16). */
             pf68 += pfB-pfA; pfrm += pfC-pfB; pfla += pfD-pfC;
+            /* rooms-block split: 1=jerry-kick 2=room-loop 3=props 4=dispatch.
+               RP_ALL() stamped all slots at block entry, so a skipped phase
+               yields 0 and no probe can go stale across frames. */
+            { int _i; for (_i=1;_i<8;_i++) {
+                /* forward-fill: a probe inside a branch that did not run still
+                   holds the block-entry stamp, which is EARLIER than its
+                   predecessor and would underflow to ~2^32. Clamp instead. */
+                if (g_rp[_i] < g_rp[_i-1]) g_rp[_i] = g_rp[_i-1];
+                g_rpa[_i] += g_rp[_i]-g_rp[_i-1]; } }
             { int hi; for (hi=1; hi<8; hi++) {
                 uint32_t d = hlm[hi]-hlm[hi-1];
                 if (d < 60000u) hla[hi] += d; }
@@ -2969,6 +3869,21 @@ int main(void)
               acc_gpu_rooms += g_gpuC - prevtot; /* rooms-phase GPU delta      */
               acc_gpu_lara  += tot - g_gpuC;     /* lara-phase GPU delta       */
               prevtot = tot; }
+            { uint32_t fvbl = frame_count - pfA;   /* this render's VBL span */
+              static uint32_t maxvbl2;
+              if (fvbl > maxvbl2) maxvbl2 = fvbl;
+              if (pfn >= 59) {   /* about to close the block: report + reset */
+                  dbg_kv("maxvbl", (long)maxvbl2);
+                  { extern uint32_t g_syncspins; static uint32_t lspin;
+                    dbg_kv("spind", (long)(g_syncspins - lspin));
+                    lspin = g_syncspins; }
+#ifdef GOVERNOR
+                  { static uint32_t ltrip;
+                    dbg_kv("govt", (long)(g_gov_trips - ltrip));
+                    ltrip = g_gov_trips; }
+#endif
+                  maxvbl2 = 0;
+              } }
             pftt += frame_count-pfA; pfn++;
             if (pfn >= 60) {
                 int W = RENDER_W-16, den = pftt ? (int)pftt : 1;
@@ -2978,10 +3893,89 @@ int main(void)
                 /* ABSOLUTE fps bar (row 5): px = fps*100/3, so 3fps=100px,
                    6fps=200px. Longer = FASTER. Compare builds by this directly. */
                 { int fps100 = (int)((6000L*(long)pfn)/(long)den);
-                  barfps = fps100/3; if (barfps > RENDER_W-1) barfps = RENDER_W-1; }
+                  barfps = fps100/3; if (barfps > RENDER_W-1) barfps = RENDER_W-1;
+                  /* capture-independent readout (B-feed video capture is dead
+                     2026-07-20): NOGD builds stream the number over the skunk
+                     console every 60-render block. NOTE under STAGEDIET the
+                     phase bars (bar68/rm/la) read garbage — CAMLOC reuses
+                     $F03EF0-FF — but this fps100 is pure VBL math, honest. */
+                  dbg_kv("fps100", fps100);
+                  /* fpsT: loop-top..loop-top window — includes logic. THE
+                     honest number (fps100 kept only for ledger continuity). */
+                  { int fpsT = pftt2 ? (int)((6000L*(long)pfn)/(long)pftt2) : 0;
+                    dbg_kv("fpsT", fpsT); }
+                  pftt2 = 0;
+#if defined(QUIETFPS) && defined(SKUNK_CONSOLE)
+                  /* FLOOR DECOMPOSITION (compact, every 4th block = ~7 prints
+                     per ~30-60s, no fps skew worth caring about): the 68k
+                     sub-phase halfline counters over the last 4 blocks.
+                     hlw_pose = jerry_pose_sync wait (the floor's prime
+                     suspect), hl_tom = dispatch..sync (Tom render + wait). */
+                  { static int abdet;
+                    if (++abdet >= 4) { abdet = 0;
+                      dbg_kv("hl_logic", hla[1]);
+                      dbg_kv("hl_clear", hla[2]);
+                      dbg_kv("hlw_pose", hla[3]);
+                      dbg_kv("hlr_pose", hla[4]);
+                      dbg_kv("hl_mdep",  hla[8]);
+                      dbg_kv("hl_tom",   hla[6]);
+                      dbg_kv("hl_flip",  hla[7]);
+                      { int hi; for (hi=0;hi<10;hi++) hla[hi]=0; }
+#ifdef PACEPROBE
+                      dbg_kv("pp_wait", pp_wait);
+                      dbg_kv("pp_span", pp_span);
+                      dbg_kv("pp_safe", pp_safe);
+                      dbg_kv("pp_blit", pp_blit);
+                      dbg_kv("pp_mid",  pp_mid);
+                      dbg_kv("pp_per",  pp_per);
+                      dbg_kv("pp_pmax", pp_pmax);
+                      dbg_kv("pp_coll", pp_coll);
+                      dbg_kv("pp_wmax", pp_wmax);
+                      dbg_kv("pp_smax", pp_smax);
+                      { extern uint32_t g_synccalls; static uint32_t lsc;
+                        dbg_kv("synk", (long)(g_synccalls - lsc));
+                        lsc = g_synccalls; }
+                      pp_wait = pp_span = pp_safe = pp_blit = pp_mid = 0;
+                      pp_per = pp_pmax = pp_coll = pp_wmax = pp_smax = 0;
+#endif
+                  } }
+#endif
+                  }
+#ifdef ASSETSUM
+                /* console-independent readout: recompute the atlas+geom sums
+                   every 60 renders and draw them as 32 bit-cells on fb rows
+                   32 (atlas) / 36 (geom), 8px/cell, white=1 — readable from
+                   any video capture even with the skunk console dead. */
+                { extern const uint8_t mrt_atlas[], mrt_geom[], mrt_sect[];
+                  extern const uint16_t mrt_pal[];
+                  const uint8_t *p;
+                  g_sum1=0; g_sum2=0;
+                  for(p=mrt_atlas;p<(const uint8_t*)mrt_pal;p++) g_sum1+=*p;
+                  for(p=mrt_geom;p<mrt_sect;p++) g_sum2+=*p;
+                  /* BLITTER SELF-TEST: copy one 320B atlas row through the
+                     production blit_copy path, 68k-sum the RESULT (row-40
+                     cells). Healthy = stable and equal to the 68k source
+                     sum; a damaged Blitter datapath differs/flickers. */
+                  { const uint8_t *src = mrt_atlas + 4096; uint32_t i;
+                    for(i=0;i<320;i++) g_bltbuf[i]=0xA5;
+                    blit_copy(src, g_bltbuf, 1);
+                    g_blt=0; for(i=0;i<320;i++) g_blt+=g_bltbuf[i]; } }
+#endif
 #ifdef SKUNK_CONSOLE
+#ifdef QUIETFPS
+                if (0) {   /* ~20 prints/block stall the 68k (1.19 vs 4.0 fps);
+                              QUIETFPS keeps only the fps100 line above */
+#else
                 if (skunk_up()) {
+#endif
                     dbg_kv("=== MULTIROOM vbl over 60 frames ===", pfn);
+#ifdef ASSETSUM
+                    { extern const uint8_t mrt_atlas[];
+                      extern const uint16_t mrt_pal[];
+                      uint32_t s1=0; const uint8_t *p;
+                      for(p=mrt_atlas;p<(const uint8_t*)mrt_pal;p++) s1+=*p;
+                      dbg_kv("atlas_sum_now", (int)s1); }
+#endif
                     dbg_kv("total_vbl", pftt);
                     dbg_kv("68k+clear", pf68);
                     dbg_kv("rooms", pfrm);

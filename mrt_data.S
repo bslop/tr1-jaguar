@@ -102,3 +102,13 @@ gym_lara:
 gym_lskin:
 	.incbin "gym_lskin.bin"
 	.section .note.GNU-stack,"",%progbits
+
+/* jcc68k keeps the statically-dead single-room data references that
+ * gcc -O2 eliminates under MULTIROOM (see Makefile OBJS comment); the
+ * paths are unreachable at runtime, so empty stubs satisfy the link. */
+	.section .rodata
+	.globl	rooms_data
+	.globl	lara_data
+rooms_data:
+lara_data:
+	.long	0

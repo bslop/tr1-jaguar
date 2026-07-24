@@ -132,17 +132,25 @@ vblank_stub:
 					| diagnostic ISR paints it, and a
 					| hung main loop shows up as a
 					| stable PC (poor man's profiler)
-	movem.l	%d0-%d1/%a0-%a1,-(%sp)
-	move.w	0xF000E0,%d1		| INT1 read = pending sources
-	btst	#0,%d1			| video pending?
+	movem.l	%d0-%d2/%a0-%a1,-(%sp)
+	move.w	0xF000E0,%d2		| INT1 read = pending sources (d2: survives
+					| the C handler; d1 is gcc scratch)
+	btst	#0,%d2			| video pending?
 	beq.s	1f
 	jsr	vblank_handler		| only run the frame flip on VIDEO ints
 1:
-	movem.l	(%sp)+,%d0-%d1/%a0-%a1
-	| ack video+GPU latches, keep video+GPU enabled. (GPU-done ints just wake
-	| the 68k out of STOP in gpu_sync — no handler work needed.)
-	move.w	#0x0303,0xF000E0	| INT1: clear video+GPU latches, enable both
+	| ack ONLY the latches observed at entry. The old blanket #$0303 ack
+	| also cleared a GPU-done that latched DURING this ISR — eaten unseen,
+	| leaving the next STOP to sleep into the following VBL (lost wakeup,
+	| the PACING cadence-lock accomplice). An unobserved latch now stays
+	| pending and re-fires right after RTE. (GPU-done ints just wake the
+	| 68k out of STOP in gpu_sync — no handler work needed.)
+	lsl.w	#8,%d2			| pending -> clear bits (INT1 write 8..12)
+	andi.w	#0x1F00,%d2
+	ori.w	#0x0003,%d2		| keep video+GPU enabled
+	move.w	%d2,0xF000E0
 	move.w	#0x0000,0xF000E2	| INT2: resume
+	movem.l	(%sp)+,%d0-%d2/%a0-%a1
 	rte
 
 	.section .note.GNU-stack,"",%progbits

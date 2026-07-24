@@ -7,6 +7,12 @@
  * protocol and DRAM-mailbox handshake are the proven Jaguar idiom.
  */
 #include "jaguar.h"
+/* privileged-instruction wrappers (cpu68k.S) — inline asm is outside
+   jcc68k's language subset */
+void cpu_irq_on(void);
+void cpu_stop_sleep(void);
+int  cpu_stop_unless(volatile uint32_t *addr, uint32_t val);
+
 #include "gpu.h"
 
 #define G_CTRL   REG32(0xF02114)
@@ -83,6 +89,7 @@ void gpu_geomxform_kick(const uint32_t *list, uint32_t count, uint16_t *fb,
     G_CTRL = 1;                                       /* fire, return */
 }
 
+uint32_t g_syncspins = 0, g_synccalls = 0;
 int gpu_sync(void)
 {
     uint32_t i;
@@ -91,13 +98,44 @@ int gpu_sync(void)
      * the entire frame. STOP releases the bus completely; the geotex kernel
      * raises CPUINT at alldone, and vblank (60Hz) bounds the worst-case
      * wake. Supervisor mode throughout, so STOP is legal. */
+    g_synccalls++;
     for (i = 0; i < 400; i++) {          /* ~6s worst case at vblank wakes */
+#ifdef SYNCPOLL
+        /* EXPERIMENT: busy-poll instead of STOP. If the GPU actually finishes
+           early and only the wake is late, this collapses the frame time. */
         if (mailbox[0] == MAGIC_DONE) {
             G_CTRL = 0;
             return 1;
         }
-        __asm__ volatile ("stop #0x2000");   /* sleep until any interrupt */
+        g_syncspins++;                   /* how many interrupt-wakes per sync */
+        { volatile int _s; for (_s = 0; _s < 200; _s++) ; }
+#else
+        /* PACING fix: check+STOP must be ATOMIC. The old open-coded
+           check-then-cpu_stop_sleep() had a lost-wakeup window — a CPUINT
+           raised between the mailbox read and the STOP was taken+acked
+           BEFORE the STOP, which then slept into the next VBL with
+           MAGIC_DONE already set. Self-locking: a VBL-quantized wake makes
+           the next kick VBL-aligned, so a near-constant render time lands
+           the finish in the same window every frame (the M68DIET cadence
+           lock: maxvbl pinned, frame time insensitive to kernel speed). */
+        if (cpu_stop_unless(&mailbox[0], MAGIC_DONE)) {
+            G_CTRL = 0;
+            return 1;
+        }
+        g_syncspins++;                   /* how many interrupt-wakes per sync */
+#endif
     }
+#ifdef SKUNK_CONSOLE
+    /* WEDGE AUTOPSY (RUNBATCH walking-death hunt): a sync timeout means
+       the GPU has been stuck ~6s — its PC names the looping code, B_CMD
+       says whether it's spinning on the blitter. Prints only on wedge. */
+    {
+        extern void dbg_kv(const char *k, long v);
+        dbg_kv("wedgepc",  (long)*(volatile uint32_t *)0xF02110u);
+        dbg_kv("wedgecmd", (long)*(volatile uint32_t *)0xF02238u);
+        dbg_kv("wedgectl", (long)*(volatile uint32_t *)0xF02114u);
+    }
+#endif
     G_CTRL = 0;
     return 0;
 }
@@ -132,8 +170,17 @@ int gpu_textured(const uint32_t *list, uint32_t count, void *fb,
     return gpu_sync();
 }
 
-/* vertex-cache: kernel pre-pass writes {sx,sy} per room vert here (512 max) */
+/* vertex-cache: kernel pre-pass writes {sx,sy} per room vert here (512 max).
+   STATICS bins push rooms 13/26 to 666/712 verts -> 768-vert cache under
+   -DSTATICS. NOTE (2026-07-22 census): the SHIPPED bins already overflow the
+   512 cap (room 8 = 529v, room 26 = 620v) — the pre-pass writes up to 864B
+   past this array, straight over jerry.c's dsp_mailbox (nm-verified adjacent)
+   and __bss_end. Latent bug, reported; default size kept for byte-identity. */
+#ifdef STATICS
+static uint32_t vtxcache[1536] __attribute__((aligned(16)));
+#else
 static uint32_t vtxcache[1024] __attribute__((aligned(16)));
+#endif
 
 /* PORTAL-WINDOW CLIP: clamp the kernel's spans/faces to a screen rect.
    Kernel reads $F03F50..5C each face/span; set before EVERY kick (a kick
@@ -177,8 +224,10 @@ void gpu_geotex_dispatch(const uint32_t *list, void *fb, const void *camblk,
        $F03FFF fits count + 11 rooms x 3 longs. */
     volatile uint32_t *sl = (volatile uint32_t *)0xF03F74u;
     uint32_t n = list[0], i;
-    if (n > 8) n = 8;      /* SRAM cap: 4-long entries {room,clipx,clipy,
-                              cacheptr}; caller keeps the current room last */
+    if (n > 3) n = 3;      /* list ends $F03FA4; tail = kernel vars */      /* SRAM cap SHRUNK 8->5 (2026-07-20): the list now
+                              ends at $F03FC8, freeing $F03FC8-FF for kernel
+                              scratch (rect-shade + task 6). Callers batch by
+                              5; the current room stays last in each batch. */
     G_CTRL = 0;
     sl[0] = n;
     for (i = 0; i < n*4; i++) sl[1+i] = list[1+i];

@@ -71,6 +71,28 @@ void blit_band(void *fb, int y0, int y1, uint32_t c)
     B_CMD    = BLIT_UPDA1 | BLIT_LFU_REP;
 }
 
+/* blit_copy: full-width Blitter image copy, src -> dst, `h` rows.
+ * Replaces the 68k byte loop that repainted the title art every frame
+ * (76800 x `moveb (a0)+,(a1)+`; 21.9% of all awake 68k cycles in a boot
+ * trace). Same A1/A2 setup as blit_double, without the row doubling.
+ * This is the "Blitter composite" the title-screen TODO asked for. */
+void blit_copy(const void *src, void *dst, int h)
+{
+    uint32_t xreset = ((uint32_t)(-RENDER_W)) & 0xFFFFu;
+    blit_wait();
+    A1_BASE  = (uint32_t)src;
+    A1_FLAGS = BLIT_PIX8 | BLIT_WID320 | BLIT_XPIX;
+    A1_PIXEL = 0;
+    A1_STEP  = (1u << 16) | xreset;
+    A2_BASE  = (uint32_t)dst;
+    A2_FLAGS = BLIT_PIX8 | BLIT_WID320 | BLIT_XPIX;
+    A2_PIXEL = 0;
+    A2_STEP  = (1u << 16) | xreset;
+    B_COUNT  = ((uint32_t)h << 16) | RENDER_W;
+    B_CMD    = BLIT_CMD_COPY | BLIT_UPDA1 | BLIT_UPDA2;
+    blit_wait();
+}
+
 #ifdef HALFRES
 /* Line-double copy: src (RENDER_W x srch, 8bpp) -> dst (RENDER_W x 2*srch).
  * Each source row k is written to dst rows 2k and 2k+1 (two Blitter copy

@@ -16,6 +16,12 @@
  * Display: 320x240 16bpp Jaguar RGB (VMODE $6C7), triple buffered.
  */
 #include "jaguar.h"
+/* privileged-instruction wrappers (cpu68k.S) — inline asm is outside
+   jcc68k's language subset */
+void cpu_irq_on(void);
+void cpu_stop_sleep(void);
+int  cpu_stop_unless(volatile uint32_t *addr, uint32_t val);
+
 #include "video.h"
 #include "blit.h"
 
@@ -160,7 +166,16 @@ static void build_object_list(uint32_t fb_addr)
 
     op_list[0] = (fb_addr << 8) | (link >> 8);
     op_list[1] = (link << 24)
+#ifdef SLITDISPLAY
+               /* BUS PROBE (2026-07-20): present only the top 64 lines —
+                  OP framebuffer fetch drops ~73% while ALL render work is
+                  unchanged. If fps rises, the OP's constant bus load is
+                  throttling Tom (the "bus bottleneck" theory); the fps bar
+                  (rows 21-55) stays visible for the measurement. */
+               | (64u << 14)
+#else
                | ((uint32_t)DISPLAY_H << 14)       /* on-screen height (240) */
+#endif
                | ((uint32_t)BASE_Y << 4);
 
     op_list[2] = SCREEN_PWIDTH >> 4;
@@ -296,7 +311,7 @@ void video_init(void)
      * before the Jerry room-transform kick in main.c). */
     VI = (uint16_t)(a_vdb - 4);
     INT1 = 0x0003;              /* enable VIDEO + GPU interrupts (STOP-sync) */
-    __asm__ volatile ("move.w #0x2000,%sr");
+    cpu_irq_on();
 
     /* RGB16, CSYNC, BGEN, VIDEN, PWIDTH=4 -> the standard 320-wide mode */
     VMODE = 0x06C7;
@@ -320,8 +335,23 @@ void video_flip(void)
 {
     uint32_t shown;
 
+    /* Was a tight DRAM poll on a volatile global — the anti-pattern gpu_sync's
+       own comment warns about ("a tight DRAM poll steals bus cycles from Tom for
+       the entire frame"). Tom is RENDERING during this wait, so the spin slows
+       the very thing it waits for. STOP releases the bus; the vblank ISR clears
+       pending_fb and vblank bounds the wake. Supervisor mode throughout.
+       Safe at init: if the ISR were not running, pending_fb would never clear
+       and the old spin would have hung here too. */
     while (pending_fb)
+#ifdef FLIPSPIN
         ;
+#else
+        /* atomic check+STOP (see gpu_sync PACING note). Here the waker is
+           the VBL ISR itself so the old race self-healed in one field, but
+           the closed window costs nothing and one lost field is exactly
+           what this campaign hunts. */
+        cpu_stop_unless(&pending_fb, 0);
+#endif
     shown = front_fb;
 #ifdef HALFRES
     /* line-double the 320x120 render buffer into a free 320x240 display buffer

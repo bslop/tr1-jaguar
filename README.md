@@ -57,7 +57,13 @@ tools/build_cof.sh "Tomb Raider (USA) (v1.6).cue" ./out
 
 It extracts the disc, runs every converter, and builds `./out/OPENLARA.COF` +
 `MUSIC.PCM`. After editing engine code you can rebuild just the ROM with
-`make MULTIROOM=1 HALFRES=1 CFLAGS_EXTRA="-DJERRYPOSE"`.
+`make MULTIROOM=1 CFLAGS_EXTRA="-DJERRYPOSE"`.
+
+Rendering is **native 320×240** (no `HALFRES`). The frame is DSP/transform-bound,
+not fill-bound, so the full-height framebuffer costs <1% fps versus the old
+half-height + line-double path (hardware-measured: 4.79 vs 4.83 fps in Caves) —
+i.e. full resolution is effectively free. Add `HALFRES=1` only to reclaim that
+last ~1% on the most fill-heavy scenes.
 
 ## How the disc becomes a ROM
 

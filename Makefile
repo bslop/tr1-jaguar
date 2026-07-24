@@ -11,6 +11,14 @@ OBJCOPY := $(CROSS)objcopy
 OBJDUMP := $(CROSS)objdump
 PYTHON  := python3
 RMAC    := $(HOME)/jaguar-tools/bin/rmac
+# Cobweb toolchain (2026-07-20): jas is the DEFAULT assembler for every
+# actively-maintained kernel — it hazard-checks each build (TRM bug 13
+# scoreboard races, indexed-store staleness, delay-slot waste, branch range).
+# rmac is retained for (a) the legacy museum kernels it still owns and
+# (b) `make verify-asm`, which byte-compares jas output against rmac.
+JAS     := $(HOME)/Documents/Git/cobweb/sim/target/release/jas
+# rmac writes defines as -dNAME=V; jas wants -d NAME=V
+jasd     = $(subst -d,-d ,$(1))
 
 BUILD     := build
 LOAD_ADDR := 0x4000
@@ -32,6 +40,14 @@ LDFLAGS := -nostdlib -T jaguar.ld -Wl,-Map=$(BUILD)/openlara.map \
 ifdef NOGD
 CFLAGS   += -DNO_GAMEDRIVE -DSKUNK_CONSOLE
 CXXFLAGS += -DNO_GAMEDRIVE -DSKUNK_CONSOLE
+endif
+ifdef NOGDONLY
+CFLAGS   += -DNO_GAMEDRIVE
+CXXFLAGS += -DNO_GAMEDRIVE
+endif
+ifdef SKCONONLY
+CFLAGS   += -DSKUNK_CONSOLE
+CXXFLAGS += -DSKUNK_CONSOLE
 endif
 
 # make GEOMWALK=1: Tom does the edge-walk (gpu_geomwalk.gas) instead of
@@ -104,6 +120,28 @@ endif
 
 CFLAGS   += $(CFLAGS_EXTRA)
 
+# make JERRYPOSE=1: Jerry (DSP) poses Lara (the "three-processor frame"); the
+# 68k pose is auto-skipped (posed=2 at the kick). HW-parity-passed 2026-07-09
+# but the flag was never wired into the Makefile — every MULTIROOM build has
+# been 68k-posing. fps: jsim claimed +21%% but SILICON measured ~neutral
+# (4.72 vs 4.83-4.94, 2026-07-20) — keep it for the freed 68k headroom, not fps.
+ifdef JERRYPOSE
+CFLAGS   += -DJERRYPOSE
+endif
+
+# make AUTOSTART=1: skip the title menu (auto-selects New Game after ~20 frames)
+# so headless HW/emulator profiling needs no physical A press on the controller.
+ifdef AUTOSTART
+CFLAGS   += -DAUTOSTART
+endif
+
+# make BLITPROBE=1: boot into the SRCSHADE/GOURD-on-8bpp Blitter micro-probe
+# instead of the game (main.c, after video_init). Read the bit-cell rows off
+# the video capture.
+ifdef BLITPROBE
+CFLAGS   += -DBLITPROBE
+endif
+
 ifdef PROFILE
 CFLAGS   += -DPROFILE
 ifdef NOPROFGPU
@@ -119,6 +157,69 @@ endif
 # polycount scaling; combine with PROFILE=1 and read the fps bar).
 ifdef ROOMCAP
 CFLAGS   += -DROOMCAP=$(ROOMCAP)
+endif
+
+# PERFHUNT M68DIET=1 (2026-07-22, PERFHUNT_CAMPAIGN.md): 68k serial-segment
+# diet — portal_rect 32x16 hardware-mul split, painter sort over the admitted
+# candidate subset only, lara_finish word-read centroids + reciprocal
+# divides.  C-only (no kernel bytes).  Opt-in; flags-off code identical.
+ifdef M68DIET
+CFLAGS   += -DM68DIET
+CXXFLAGS += -DM68DIET
+endif
+# AUTOPSY SUB-FLAGS (2026-07-22): the three M68DIET pieces individually —
+# M68A1=1 (portal_rect split-mul), M68A2=1 (subset painter sort),
+# M68A3=1 (lara_finish word centroids + reciprocal).  M68DIET=1 = all three.
+# M68PAD=N adds a calibrated 68k busy-pad after the sort (timeline
+# discriminator — see PERFHUNT_CAMPAIGN.md autopsy).
+ifdef M68A1
+CFLAGS   += -DM68D_A1
+CXXFLAGS += -DM68D_A1
+endif
+ifdef M68A2
+CFLAGS   += -DM68D_A2
+CXXFLAGS += -DM68D_A2
+endif
+ifdef M68A3
+CFLAGS   += -DM68D_A3
+CXXFLAGS += -DM68D_A3
+endif
+ifneq ($(strip $(M68DIET)$(M68A2)),)
+ifdef ROOMCAP
+$(error M68DIET/M68A2 and ROOMCAP are mutually exclusive (ROOMCAP indexes the full order[] list))
+endif
+ifdef NOVISCULL
+$(error M68DIET/M68A2 and NOVISCULL are mutually exclusive (A2 prefilters by rdepth/prv))
+endif
+endif
+ifdef M68PAD
+CFLAGS   += -DM68PAD=$(M68PAD)
+CXXFLAGS += -DM68PAD=$(M68PAD)
+endif
+
+# GOVERNOR=1 (2026-07-22, PERFHUNT_CAMPAIGN.md smoothness campaign): frame
+# governor — one frame longer than GOV_HI fields clamps g_hopcap to 1;
+# GOV_K consecutive frames at/below GOV_LO restore the dial cap.  VARIANCE
+# tool (judge on worst/median, not mean).  Requires HOPDIAL.  Tunables:
+# make GOVERNOR=1 GOV_HI=6 GOV_LO=4 GOV_K=20 (silicon defaults; emu frame
+# cadence is ~3x slower — use GOV_HI=11 GOV_LO=10 for in-emu exercises).
+ifdef GOVERNOR
+ifndef HOPDIAL
+$(error GOVERNOR=1 requires HOPDIAL=1 (g_hopcap machinery))
+endif
+GOVDEFS := -DGOVERNOR $(if $(GOV_HI),-DGOV_HI=$(GOV_HI)) $(if $(GOV_LO),-DGOV_LO=$(GOV_LO)) $(if $(GOV_K),-DGOV_K=$(GOV_K))
+CFLAGS   += $(GOVDEFS)
+CXXFLAGS += $(GOVDEFS)
+endif
+
+# LEMITDIET=1 (2026-07-22, PERFHUNT_CAMPAIGN.md LARA EMIT DIET): lara_finish
+# face re-emit via pre-grouped per-mesh payload banks + movem.l bursts
+# (cpu68k.S) + one-time plane prefixes + changed-window emit.  C/asm only,
+# zero kernel bytes.  Blob content byte-identical to the legacy emit.
+ifdef LEMITDIET
+CFLAGS   += -DLEMITDIET
+CXXFLAGS += -DLEMITDIET
+ASFLAGS  += -DLEMITDIET
 endif
 
 # make ... LOWRES=1: render a HALF-HEIGHT (320x120) framebuffer and let the
@@ -151,6 +252,11 @@ endif
 # perf experiment: make ... NOFILL=1 assembles the geotex kernel WITHOUT the
 # Blitter span launch (all transform/edge/span math still runs) — isolates
 # GPU compute cost vs Blitter fill+wait cost. `make clean` when toggling.
+ifdef NOSPAN
+NOFILL := 1
+endif
+NOSPAN_DEF := -dNOSPAN=$(if $(NOSPAN),1,0)
+
 ifdef NOFILL
 NOFILL_DEF := -dNOFILL=1 -dHALFSPAN=$(if $(HALFSPAN),1,0)
 else
@@ -158,7 +264,7 @@ NOFILL_DEF := -dNOFILL=0 -dHALFSPAN=$(if $(HALFSPAN),1,0)
 endif
 
 # M2 object set: room renderer + video + Blitter + input + room data.
-OBJS := $(BUILD)/startup.o $(BUILD)/main.o $(BUILD)/video.o \
+OBJS := $(BUILD)/startup.o $(BUILD)/cpu68k.o $(BUILD)/main.o $(BUILD)/video.o \
         $(BUILD)/blit.o $(BUILD)/joypad.o \
         $(BUILD)/gd_input.o $(BUILD)/gdbios.o \
         $(BUILD)/gpu.o $(BUILD)/gpu_blob.o \
@@ -186,8 +292,45 @@ BIN     := $(BUILD)/openlara.bin
 
 all: $(TARGET)
 
+# C is compiled by COBWEB's jcc68k -> jas --elf-obj (GNU-linkable ELF; the
+# link, jaguar.ld and every .S object are untouched — docs/gnu-interop.md).
+# The 32-bit mul/div runtime jcc68k calls (__mulsi3 & co) is the SAME
+# divmod68k.S that served gcc. `make CCVERIFY=1` builds with gcc instead —
+# the verification oracle (both images must behave identically in jagemu).
+ifdef CCVERIFY
 $(BUILD)/%.o: %.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
+else
+# ALL translation units on jcc68k since cobweb 73ac9dd (round-2 fixes: the
+# libgcc helper ABI, .bss/dead-static emission, inline-asm passthrough,
+# power-of-2 strength reduction). main.c's two long-long sites were
+# restructured to 32-bit math (jcc68k makes 64-bit a hard error rather
+# than silently truncating). Remaining known gap: text ~1.9x gcc -O2
+# (their register-allocator follow-up).
+$(BUILD)/%.o: %.c | $(BUILD)
+	$(JCC68K) $< -o $(BUILD)/$*.jcc.s -I. $(filter -D%,$(CFLAGS))
+	$(JAS) $(BUILD)/$*.jcc.s --68000 --elf-obj -o $@
+# main.c stays on gcc for PERFORMANCE (not correctness): all-jcc renders
+# correctly but the game crawls — main.c is the per-frame 68k logic and
+# jcc68k's ~1.9x text + __mulsi3 for non-power-of-2 scaling (y*320) is a
+# per-frame tax there. Flips when cobweb's register-allocator follow-up
+# lands. (Their own end-to-end verification was also 7-of-8-except-main.)
+$(BUILD)/main.o: main.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+# joypad.c/gd_input.c pinned to gcc: controls went DEAD on hardware with
+# them on jcc68k (user 2026-07-20; jagemu's injected input can't see the
+# real strobe-scan timing). Suspect MMIO access width/ordering in the pad
+# strobe or GD BIOS calls — narrow with single-TU A/B flashes, then report.
+$(BUILD)/joypad.o: joypad.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/gd_input.o: gd_input.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+# jerry.c pinned to gcc: under jcc68k Lara's HEAD renders turned (last angle
+# of the pose marshal corrupted — reproduced in jagemu, fix1 vs oracle
+# 2026-07-20). Repro asm saved; narrowing for the cobweb report.
+$(BUILD)/jerry.o: jerry.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+endif
 
 $(BUILD)/%.o: %.cpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -206,16 +349,13 @@ $(BUILD)/skunkglue.o: skunkglue.s | $(BUILD)
 # embedded by gpu_blob.S via .incbin. The blob is an explicit
 # prerequisite so a kernel edit relinks (make won't see the .incbin).
 $(BUILD)/gpu_spanfill.bin: gpu_spanfill.gas | $(BUILD)
-	$(RMAC) -fe $< -o $(BUILD)/gpu_spanfill.elf
-	$(OBJCOPY) -O binary $(BUILD)/gpu_spanfill.elf $@
+	$(JAS) $< -o $@ --gpu
 
 $(BUILD)/gpu_geomwalk.bin: gpu_geomwalk.gas | $(BUILD)
-	$(RMAC) -fe $< -o $(BUILD)/gpu_geomwalk.elf
-	$(OBJCOPY) -O binary $(BUILD)/gpu_geomwalk.elf $@
+	$(JAS) $< -o $@ --gpu
 
 $(BUILD)/gpu_geomxform.bin: gpu_geomxform.gas | $(BUILD)
-	$(RMAC) -fe $< -o $(BUILD)/gpu_geomxform.elf
-	$(OBJCOPY) -O binary $(BUILD)/gpu_geomxform.elf $@
+	$(JAS) $< -o $@ --gpu
 
 $(BUILD)/gpu_geomdirect.bin: gpu_geomdirect.gas | $(BUILD)
 	$(RMAC) $(LOWRES_DEF) -fe $< -o $(BUILD)/gpu_geomdirect.elf
@@ -230,23 +370,132 @@ $(BUILD)/gpu_bltex.bin: gpu_bltex.gas | $(BUILD)
 	$(OBJCOPY) -O binary $(BUILD)/gpu_bltex.elf $@
 
 $(BUILD)/dsp_pose.bin: dsp_pose.das | $(BUILD)
-	$(RMAC) $(LOWRES_DEF) -fe $< -o $(BUILD)/dsp_pose.elf
-	$(OBJCOPY) -O binary $(BUILD)/dsp_pose.elf $@
-	@sz=$$(stat -c%s $@); if [ $$sz -gt 4000 ]; then \
-	  echo "!!! dsp_pose.bin $$sz bytes OVERLAPS MBLK at F1C060 (max 4000; OUT_D is dead since direct-DRAM pose)"; \
+	$(JAS) $< -o $@ --dsp $(call jasd,$(LOWRES_DEF))
+	@sz=$$(stat -c%s $@); if [ $$sz -gt 4192 ]; then \
+	  echo "!!! dsp_pose.bin $$sz bytes OVERLAPS MBLK at F1C060 (max 4192 = F1C060-F1B000; OUT_D is dead since direct-DRAM pose)"; \
 	  rm -f $@; exit 1; fi
 
 $(BUILD)/dsp_blob.o: dsp_blob.S $(BUILD)/dsp_pose.bin | $(BUILD)
 	$(CC) $(ASFLAGS) -c dsp_blob.S -o $@
 
+NOMUL_DEF := -dNOMUL=$(if $(NOMUL),1,0)
+NODIV_DEF := -dNODIV=$(if $(NODIV),1,0)
+NOSTORE_DEF := -dNOSTORE=$(if $(NOSTORE),1,0)
+SHADEPASS_DEF := -dSHADEPASS=$(if $(SHADEPASS),1,0)
+NOCULL_DEF := -dNOCULL=$(if $(NOCULL),1,0)
+# STAGEDIET: early backface cull from a 12B per-face plane prefix. Needs bins
+# built with FACE_PLANES=1 (extractor) AND -DSTAGEDIET in CFLAGS (main.c
+# runtime blob builders + record strides). CAMLOC reuses the PROFGPU var
+# block, so the pair is forbidden.
+ifdef HOPDIAL
+CFLAGS   += -DHOPDIAL $(if $(HOPBOOT),-DHOPBOOT=$(HOPBOOT))
+CXXFLAGS += -DHOPDIAL $(if $(HOPBOOT),-DHOPBOOT=$(HOPBOOT))
+endif
+ifdef FARDIAL
+$(error FARDIAL retired 2026-07-21: measured NULL on silicon; the kernel far-cull block + FARD var were removed to fund XCULL alongside SHADEPASS (see BUCKET_CAMPAIGN.md))
+endif
+ifdef QUIETFPS
+CFLAGS   += -DQUIETFPS
+CXXFLAGS += -DQUIETFPS
+endif
+ifdef ABLADDER
+CFLAGS   += -DABLADDER $(if $(ABBOOT),-DABBOOT=$(ABBOOT))
+CXXFLAGS += -DABLADDER $(if $(ABBOOT),-DABBOOT=$(ABBOOT))
+endif
+# PIPELINE: frame N's last Tom batch overlaps frame N+1's 68k logic
+# (deferred sync+flip; see g_tominflight in main.c).
+ifdef PIPELINE
+PIPESTAGE ?= 2
+CFLAGS   += -DPIPELINE -DPIPESTAGE=$(PIPESTAGE)
+CXXFLAGS += -DPIPELINE -DPIPESTAGE=$(PIPESTAGE)
+endif
+# STATICS: bins built with the extractor's STATICS=1 (static meshes baked into
+# room geometry) push rooms 13/26 past the 512-vert kernel vertex cache —
+# -DSTATICS grows gpu.c's vtxcache to 768 verts. Data-only otherwise.
+# PACEPROBE: pacing-campaign discriminator counters (pp_wait/span/safe/blit/
+# mid + synk) streamed with the hl_* block. PROFILE-only instrumentation.
+ifdef PACEPROBE
+CFLAGS   += -DPACEPROBE
+CXXFLAGS += -DPACEPROBE
+endif
+
+ifdef STATICS
+CFLAGS   += -DSTATICS
+CXXFLAGS += -DSTATICS
+endif
+STAGEDIET_DEF := -dSTAGEDIET=$(if $(STAGEDIET),1,0)
+ifdef STAGEDIET
+ifdef PROFGPU
+$(error STAGEDIET=1 and PROFGPU=1 are mutually exclusive: CAMLOC reuses $$F03EF0-FF)
+endif
+CFLAGS   += -DSTAGEDIET
+CXXFLAGS += -DSTAGEDIET
+endif
+ifdef TRAPEZOID
+ifdef SHADEPASS
+$(error TRAPEZOID=1 and SHADEPASS=1 are mutually exclusive (kernel byte budget, first-proof rule — see TRAPEZOID_CAMPAIGN.md))
+endif
+ifdef RUNHIST
+$(error TRAPEZOID=1 and RUNHIST=1 are mutually exclusive (kernel byte budget))
+endif
+endif
+# BUCKET campaign face guards (see BUCKET_CAMPAIGN.md):
+#   XCULL=1  reject faces fully left/right of the clip window before the
+#            y-walk (they otherwise walk up to 240 empty-span rows).
+#            Fits alongside SHADEPASS since 2026-07-21 (FARDIAL retirement
+#            + XCULL-gated u/v-init indexed-store diet paid the ~44B gap;
+#            SHADEPASS=1 STAGEDIET=1 XCULL=1 BEXIT=1 kernel = 3668/3680).
+#   BEXIT=1  abort face staging at the first behind/far-sentinel vertex
+#            (saves the rest of the stage; frees ~14B net). Fits any config.
+#   ROWDIET=1 (PERFHUNT 2026-07-22): row-loop diet — per-RUN DIVCTRL
+#            toggles + clip window in r4/r21 + off==0 fall-through
+#            (multiply path out-of-line).  Requires TRAPEZOID=0 (r4/r21).
+ifdef RUNBATCH
+ifndef BANKDIET
+$(error RUNBATCH=1 requires BANKDIET=1 (RUNC/BATCHC live in the alternate bank))
+endif
+ifdef TRAPEZOID
+$(error RUNBATCH=1 and TRAPEZOID=1 are incompatible (same batching machinery))
+endif
+ifdef DIVHIDE
+$(error RUNBATCH=1 and DIVHIDE=1 are incompatible (imul32 r27/r28 WAW vs cooking divides))
+endif
+ifdef NOFILL
+$(error RUNBATCH=1 and NOFILL=1 are incompatible (batch path owns the launch))
+endif
+endif
+
+ifdef BANKDIET
+ifdef TRAPEZOID
+$(error BANKDIET=1 and TRAPEZOID=1 are incompatible (tz reads RUNC from SRAM; BANKDIET moves it to the alternate bank))
+endif
+endif
+
+ifdef DIVHIDE
+ifndef ROWDIET
+$(error DIVHIDE=1 requires ROWDIET=1 (its register plan assumes the ROWDIET clamp arms))
+endif
+ifdef TRAPEZOID
+$(error DIVHIDE=1 and TRAPEZOID=1 are incompatible (both claim r5/r27/r28 in the span path))
+endif
+endif
+
+ifdef ROWDIET
+ifdef TRAPEZOID
+$(error ROWDIET=1 and TRAPEZOID=1 are mutually exclusive (both claim r4/r21 in the span run))
+endif
+endif
+GEOTEX_DEFS := $(LOWRES_DEF) $(NOFILL_DEF) $(NOSPAN_DEF) $(PROFGPU_DEF) $(NOMUL_DEF) $(NODIV_DEF) $(NOSTORE_DEF) $(SHADEPASS_DEF) $(NOCULL_DEF) $(STAGEDIET_DEF) -d NOBLIT=$(if $(NOBLIT),1,0) -d ALLCULL=$(if $(ALLCULL),1,0) -d RUNHIST=$(if $(RUNHIST),1,0) -d TRAPEZOID=$(if $(TRAPEZOID),1,0) -d DRIFTLOOSE=$(if $(DRIFTLOOSE),1,0) -d XCULL=$(if $(XCULL),1,0) -d BEXIT=$(if $(BEXIT),1,0) -d ROWDIET=$(if $(ROWDIET),1,0) -d PHRASESHADE=$(if $(PHRASESHADE),1,0) -d DIVHIDE=$(if $(DIVHIDE),1,0) -d BANKDIET=$(if $(BANKDIET),1,0) -d RUNBATCH=$(if $(RUNBATCH),1,0) -d RBNOUV=$(if $(RBNOUV),1,0) -d CULLCOUNT=$(if $(CULLCOUNT),1,0) -d PREPASSONLY=$(if $(PREPASSONLY),1,0)
 $(BUILD)/gpu_geotex.bin: gpu_geotex.gas | $(BUILD)
-	$(RMAC) $(LOWRES_DEF) $(NOFILL_DEF) $(PROFGPU_DEF) -fe $< -o $(BUILD)/gpu_geotex.elf
-	$(OBJCOPY) -O binary $(BUILD)/gpu_geotex.elf $@
-	@sz=$$(stat -c%s $@); if [ $$sz -gt 3584 ]; then 	  echo "!!! gpu_geotex.bin $$sz bytes OVERLAPS SRAM vars at F03E00 (max 3584)"; 	  rm -f $@; exit 1; fi
+	$(JAS) $< -o $@ --gpu $(call jasd,$(GEOTEX_DEFS))
+	@sz=$$(stat -c%s $@); if [ $$sz -gt 3680 ]; then 	  echo "!!! gpu_geotex.bin $$sz bytes OVERLAPS SRAM vars at F03E60 (max 3680; AU/BU at F03FA8+; SY/U/V relocated to F03FCC+; SX_BUF at F03F24; F03F74+ = DISPATCH LIST, not free)"; 	  rm -f $@; exit 1; fi
+
+$(BUILD)/gpu_blitprobe.bin: gpu_blitprobe.gas | $(BUILD)
+	$(JAS) $< -o $@ --gpu
 
 # gpu_blob.S .incbin's whichever kernel is selected; depend on all so a
 # toggle rebuilds cleanly.
-$(BUILD)/gpu_blob.o: gpu_blob.S $(BUILD)/gpu_spanfill.bin $(BUILD)/gpu_geomwalk.bin $(BUILD)/gpu_geomxform.bin $(BUILD)/gpu_geomdirect.bin $(BUILD)/gpu_textured.bin $(BUILD)/gpu_bltex.bin | $(BUILD)
+$(BUILD)/gpu_blob.o: gpu_blob.S $(BUILD)/gpu_spanfill.bin $(BUILD)/gpu_geomwalk.bin $(BUILD)/gpu_geomxform.bin $(BUILD)/gpu_geomdirect.bin $(BUILD)/gpu_textured.bin $(BUILD)/gpu_bltex.bin $(BUILD)/gpu_blitprobe.bin | $(BUILD)
 	$(CC) $(ASFLAGS) -c $< -o $@
 
 # gpu_geotex.gas is written by an agent; only depend on its blob for GEOTEX
@@ -303,3 +552,75 @@ clean:
 	rm -rf $(BUILD)
 
 .PHONY: all clean
+
+# make SYNCPOLL=1: gpu_sync busy-polls instead of STOP-sleeping (diagnostic)
+ifdef SYNCPOLL
+CFLAGS   += -DSYNCPOLL
+endif
+
+# Jerry's room co-transform is RETIRED by default (measured: zero fps benefit,
+# zero pixel difference, and it carried a cross-chip ordering hazard). Tom
+# self-transforms every room. `make JERRYX=1` restores the old behaviour.
+ifdef JERRYX
+CFLAGS   += -DJERRYX
+endif
+
+# make FLIPSPIN=1: restore video_flip's old busy-wait (diagnostic A/B against the
+# STOP-sleep). The spin stole DRAM bus from Tom while Tom rendered.
+ifdef FLIPSPIN
+CFLAGS   += -DFLIPSPIN
+endif
+
+# ---- verify-asm: byte-compare the jas-built kernels against rmac ----------
+# (gpu_bltex / gpu_textured / gpu_geomdirect are legacy museum kernels still
+#  owned by rmac: the first two contain real jas-flagged hazards nobody will
+#  fix, the third predates the current data path.)
+verify-asm: $(BUILD)/gpu_geotex.bin $(BUILD)/gpu_spanfill.bin $(BUILD)/gpu_geomwalk.bin $(BUILD)/gpu_geomxform.bin $(BUILD)/gpu_blitprobe.bin $(BUILD)/dsp_pose.bin
+	@ok=1; \
+	vfy() { $(RMAC) $$3 -fe $$1 -o $(BUILD)/vfy.elf && $(OBJCOPY) -O binary $(BUILD)/vfy.elf $(BUILD)/vfy.bin && \
+	  { cmp -s $(BUILD)/vfy.bin $$2 && echo "verify-asm: $$1 IDENTICAL" || { echo "verify-asm: $$1 DIFFERS"; ok=0; }; }; }; \
+	vfy gpu_geotex.gas   $(BUILD)/gpu_geotex.bin   "$(GEOTEX_DEFS)"; \
+	vfy gpu_spanfill.gas $(BUILD)/gpu_spanfill.bin ""; \
+	vfy gpu_geomwalk.gas $(BUILD)/gpu_geomwalk.bin ""; \
+	vfy gpu_geomxform.gas $(BUILD)/gpu_geomxform.bin ""; \
+	vfy gpu_blitprobe.gas $(BUILD)/gpu_blitprobe.bin ""; \
+	vfy dsp_pose.das     $(BUILD)/dsp_pose.bin     "$(LOWRES_DEF)"; \
+	[ $$ok -eq 1 ]
+.PHONY: verify-asm
+
+# ---- verify-c: run every C translation unit through jcc68k (cobweb) -------
+# jcc68k is the VERIFICATION front-end for the C side today, not the code
+# generator: it compiles 6/7 TUs (main.c blocked on a mis-attributed
+# diagnostic — see COBWEB_REQ_jcc68k_adoption.md, which also lists what full
+# adoption needs: GNU-ELF interop or a jln linker-script story, leaf-function
+# prologue elision, a soft-mul/div runtime). A second front-end catches
+# portability/UB the same way a second assembler catches encoding bugs.
+JCC68K := $(HOME)/Documents/Git/cobweb/sim/target/release/jcc68k
+JCCDEFS := -DMULTIROOM -DFB8 $(if $(JERRYPOSE),-DJERRYPOSE) $(if $(AUTOSTART),-DAUTOSTART) $(if $(PROFILE),-DPROFILE)
+verify-c:
+	@ok=1; for f in video.c blit.c gpu.c jerry.c joypad.c gd_input.c; do \
+	  if $(JCC68K) $$f -o $(BUILD)/jcc_$$f.s $(JCCDEFS) >/dev/null 2>&1 && [ -s $(BUILD)/jcc_$$f.s ]; then \
+	    echo "verify-c: $$f OK"; else echo "verify-c: $$f FAILED"; ok=0; fi; done; \
+	$(JCC68K) main.c -o $(BUILD)/jcc_main.s $(JCCDEFS) >/dev/null 2>&1 && [ -s $(BUILD)/jcc_main.s ] \
+	  && echo "verify-c: main.c OK (cobweb fixed it — update the docs!)" \
+	  || echo "verify-c: main.c KNOWN-FAIL (mis-attributed diagnostic, reported)"; \
+	[ $$ok -eq 1 ]
+.PHONY: verify-c
+
+# make ASSETSUM=1: boot + periodic skunk-console checksums of the embedded
+# assets (DRAM-decay / upload-corruption diagnostic, 2026-07-20)
+ifdef ASSETSUM
+CFLAGS += -DASSETSUM
+endif
+
+# make CLUTGUARD=1: per-frame CLUT rewrite + on-screen palette ramp strip
+# (rows 190-198) — CLUT corruption diagnostic (2026-07-20)
+ifdef CLUTGUARD
+CFLAGS += -DCLUTGUARD
+endif
+
+# make SLITDISPLAY=1: OP presents only the top 64 lines (bus-contention
+# probe: render work unchanged, OP fetch -73%; fps bar stays visible)
+ifdef SLITDISPLAY
+CFLAGS += -DSLITDISPLAY
+endif

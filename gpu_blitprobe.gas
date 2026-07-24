@@ -1,0 +1,240 @@
+; gpu_blitprobe.gas - GPU-DRIVEN Blitter test matrix (BLITPROBE v13).
+;
+; WHY THE GPU: twelve 68k-driven probe rounds (BP_srcshade1-12) established
+; that on real silicon only the FIRST 68k-programmed blit ever lands; the
+; second launch degrades into a runaway that wipes the probe buffers (v12:
+; even a constant 0xA5 stored by the 68k right after blit 2 never appears,
+; and live re-reads of pre-blit prefill read 0). Production code never
+; chains 68k SRCEN blits - the GPU kernel is the only silicon-proven chained
+; Blitter programmer (native 32-bit stores). The shipping shade pass will be
+; GPU-programmed anyway, so THIS is the environment the answers must come
+; from.
+;
+; Protocol (loaded + kicked by the 68k BLITPROBE block in main.c):
+;   PARAMS $F03F00: +0 src (64B DRAM), +4 dst (64B DRAM),
+;                   +8 results (7*8B DRAM), +12 mailbox (DRAM)
+;   For each of 7 table-driven tests: prefill dst(64B)/src(16B), wait idle,
+;   program the full Blitter register set (32-bit stores), launch, delay,
+;   wait idle, copy dst[0..7] to results+t*8. Then MAGIC_DONE -> mailbox.
+;
+; Tests (cmd / dstfill / srcmode(0=ramp i*11,1=const 40) / B_IINC / B_PATD):
+;   1 control copy        SRCEN|LFU_REP|DSTA2
+;   2 control copy again  <- the CHAINING check the 68k always failed
+;   3 SRCSHADE +1int/px   (intensity path on 8bpp: TRM says 16bpp-only)
+;   4 GOURD|PATDSEL       B_PATD=37373737 poked directly, IINC=0
+;   5 LFU-OR + DSTEN      dst 05 | src 40 -> 45?
+;   6 ADDDSEL + DSTEN     dst 05 + src 40 -> 45?
+;   7 ADDDSEL saturation  dst F0 + ramp src -> 01? FF? (byte semantics)
+
+PARAMS		.equ	$F03F00
+MAGIC_DONE	.equ	$0A3DD05E
+
+A1_BASE		.equ	$F02200
+A1_FLAGS	.equ	$F02204
+A1_PIXEL	.equ	$F0220C
+A1_FPIXEL	.equ	$F02218
+A2_BASE		.equ	$F02224
+A2_FLAGS	.equ	$F02228
+A2_PIXEL	.equ	$F02230
+B_CMD		.equ	$F02238
+B_COUNT		.equ	$F0223C
+B_SRCD		.equ	$F02240
+B_SRCD1		.equ	$F02244
+B_PATD		.equ	$F02268
+B_PATD1		.equ	$F0226C
+B_IINC		.equ	$F02270
+B_I3		.equ	$F0227C
+B_I2		.equ	$F02280
+B_I1		.equ	$F02284
+B_I0		.equ	$F02288
+
+AFLAGS		.equ	$00014218	; PIXEL8 | WID320 | XADDPIX
+
+	.gpu
+	.org	$F03000
+
+start:
+	movei	#PARAMS,r1
+	nop
+	load	(r1),r4			; src
+	addq	#4,r1
+	load	(r1),r5			; dst
+	addq	#4,r1
+	load	(r1),r6			; results (write cursor)
+	addq	#4,r1
+	load	(r1),r30		; mailbox
+	nop
+	nop
+	move	r30,r8			; v16: test index from DRAM mailbox[2] —
+	addq	#8,r8			; 68k stores into GPU SRAM params between
+	load	(r8),r7			; kicks appear NOT to land on silicon
+	nop
+	nop
+	; results cursor += idx*8 ; table ptr += idx*20
+	move	r7,r8
+	shlq	#3,r8
+	add	r8,r6
+	movei	#table,r16
+	move	r7,r8
+	shlq	#4,r8
+	add	r8,r16
+	move	r7,r8
+	shlq	#2,r8
+	add	r8,r16
+	movei	#alldone,r19
+	; ---- test config: cmd, dstfill, srcmode, iinc, patd (5 longs)
+	load	(r16),r20		; cmd
+	addq	#4,r16
+	load	(r16),r21		; dst fill byte
+	addq	#4,r16
+	load	(r16),r22		; src mode
+	addq	#4,r16
+	load	(r16),r23		; B_IINC
+	addq	#4,r16
+	load	(r16),r24		; B_PATD
+	addq	#4,r16
+	nop
+	nop
+	; ---- prefill dst[0..63] = fill byte
+	move	r5,r10
+	movei	#64,r12
+.pfd:
+	storeb	r21,(r10)
+	addq	#1,r10
+	subq	#1,r12
+	jr	NE,.pfd
+	nop
+	nop
+	; ---- prefill src[0..15] = ramp i*$11 or const $40
+	move	r4,r10
+	moveq	#16,r12
+	cmpq	#0,r22
+	jr	EQ,.pfsr		; mode 0 -> ramp
+	nop
+	nop
+	movei	#$40,r13		; mode 1 -> constant
+.pfc:
+	storeb	r13,(r10)
+	addq	#1,r10
+	subq	#1,r12
+	jr	NE,.pfc
+	nop
+	nop
+	jr	T,.pfdone
+	nop
+	nop
+.pfsr:
+	moveq	#0,r11
+	movei	#$11,r13
+.psr:
+	storeb	r11,(r10)
+	addq	#1,r10
+	add	r13,r11
+	subq	#1,r12
+	jr	NE,.psr
+	nop
+	nop
+.pfdone:
+	; ---- wait idle BEFORE programming (production idiom)
+	movei	#B_CMD,r14
+.bw1:
+	load	(r14),r9
+	nop
+	nop
+	btst	#0,r9
+	jr	EQ,.bw1
+	nop
+	nop
+	; ---- program the full register set (fresh every test)
+	moveq	#0,r12			; zero for pointers/intensity seeds
+	movei	#A1_BASE,r10
+	store	r4,(r10)
+	movei	#A1_FLAGS,r10
+	movei	#AFLAGS,r11
+	store	r11,(r10)
+	movei	#A1_PIXEL,r10
+	store	r12,(r10)
+	movei	#A1_FPIXEL,r10
+	store	r12,(r10)
+	movei	#A2_BASE,r10
+	store	r5,(r10)
+	movei	#A2_FLAGS,r10
+	store	r11,(r10)
+	movei	#A2_PIXEL,r10
+	store	r12,(r10)
+	movei	#B_SRCD,r10
+	store	r12,(r10)
+	movei	#B_SRCD1,r10
+	store	r12,(r10)
+	movei	#B_PATD,r10
+	store	r24,(r10)
+	movei	#B_PATD1,r10
+	store	r24,(r10)
+	movei	#B_IINC,r10
+	store	r23,(r10)
+	movei	#B_I0,r10
+	store	r12,(r10)
+	movei	#B_I1,r10
+	store	r12,(r10)
+	movei	#B_I2,r10
+	store	r12,(r10)
+	movei	#B_I3,r10
+	store	r12,(r10)
+	movei	#B_COUNT,r10
+	movei	#$00010010,r11		; 1 row x 16 px
+	store	r11,(r10)
+	store	r20,(r14)		; B_CMD -> LAUNCH
+	; ---- fixed delay so the post-launch idle poll can't catch a stale
+	;      pre-busy IDLE (a 16px blit is ~200 ticks; this is >>)
+	movei	#600,r9
+.dly:
+	subq	#1,r9
+	jr	NE,.dly
+	nop
+	nop
+.bw2:
+	load	(r14),r9
+	nop
+	nop
+	btst	#0,r9
+	jr	EQ,.bw2
+	nop
+	nop
+	; ---- copy dst[0..7] -> results, advance cursor
+	move	r5,r10
+	moveq	#8,r12
+.cpy:
+	loadb	(r10),r13
+	addq	#1,r10
+	nop
+	nop
+	storeb	r13,(r6)
+	addq	#1,r6
+	subq	#1,r12
+	jr	NE,.cpy
+	nop
+	nop
+	jump	T,(r19)
+	nop
+	nop
+
+alldone:
+	movei	#MAGIC_DONE,r0
+	store	r0,(r30)
+	nop
+	nop
+.halt:
+	nop
+	jr	T,.halt
+	nop
+	nop
+
+	.align 4			; (.long is rmac-only; jas ignores it and
+table:					;  misaligns the table — .align works in both)
+	dc.l	$01800801, $EE, 0, 0, 0
+	dc.l	$01800801, $EE, 0, 0, 0
+	dc.l	$41800801, $EE, 1, $00010000, 0
+	dc.l	$00011800, $EE, 0, 0, $37373737
+	dc.l	$01C00809, $05, 1, 0, 0
+	dc.l	$00020809, $05, 1, 0, 0
+	dc.l	$00020809, $F0, 0, 0, 0

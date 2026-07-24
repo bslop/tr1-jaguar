@@ -205,6 +205,9 @@ pfall\~:
 	load	(r22),r2
 	addq	#4,r22
 	load	(r22),r3
+	or	r0,r0			; settle the restores: the caller's next
+	or	r1,r1			; instruction may overwrite r0/r1 while the
+					; SRAM loads are still in flight (TRM bug 13)
 pskip\~:
 .endm
 
@@ -373,11 +376,9 @@ main_loop:
 	jump	EQ,(r22)
 	nop
 	nop
-	cmpq	#2,r1
-	movei	#cmd_roomx,r22
-	jump	EQ,(r22)
-	nop
-	nop
+	; (CMD=2 roomx dispatch DELETED 2026-07-20: the co-transform was
+	;  retired — it bought 0 fps and 0 px — and its loop-carried edges
+	;  tripped the jas hazard checker. make JERRYX=1 is now unsupported.)
 	movei	#main_loop,r22
 	jump	T,(r22)
 	nop
@@ -396,226 +397,7 @@ cmd_pose:
 	nop
 	nop
 
-cmd_roomx:
-	movei	#CMD_D,r0
-	moveq	#0,r1
-	store	r1,(r0)
-	movei	#D_PARAMS,r4
-; ================= ROOM TRANSFORM MODE =================
-	; copy camera block DRAM -> SRAM (7 longs)
-	movei	#4,r0
-	add	r4,r0
-	load	(r0),r5			; room list ptr
-	movei	#8,r0
-	add	r4,r0
-	load	(r0),r1			; camblk DRAM ptr
-	movei	#CAMB_D,r2
-	moveq	#7,r3
-rx_camcpy:
-	load	(r1),r0
-	addq	#4,r1
-	subq	#1,r3
-	nop
-	store	r0,(r2)
-	addq	#4,r2
-	cmpq	#0,r3
-	jr	NE,rx_camcpy
-	nop
-	; load camera regs from SRAM copy
-	movei	#CAMB_D,r0
-	load	(r0),r11		; cY4
-	addq	#4,r0
-	load	(r0),r12		; sY4
-	addq	#4,r0
-	load	(r0),r13		; cP4
-	addq	#4,r0
-	load	(r0),r14		; sP4
-	addq	#4,r0
-	load	(r0),r15		; camx
-	; camy/camz NOT register-resident: r16/r17 are ISR-owned (scoreboard
-	; segregation) — reloaded from CAMB_D at each per-vert use via r22
-	load	(r5),r6			; room count
-	addq	#4,r5
-rx_room:
-	cmpq	#0,r6
-	movei	#rx_alldone,r22
-	jump	EQ,(r22)
-	nop
-	nop
-	; PREEMPT: a pose request aborts the remaining rooms BETWEEN rooms
-	; (their flags stay 1 -> Tom self-transforms; no orphaned stores)
-	movei	#CMD_D,r0
-	load	(r0),r1
-	nop
-	cmpq	#1,r1
-	movei	#rx_alldone,r22
-	jump	EQ,(r22)
-	nop
-	nop
-	subq	#1,r6
-	load	(r5),r7			; vert ptr (DRAM RVerts: s16 x,y,z + pad, stride 8)
-	addq	#4,r5
-	load	(r5),r8			; vcount
-	addq	#4,r5
-	load	(r5),r9			; offX<<8
-	addq	#4,r5
-	load	(r5),r10		; offZ<<8
-	addq	#4,r5
-	load	(r5),r18		; cache ptr (flag long at cache-4)
-	addq	#4,r5
-	movei	#4096,r0		; depth array follows the 512-vert cache
-	move	r18,r19
-	add	r0,r19			; r19 = per-vert depth cursor
-rx_vert:
-	cmpq	#0,r8
-	movei	#rx_vdone,r22
-	jump	EQ,(r22)
-	nop
-	nop
-	subq	#1,r8
-	; load s16 x,y,z from DRAM (16-bit link: loadw works on DRAM)
-	loadw	(r7),r20
-	addq	#2,r7
-	loadw	(r7),r21
-	addq	#2,r7
-	loadw	(r7),r23
-	addq	#4,r7			; skip pad -> next vert
-	shlq	#16,r20
-	sharq	#16,r20			; x
-	shlq	#16,r21
-	sharq	#16,r21			; y
-	shlq	#16,r23
-	sharq	#16,r23			; z
-	add	r9,r20			; wx
-	add	r10,r23			; wz
-	sub	r15,r20			; dx
-	movei	#CAMB_D+20,r22
-	load	(r22),r22		; camy (SRAM: cheap)
-	nop
-	nop
-	sub	r22,r21			; dy
-	movei	#CAMB_D+24,r22
-	load	(r22),r22		; camz
-	nop
-	nop
-	sub	r22,r23			; dz
-	; rx = (dx*cY4 - dz*sY4)>>12 ; rz = (dx*sY4 + dz*cY4)>>12
-	move	r20,r24
-	imult	r11,r24			; dx*cY4
-	move	r23,r25
-	imult	r12,r25			; dz*sY4
-	move	r20,r26
-	imult	r12,r26			; dx*sY4
-	move	r23,r27
-	imult	r11,r27			; dz*cY4
-	sub	r25,r24
-	sharq	#12,r24			; rx
-	add	r26,r27
-	sharq	#12,r27			; rz
-	; ry = (dy*cP4 - rz*sP4)>>12 ; rz2 = (dy*sP4 + rz*cP4)>>12
-	move	r21,r25
-	imult	r13,r25			; dy*cP4
-	move	r27,r26
-	imult	r14,r26			; rz*sP4
-	move	r21,r28
-	imult	r14,r28			; dy*sP4
-	imult	r13,r27			; rz*cP4 (r27 = rz consumed)
-	sub	r26,r25
-	sharq	#12,r25			; ry
-	add	r28,r27
-	sharq	#12,r27			; rz2
-	; NEAR-SNAP REVERTED (mirrors gpu_geotex; task 19 postponed)
-	movei	#RX_NEAR,r0
-	cmp	r0,r27
-	movei	#rx_behind,r22
-	jump	MI,(r22)
-	nop
-	nop
-	; sx = RX_CX + rx*RX_FOCAL/rz2  (unsigned div + sign dance)
-	movei	#RX_FOCAL,r0
-	imult	r0,r24			; rx*FOCAL (fits: |rx|<=~20000*190=3.8M)
-	nop
-	move	r24,r26			; sign keeper
-	abs	r24
-	div	r27,r24
-	movei	#RX_FOCAL_Y,r0
-	imult	r0,r25			; ry*FOCAL_Y (95 in LOWRES)
-	nop
-	move	r25,r28
-	abs	r25
-	cmpq	#0,r26
-	jr	PL,rx_sxp
-	nop
-	nop
-	neg	r24
-rx_sxp:
-	movei	#RX_CX,r0
-	add	r0,r24			; sx
-	div	r27,r25			; ry*FOCAL/rz2 (2nd divide)
-	store	r24,(r18)		; cache sx (plain: posted writes drain FIFO)
-	addq	#4,r18
-	cmpq	#0,r28
-	jr	PL,rx_syp
-	nop
-	nop
-	neg	r25
-rx_syp:
-	movei	#RX_CY,r0
-	add	r0,r25			; sy
-	store	r27,(r19)		; per-vert depth
-	addq	#4,r19
-	store	r25,(r18)
-	addq	#4,r18
-	AUDIO_PUMP
-	movei	#rx_vert,r22
-	jump	T,(r22)
-	nop
-	nop
-rx_behind:
-	movei	#RX_SENT,r1
-	store	r1,(r19)		; behind: depth = sentinel (face skipped anyway)
-	addq	#4,r19
-	store	r1,(r18)		; behind sentinel
-	addq	#8,r18
-	AUDIO_PUMP
-	movei	#rx_vert,r22
-	jump	T,(r22)
-	nop
-	nop
-rx_vdone:
-	; set this room's DONE flag (long at cacheptr - 4 = 2)
-	; (r18 has advanced; the flag address came before the verts: reload)
-	move	r5,r0			; r5 points past this room's 5 longs
-	subq	#4,r0
-	load	(r0),r1			; cache ptr (re-read from the list)
-	nop
-	nop
-	subq	#4,r1
-	; DRAIN the posted-write queue before raising the flag: one read of the
-	; LAST-written depth address forces all prior stores to DRAM first
-	subq	#4,r19
-	load	(r19),r0
-	nop
-	nop
-	move	r0,r0			; consume (order barrier)
-	moveq	#2,r2
-	store	r2,(r1)			; flag = 2 (done) — plain store, drains after data
-	movei	#rx_room,r22
-	jump	T,(r22)
-	nop
-	nop
-rx_alldone:
-	movei	#MAGIC_DONE,r0
-	movei	#D_PARAMS,r22
-	load	(r22),r22
-	nop
-	nop
-	store	r0,(r22)
-	movei	#main_loop,r22
-	jump	T,(r22)
-	nop
-	nop
-
+; (cmd_roomx / rx_vert / rx_behind / rx_vdone / rx_alldone DELETED — see above)
 do_pose:
 	; load param registers
 	moveq	#0,r8			; global vert index (skv extracted by long)
@@ -676,7 +458,11 @@ mesh_loop:
 	load	(r0),r21		; rooty
 	addq	#4,r0
 	load	(r0),r23		; rootz
-	nop
+	or	r20,r20			; CONSUME the DRAM loads before the indexed
+	or	r21,r21			; stores: the store DATA register is not
+	or	r23,r23			; scoreboarded (TRM errata) — without these a
+					; slow load lands AFTER the store and ships a
+					; stale root (intermittent pose glitch)
 	store	r20,(r14+9)		; t = root (identity: no rotate yet)
 	store	r21,(r14+10)
 	store	r23,(r14+11)
@@ -1139,7 +925,8 @@ mesh_next:
 	load	(r10),r0
 	nop
 	nop
-	move	r0,r0			; consume (order barrier)
+	or	r0,r0			; consume (order barrier; `or` is the
+					; idiom the hazard checker credits)
 	movei	#MAGIC_DONE,r0
 	movei	#D_PARAMS,r22
 	load	(r22),r22
