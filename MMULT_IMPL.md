@@ -241,3 +241,41 @@ performed differs. It is only weak evidence that the direction is not a slowdown
 3. Only after correct geometry: redo the A/B against side A median 406.
 
 Branch: mmult-phase1-precompose. Related: MMULT_SCOPE.md, CULLWALK_SCOPE.md.
+
+---
+
+# ✅ FIXED + MEASURED (2026-07-24) — and the win is a NULL RESULT
+
+**Geometry: FIXED on silicon.** User at the rig: "Lara looks solid now." The
+$F03F20/SHADEK clobber (commit f40156f) was the whole regression.
+
+## A/B on silicon, PLAY_XB config, 14 fpsT samples each
+| | MMULTX=0 | MMULTX=1 (v3) |
+|---|---|---|
+| median | 406 (4.06 fps) | 416 (4.16 fps) |
+| mean | 411.4 | 406.9 |
+| sd | ~47 | ~39 |
+| maxvbl spikes | 13,15,13 | 12,14,14 |
+
+**Median +2.5%, mean -1.1%, t ~ 0.28 => STATISTICALLY INDISTINGUISHABLE.**
+The hardware MMULT vertex transform is **perf-neutral on this scene**, NOT the
+~-28%-of-frame MMULT_SCOPE predicted. Do not quote the earlier "4.49 fps" — that
+build rendered wrong geometry.
+
+### Why the estimate was wrong (for the next estimate)
+1. **Mandatory drain.** Silicon needs 8 nops after every mmult (3/vertex = 24
+   nops/vertex) — pure overhead the scope's "~27 cyc/vert" never counted.
+2. **The 65%-of-Tom pre-pass figure came from jsim on a SPAWN config.** This is a
+   walking scene, and jagemu does not model imul32's mult latency, so the
+   software rotate's modelled cost was probably overstated relative to silicon.
+3. Frame time here is not pre-pass-bound; variance (sd ~10% of mean) is larger
+   than the effect being chased.
+
+### Verdict / options
+- MMULTX=1 is CORRECT and slightly SMALLER (3654 vs 3668) but buys no measurable
+  fps. Keep it flag-gated and default OFF; it is not a regression, just not a win.
+- If revisited: measure on the SPAWN config (where the pre-pass actually
+  dominates) and with more samples; or attack the drain (MTXA auto-advance is
+  silicon-confirmed and would drop 2 stores/vertex, but the 24 nops dominate).
+- The honest headline: **the biggest-lever estimate did not survive contact with
+  silicon.** Frame time is elsewhere (raster/blit + the maxvbl stall spikes).
