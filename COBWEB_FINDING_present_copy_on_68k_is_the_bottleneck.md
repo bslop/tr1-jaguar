@@ -138,3 +138,32 @@ Still possibly open on the jsim side, separate issue: `jerrypose` over-predictio
 (whole-program within 1%); the Jerry-marginal-load half may still be soft. That's
 a jsim question, independent of the present copy — flag it if it bites you, but
 the present copy is the win that's sitting right here.
+
+---
+
+## RE-PIN on the current PLAY tree (2026-07-23, OpenLara side) — copy is BASELINE-ONLY
+
+Rebuilt jagemu (pc-histogram now in the binary) and profiled the **shipped
+play config**, not the bare baseline:
+`MULTIROOM GEOMDIRECT SHADEPASS JERRYPOSE STAGEDIET PIPELINE PIPESTAGE=2
+HOPDIAL HOPBOOT XCULL BEXIT ROWDIET STATICS BANKDIET PROFILE NOPROFGPU`.
+
+**The `move.b` present copy is GONE from this build.** The finding profiled
+`MULTIROOM PROFILE AUTOSTART` (no GEOMDIRECT/PIPELINE) — that path falls back
+to the byte copy. The play path presents via `video_flip`'s triple-buffer
+**pointer-swap** (video.c, non-HALFRES/non-LOWRES: rotate draw_buf, ISR swaps
+front_fb — zero copy). Top-14 of the play histogram has no `move.b` present.
+So the finding is correct-and-fixed-for-the-baseline, N/A for the ship path.
+
+**Boot-contamination caveat (worth flagging for the tool):** a 620-frame
+profile put `__mulsi3` at ~24% of awake and 68k-awake at 63%. At 1800 frames
+(boot amortized) it fell to __mulsi3 ~15% and 68k-awake **39%** — the
+`video_init+0xAE` mul-loop is a one-time 76,800-iter boot cost (instr count
+flat at 76801 across both runs). The pc-histogram over a boot-inclusive
+window ranks boot loops as steady-state hotspots. A `--start <frame>` warmup
+(like `screenshot --start`) for the profiler would make short runs trustworthy.
+
+**Steady-state (1800f, silicon) for the play build:** Jerry 86.8% > Tom 74.9%
+>> 68k awake 39.1% (asleep 60.9%). Tom/Jerry are the walls; the 68k is not.
+Confirms the Tom-compute (RUNBATCH) direction. jerrypose emu +27% here again
+= the documented over-prediction gap; on silicon it's neutral.
