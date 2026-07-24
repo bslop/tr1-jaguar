@@ -66,6 +66,14 @@ CFLAGS   += -DGEOMXFORM
 ASFLAGS  += -DGEOMXFORM
 endif
 
+# make MMULTX=1: vertex pre-pass rotate via Tom's hardware MMULT (3 dot products
+# from a precomposed 3x3) instead of 8 software imul32. 68k precomputes the
+# matrix (gpu.c build_xform_mtx); kernel reads it under .if MMULTX. Phase 0
+# silicon-validated (calib p_mmult). Default off = byte-identical imul32 path.
+ifdef MMULTX
+CFLAGS   += -DMMULTX
+endif
+
 # make GEOMXFORM=1 OVERLAP=1: async - 68k builds frame N+1's packets
 # while Tom draws frame N (double-buffered packets, fire-and-return kick).
 ifdef OVERLAP
@@ -485,7 +493,7 @@ ifdef TRAPEZOID
 $(error ROWDIET=1 and TRAPEZOID=1 are mutually exclusive (both claim r4/r21 in the span run))
 endif
 endif
-GEOTEX_DEFS := $(LOWRES_DEF) $(NOFILL_DEF) $(NOSPAN_DEF) $(PROFGPU_DEF) $(NOMUL_DEF) $(NODIV_DEF) $(NOSTORE_DEF) $(SHADEPASS_DEF) $(NOCULL_DEF) $(STAGEDIET_DEF) -d NOBLIT=$(if $(NOBLIT),1,0) -d ALLCULL=$(if $(ALLCULL),1,0) -d RUNHIST=$(if $(RUNHIST),1,0) -d TRAPEZOID=$(if $(TRAPEZOID),1,0) -d DRIFTLOOSE=$(if $(DRIFTLOOSE),1,0) -d XCULL=$(if $(XCULL),1,0) -d BEXIT=$(if $(BEXIT),1,0) -d ROWDIET=$(if $(ROWDIET),1,0) -d PHRASESHADE=$(if $(PHRASESHADE),1,0) -d DIVHIDE=$(if $(DIVHIDE),1,0) -d BANKDIET=$(if $(BANKDIET),1,0) -d RUNBATCH=$(if $(RUNBATCH),1,0) -d RBNOUV=$(if $(RBNOUV),1,0) -d CULLCOUNT=$(if $(CULLCOUNT),1,0) -d PREPASSONLY=$(if $(PREPASSONLY),1,0)
+GEOTEX_DEFS := $(LOWRES_DEF) $(NOFILL_DEF) $(NOSPAN_DEF) $(PROFGPU_DEF) $(NOMUL_DEF) $(NODIV_DEF) $(NOSTORE_DEF) $(SHADEPASS_DEF) $(NOCULL_DEF) $(STAGEDIET_DEF) -d NOBLIT=$(if $(NOBLIT),1,0) -d ALLCULL=$(if $(ALLCULL),1,0) -d RUNHIST=$(if $(RUNHIST),1,0) -d TRAPEZOID=$(if $(TRAPEZOID),1,0) -d DRIFTLOOSE=$(if $(DRIFTLOOSE),1,0) -d XCULL=$(if $(XCULL),1,0) -d BEXIT=$(if $(BEXIT),1,0) -d ROWDIET=$(if $(ROWDIET),1,0) -d PHRASESHADE=$(if $(PHRASESHADE),1,0) -d DIVHIDE=$(if $(DIVHIDE),1,0) -d BANKDIET=$(if $(BANKDIET),1,0) -d RUNBATCH=$(if $(RUNBATCH),1,0) -d RBNOUV=$(if $(RBNOUV),1,0) -d CULLCOUNT=$(if $(CULLCOUNT),1,0) -d PREPASSONLY=$(if $(PREPASSONLY),1,0) -d MMULTX=$(if $(MMULTX),1,0)
 $(BUILD)/gpu_geotex.bin: gpu_geotex.gas | $(BUILD)
 	$(JAS) $< -o $@ --gpu $(call jasd,$(GEOTEX_DEFS))
 	@sz=$$(stat -c%s $@); if [ $$sz -gt 3680 ]; then 	  echo "!!! gpu_geotex.bin $$sz bytes OVERLAPS SRAM vars at F03E60 (max 3680; AU/BU at F03FA8+; SY/U/V relocated to F03FCC+; SX_BUF at F03F24; F03F74+ = DISPATCH LIST, not free)"; 	  rm -f $@; exit 1; fi

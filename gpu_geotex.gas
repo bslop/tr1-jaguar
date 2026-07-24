@@ -648,6 +648,29 @@ vc_self:
 	load	(r0),r16		; camy
 	addq	#4,r0
 	load	(r0),r17		; camz
+	.if MMULTX
+	; --- MMULT rotate setup: copy the 9 precomposed Q12 coeffs (68k wrote the
+	;     DRAM ptr to $F03F20) into MTXBUF (= WBUF, free during the pre-pass),
+	;     then set MTXC = 3 (width 3, by-row). Each coeff is in both 16-bit
+	;     halves so MMULT's low-16 SRAM fetch reads it. r0-r4,r22 free here. ---
+	movei	#$F03F20,r0
+	load	(r0),r1			; r1 = DRAM matrix ptr (build_xform_mtx)
+	movei	#WBUF,r2		; MTXBUF dest in GPU SRAM
+	moveq	#9,r3			; 9 longs
+	movei	#mmx_copy,r22
+mmx_copy:
+	load	(r1),r4
+	addq	#4,r1
+	nop
+	store	r4,(r2)
+	addq	#4,r2
+	subq	#1,r3
+	jump	NE,(r22)
+	nop
+	movei	#$F02104,r0		; G_MTXC
+	moveq	#3,r1
+	store	r1,(r0)			; MWIDTH = 3, by-row (bit4 MATCOL = 0)
+	.endif
 	movei	#G_DIVCTRL,r0
 	moveq	#0,r1
 	store	r1,(r0)			; integer divide mode (projection)
@@ -681,6 +704,43 @@ vc_loop:
 	sub	r15,r8			; dx
 	sub	r16,r9			; dy
 	sub	r17,r20			; dz
+	.if MMULTX
+	; --- MMULT rotate: (rx,ry,rz2) = R*(dx,dy,dz) via 3 hardware MMULTs against
+	;     the precomposed 3x3 in MTXBUF, replacing the 8 imul32 (vcf1..8). Pack
+	;     the vector into consecutive bank-1 regs r0/r1 (r0 = dx|(dy<<16),
+	;     r1 = dz); re-moveta before EACH mmult (silicon reads the operand through
+	;     the moveta, not the file); re-store MTXA per row (auto-advance proven on
+	;     silicon but not relied on yet). MTXC=3 was set at pre-pass start. ---
+	move	r8,r0			; dx
+	shlq	#16,r0
+	shrq	#16,r0			; dx & 0xFFFF (clear high)
+	move	r9,r1			; dy
+	shlq	#16,r1			; dy << 16
+	or	r1,r0			; r0 = (dy<<16)|(dx&FFFF)  [elem0=dx, elem1=dy]
+	move	r20,r1			; r1 = dz                  [elem2 = low(r1)]
+	movei	#$F02108,r2		; G_MTXA
+	movei	#WBUF,r3
+	store	r3,(r2)			; MTXA -> row0
+	moveta	r0,r0			; vector -> bank1 (REQUIRED immediately pre-mmult)
+	moveta	r1,r1
+	mmult	r0,r21			; r21 = row0 . vec  (rx, Q12)
+	movei	#WBUF+12,r3
+	store	r3,(r2)			; MTXA -> row1
+	moveta	r0,r0
+	moveta	r1,r1
+	mmult	r0,r24			; r24 = row1 . vec  (ry, Q12)
+	movei	#WBUF+24,r3
+	store	r3,(r2)			; MTXA -> row2
+	moveta	r0,r0
+	moveta	r1,r1
+	mmult	r0,r25			; r25 = row2 . vec  (rz2, Q12)
+	.rept	6
+	nop				; drain the systolic result before reading it
+	.endr
+	sharq	#12,r21			; rx
+	sharq	#12,r24			; ry
+	sharq	#12,r25			; rz2
+	.else
 	move	r8,r0
 	movei	#vcf1,r28
 	.if BANKDIET=1
@@ -781,6 +841,7 @@ vcf7:
 vcf8:
 	add	r0,r25
 	sharq	#12,r25			; rz2
+	.endif
 	; NEAR-SNAP REVERTED (task 19 postponed): every clamp variant drew
 	; wrong-but-on-screen geometry (ceiling flashes / smear plates /
 	; stretch, all HW-seen 2026-07-11). Pop-in (clean cull) is the

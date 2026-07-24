@@ -193,10 +193,38 @@ void gpu_geotex_setclip(int x0, int x1, int y0, int y1)
     *(volatile uint32_t *)0xF03F5Cu = (uint32_t)y1;
 }
 
+#ifdef MMULTX
+/* Precompose yaw*pitch into a flat 3x3 Q12 matrix (row-major) so the kernel's
+ * per-vertex rotate becomes 3 hardware MMULTs instead of 8 software imul32.
+ * Each coeff is duplicated into BOTH 16-bit halves: silicon MMULT reads the
+ * SRAM matrix element from the LOW half, jsim reads the HIGH half — both-halves
+ * keeps them identical. Cross-products round-to-nearest (+2048) hold the error
+ * to ~1-2px (max 3 camera units) vs the imul32 rotate. Host-verified (300k
+ * poses); see MMULT_IMPL.md. The kernel reads g_xform_mtx's pointer from the
+ * $F03F20 param scrap under .if MMULTX. */
+#define G_XFORM_MTX_PTR 0xF03F20u
+static uint32_t g_xform_mtx[9];
+static uint32_t mtx_pack(int c){ return ((uint32_t)c << 16) | (uint32_t)(c & 0xFFFF); }
+static void build_xform_mtx(const void *camblk)
+{
+    const int32_t *cb = (const int32_t *)camblk;   /* cY4,sY4,cP4,sP4 (Q12, signed) */
+    int cY = cb[0], sY = cb[1], cP = cb[2], sP = cb[3];
+    int sYsP = (sY*sP + 2048) >> 12, cYsP = (cY*sP + 2048) >> 12;
+    int sYcP = (sY*cP + 2048) >> 12, cYcP = (cY*cP + 2048) >> 12;
+    g_xform_mtx[0]=mtx_pack(cY);    g_xform_mtx[1]=mtx_pack(0);   g_xform_mtx[2]=mtx_pack(-sY);
+    g_xform_mtx[3]=mtx_pack(-sYsP); g_xform_mtx[4]=mtx_pack(cP);  g_xform_mtx[5]=mtx_pack(-cYsP);
+    g_xform_mtx[6]=mtx_pack(sYcP);  g_xform_mtx[7]=mtx_pack(sP);  g_xform_mtx[8]=mtx_pack(cYcP);
+    *(volatile uint32_t *)G_XFORM_MTX_PTR = (uint32_t)g_xform_mtx;
+}
+#endif
+
 void gpu_geotex_kick(const void *room, void *fb, const void *camblk,
                      const void *atlas, uint32_t atlas_width)
 {
     G_CTRL = 0;
+#ifdef MMULTX
+    build_xform_mtx(camblk);
+#endif
     *(volatile uint32_t *)(G_PARAMS + 0)  = (uint32_t)room;
     *(volatile uint32_t *)(G_PARAMS + 8)  = (uint32_t)vtxcache;
     *(volatile uint32_t *)(G_PARAMS + 12) = (uint32_t)fb;
@@ -224,6 +252,9 @@ void gpu_geotex_dispatch(const uint32_t *list, void *fb, const void *camblk,
        $F03FFF fits count + 11 rooms x 3 longs. */
     volatile uint32_t *sl = (volatile uint32_t *)0xF03F74u;
     uint32_t n = list[0], i;
+#ifdef MMULTX
+    build_xform_mtx(camblk);
+#endif
     if (n > 3) n = 3;      /* list ends $F03FA4; tail = kernel vars */      /* SRAM cap SHRUNK 8->5 (2026-07-20): the list now
                               ends at $F03FC8, freeing $F03FC8-FF for kernel
                               scratch (rect-shade + task 6). Callers batch by
