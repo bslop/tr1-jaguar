@@ -159,4 +159,19 @@ wall-clock block cadence is the backup oracle.
 
 `MMXDIAG=1` is retained as a default-off diagnostic flag (kernel byte-identical off).
 
+### SILICON RESULT — side A (MMULTX=0) baseline, 2026-07-24
+Flashed `AB_MMULT_OFF.cof` (upload 191 s @ 7 KB/s, then a ~240 s console window).
+14 `fpsT` samples (fps x100): 481 436 455 437 344 407 390 405 340 397 398 410 359 500
+- **median 406 = 4.06 fps**, mean 4.11, range 3.40 - 5.00.
+- `fps100` on the same blocks read 2033/2022/1538/... vs `fpsT` 437/344/... —
+  ratio ~4.65, **re-confirming the documented ~4.7x fps100 inflation on silicon**.
+- **STALLS ARE REAL AND PRE-EXISTING (baseline build, no MMULT):** `maxvbl` per
+  block = 4 4 4 4 5 6 **13** 5 **15** **13** 5 5 3 — most frames 4-6 vblanks but
+  worst-frame excursions to 13-15 (215-250 ms). `spind` spikes on the same blocks
+  (194/103/102/98/.../196/142). User observed the stutter directly. This is a
+  SMOOTHNESS problem independent of the transform campaign (GOVERNOR=1 exists in
+  the tree for exactly this; see PERFHUNT variance work).
+
+Side B (`AB_MMULT_ON.cof`) NOT YET FLASHED — needed for any A/B verdict.
+
 Branch: mmult-phase1-precompose. Related: MMULT_SCOPE.md, CULLWALK_SCOPE.md.
