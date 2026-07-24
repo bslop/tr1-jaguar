@@ -85,4 +85,32 @@ pre-scale). STAGEDIET's "camera exceeds s16" ok-flag is the precedent.
   build_xform_mtx for the scene's cam angles. Then pixel-diff MMULTX vs imul32.
 - Silicon: fps A/B + visual, flags-off byte-identity (c4f42fe3 discipline).
 
+## STATUS (2026-07-24): wired + jsim correctness gate PASSED
+
+Phase 2 landed (commit b4d05bd): MMULTX flag, gpu.c build_xform_mtx, kernel
+matrix copy + 3-MMULT rotate. Build facts: MMULTX=0 assembles BYTE-IDENTICAL to
+HEAD (3328B); MMULTX=1 = 3272B (-56B); full MULTIROOM+AUTOSTART cof links (jcc68k).
+
+**jsim geometry gate PASSED** (jagemu screenshot, MULTIROOM AUTOSTART, frame 600
+= a real Caves render, 185 colors): MMULTX=1 vs MMULTX=0 is **PIXEL-IDENTICAL**
+(0/76800 px differ). The ±3-unit precompose rounding stays sub-pixel here.
+Path-liveness PROVEN: a temp `addq #30,r21` in the MMULT rotate shifted 38% of
+pixels → the MMULT path really drives the geometry (not skipped by the Jerry
+co-transform gate; VCPTR=0 in this build).
+
+**Perf: jsim instret is NOT a valid oracle here.** MMULTX=1 vs =0 steady-state
+per-frame GPU instret (f600→620) = only -0.2%. Two reasons: (1) jagemu at this
+fidelity counts ~1 cyc/instr and does NOT model imul32's multi-cycle `mult`
+latency vs MMULT's systolic cost — the real cycle win is invisible to it; (2)
+this Caves-walking scene is rasterization/face-loop-bound, whereas the "65% of
+Tom pre-pass" was a SPAWN config. **Real perf = rig fps A/B** (flags-off byte-
+identity already holds), ideally on the spawn scene where the pre-pass dominates.
+NB: build with `make clean` between flag flips — make does not track -D changes
+(a stale-object false-identical bit me once).
+
+REMAINING: (a) rig fps A/B + visual on the spawn config; (b) s16 range guard
+(dx=wx−camx > s16 in big rooms → bank-1 pack truncates → warped verts; not seen
+in the Caves frame but unverified at scale); (c) optional MTXA auto-advance
+(silicon-confirmed) to drop the 2 per-row MTXA stores.
+
 Branch: mmult-phase1-precompose. Related: MMULT_SCOPE.md, CULLWALK_SCOPE.md.
