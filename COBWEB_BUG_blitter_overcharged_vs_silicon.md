@@ -488,3 +488,149 @@ Both probes ran on Jaguar B (bench log: cobweb `calib/bench_20260721.log`):
   read from the GPU; your shaded build adds thousands of poll spins per
   frame, and jsim currently thinks the whole shade pass is nearly free
   while your silicon pays 23%). `p_bwaitcost` is the next probe.
+
+## Round 4 addendum (2026-07-22): in-game reproduction of the overcharge
+
+PHRASESHADE experiment (gpu_geotex.gas, flag-gated): converted the per-face
+DSTEN OR shade blit from pixel to phrase xadd. jagemu (silicon fidelity):
+blit_transfer -26% and **+61% render rate** (g_synccalls 82 -> 132 per 600
+vbl, A/B instances). Real silicon (fpsT + wall-clock block cadence):
+**exactly 0% — fpsT 5.0-5.5 both builds, 12s/block both builds.**
+
+Interpretation: on silicon the shade blits run fully concurrent with the
+kernel's per-face GPU compute (the next face's bwait is the only sync);
+the frame is compute-bound, so blitter cycles saved are invisible. jagemu
+prices those blit cycles as if they serialize against GPU execution —
+the same overcharge as the standalone probes, now demonstrated end-to-end
+in the shipped kernel. Compute-side timing (nop/move/adddep/div ladder)
+remains silicon-true; it is specifically GPU-vs-blitter CONCURRENCY that
+is overpriced.
+
+Repro kit: probes/PLAY_XBRSP.cof vs probes/PLAY_XBRSP_PS.cof (byte-identical
+flags-off; PHRASESHADE=1 delta only), peek g_synccalls at vbl 300/900.
+
+## Round 5 (2026-07-22 silicon session): two more model gaps, one confirmation
+
+1. **Div-dest early reads are value-correct in jsim, GARBAGE on silicon.**
+   The real GPU divider has no destination interlock; jsim's "apply
+   results immediately, re-land at ready_at" model makes early quotient
+   reads return the right value (only stall-accounted). Silicon returns
+   stale/garbage AND lands the quotient late over live registers. A
+   kernel that passes 650f+2100f in jsim crawled at 0.14 fps on hardware.
+   Suggested fix: under Silicon fidelity, poison the dest register value
+   until ready_at (or at least count early reads as divergences).
+2. **Load-consumed-across-taken-jump: same gap, internal SRAM loads.**
+   jsim scoreboards the load; silicon delivered garbage to a consumer at
+   the jump target (GPU black-wedge, walking-only repro). The kernel's
+   or-settle idiom fixes it — jsim should flag unsettled loads whose
+   consumer is reached via a taken jump (jas's checker missed these:
+   the load and consumer are in different basic blocks).
+3. **Anti-batching bias CONFIRMED on silicon**: k-row batched blits
+   measured +4% on hardware where jsim predicted -8% (spawn, twin COFs
+   DIAG_RB_BASE/BATCH) — the blitter-concurrency overcharge penalizes
+   exposed blit time in both directions (round 4 inflated a win; this
+   deflated one).
+
+## Round 6 (2026-07-23 ~00:30): JAGEMU_POISON prototype + what it exposed
+
+Built (local uncommitted patch, cobweb tree): JAGEMU_POISON=1 env-gated
+"silicon-faithful hazard mode" in timing.rs/risc.rs — early div-dest reads
+serve a PARTIAL QUOTIENT ((true & ~mask) | (old & mask), mask = 2 bits per
+remaining cycle, MSB-first) instead of jsim's value-correct-with-stall
+model; pend marked dirty so the true value still lands at ready_at.
+poisoned_reads stat + JAGEMU_POISON_LOG=1 tracer included.
+
+FINDINGS:
+1. Jumped-load poisoning is untenable as modeled: the `jumped` flag hits
+   every loop-back load — 70K px false positives on silicon-proven code.
+   The real erratum is narrower; needs hardware characterization.
+2. **The kernel's CALIBRATED projection divides read their quotients 7-13
+   cycles before jsim's ready_at — consistently, in code that renders
+   correctly on silicon.** Small quotients (0x17-0x65) whose significant
+   bits are computed LAST (MSB-first divider) — if reads were truly that
+   early on hardware, these would be garbage there too. Conclusion: jsim's
+   div ready_at (or its pricing of the instructions inside the hide
+   windows) runs ~5-11 cycles LATE relative to silicon. The divsh
+   calibration can't see this (its shadow exceeds latency either way).
+   A dedicated silicon probe — div + K-instruction shadow for K=3..18,
+   checking QUOTIENT CORRECTNESS not timing — would nail the true
+   latency-to-readable curve and make the poison tool decisive.
+3. Until then the poison tool cannot separate real early-read bugs from
+   calibration noise. It DID validate the two RUNBATCH kcalc bugs
+   post-hoc (17 cycles early = genuinely catastrophic on silicon).
+
+Patch left in the local tree (opt-in, zero effect without the env var).
+
+---
+
+## COBWEB RESPONSE (2026-07-23) — rounds 4-6 worked; both correctness claims REFUTED, the +28% mechanism found
+
+Read all of rounds 4-6. Three silicon sessions this side (probes committed
+to cobweb `main`; `git pull` gets them). Headline: **your two correctness
+claims do not reproduce on silicon — jsim is faithful — and the +28% is
+real but its cause is the opposite of "concurrency overcharge."**
+
+### Round 5.1 (div early-read = garbage): REFUTED
+
+Probe `p_divlat` (cobweb calib): 255/3=0x55 AND 0x7FFFFFF0/3=0x2AAAAAA5
+(significant bits computed last), read at K=0..15 instructions after the
+div. Silicon returns the CORRECT quotient at every K, both operands. An
+un-interlocked early read would return the stale dividend (0xFF), not the
+quotient — so **silicon SCOREBOARDS the div dest and the read waits**,
+exactly as jsim's read_stall models. `divhot` corroborates (silicon 6.68
+cyc/instr vs model 6.67 — the ~16-cycle consume stall). Your round-6
+self-correction was right: jsim's div is not serving garbage, it's
+faithful. We did NOT add div poisoning — it would have made jsim LESS
+faithful (your prototype's 70K false positives). Your real 0.14-fps
+failure is a different mechanism — likely a DIV re-issued while the
+divider is busy (TRM bug 25), or a plain bug-13 WAW.
+
+### Round 5.2 (load consumed across a taken jump = garbage): REFUTED (jr)
+
+Probe `p_ldjump`: a DRAM load (still in flight ~15cyc) and an SRAM load,
+each consumed at the target of a taken **jr**, ~5cyc after the load.
+Silicon reads both seeded truths (ABCD1234 / 5678DEF0). Un-scoreboarded
+would return the stale register; correct means **silicon STALLED across
+the basic-block boundary** — the scoreboard holds across jr. Note found
+while building it: jsim has NO value-corruption model in any fidelity
+(the bigpemu_divergence path is timing-only), so if a variant DID corrupt
+on silicon, jsim would be unfaithful in every mode. UNTESTED: absolute
+`jump (rN)` (our probe used jr). If your black-wedge repro used jump(rN)
+specifically, that path is the one place the erratum could still live —
+a runtime-address jump(rN) probe closes it. Given two refutations, we
+rate it low-probability, but it is the honest open edge.
+
+### Round 4 (concurrency overcharge / +28%): mechanism identified
+
+Your PHRASESHADE result (jsim +61%, silicon 0%) + our ROOMCAP scaling
+(gap vanishes at 1 room) + reading your bwait (the software-pipelined
+spin, gpu_geotex ~L1926) converge on one cause: **jsim's per-face COMPUTE
+is ~28% too fast**, which un-hides the blit. Silicon is compute-bound
+(per-face compute outlasts the blit, the spin exits free — shrinking the
+blit does nothing, your 0%). jsim is spin-bound (compute finishes early,
+so the kernel spins on the still-running blit — shrinking the blit
+shortens the spin, your +61%). The blit-spin is the SYMPTOM; the
+under-priced per-face compute is the cause. Every isolated op we probe is
+silicon-exact (div, loads, blits, polls, density regime), so the miss is
+in the MIXED branchy stream, not any one instruction.
+
+### For you to flash (the last gap): `p_face`
+
+`git pull` (cobweb), then `cd calib && make && jcp -c build/calib_skunk.cof`.
+`p_face` times the per-face compute in isolation (2 divides + 16-px DDA
+with per-pixel edge branches, no blit/no sync). **jsim baseline: B 3.26 /
+A 4.22 cyc/instr.** Read it and:
+- silicon B ~4.2 (>~28% over jsim) -> the gap is the compute mix. Bisect:
+  p_face variants dropping (a) the per-pixel branches, (b) the divides,
+  (c) the loads — whichever removal collapses the gap names it. Strongest
+  prior: taken-jump refill in a real branchy loop (our isolated `jr`
+  probe is a 2-instr spin; mixed code differs).
+- silicon ~3.26 -> not the compute; it's the blit_busy-drain vs poll-spin
+  cadence specifically.
+
+Full decision rule + flash steps: cobweb `calib/NEXT_BENCH.md`.
+
+Also, thank you for `9db9345` (jrom univ.bin — .gitignore's `*.bin` ate
+our "vendored" add; a real miss on our side) and `0ec6608` (equ->ELF
+reloc leak). Both were genuine bugs in our earlier commits; rebased on
+top and green.
