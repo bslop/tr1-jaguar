@@ -174,4 +174,70 @@ Flashed `AB_MMULT_OFF.cof` (upload 191 s @ 7 KB/s, then a ~240 s console window)
 
 Side B (`AB_MMULT_ON.cof`) NOT YET FLASHED — needed for any A/B verdict.
 
+---
+
+# ⛔ HANDOFF — MMULTX IS BROKEN ON SILICON, ROOT CAUSE UNFOUND (2026-07-24)
+
+**STATE: do NOT ship MMULTX=1. MMULTX=0 is unaffected and byte-identical to the
+shipped kernel — the tree is safe.** Console was restored to `AB_MMULT_OFF.cof`.
+
+## The failure (silicon only, user-observed, reproducible)
+With `MMULTX=1` on the play config: **"parts of Lara everywhere — body and face
+scattered around the screen"**, scenery **popup**, and after walking to *the dip*
+the **screen goes black** (hang/crash). Degrades WITH MOVEMENT — spawn looks
+comparatively OK, walking makes it worse.
+
+## What is ELIMINATED (with evidence)
+1. **Operand layout / MMULT basics — FINE.** Phase 0 `p_mmult` passes on silicon
+   (rd=230,530,830), and cobweb's own probe passes too after my fixes.
+2. **Drain / settle time — NOT the cause.** Hypothesised that chaining 3 MMULTs
+   too tightly corrupted results; rebuilt with cobweb's validated **8 nops after
+   every mmult** (kernel 3648) and flashed: **Lara still scattered.** Fix kept
+   anyway (it is the validated spacing), commit f81b711.
+3. **s16 truncation of (dx,dy,dz) — NOT OBSERVED.** `MMXDIAG=1` ORs
+   |dx|,|dy|,|dz| into $1C0010. Reads **$00007FFF at spawn AND while walking
+   (--press up, 2200f)** => no component ever reaches 32768. NOTE: weak evidence
+   — the emu never reproduces the scatter at all, so this only rules it out for
+   emu-reachable states.
+4. **The emulator CANNOT reproduce this.** jagemu renders MMULTX=1 nearly
+   correctly (3.7% px, one wall). Every emu gate is therefore blind here.
+
+## REMAINING SUSPECTS (ranked, for the next session)
+1. **MTXBUF/WBUF ALIAS — TOP SUSPECT.** I aliased the 9-long matrix onto `WBUF`
+   ($F03E60), reasoning it is "free during the pre-pass". But `stage_vert` in the
+   FACE loop writes staged world verts into WBUF. In **dispatch mode (several
+   rooms + Lara per kick)** the order is room1 pre-pass -> room1 FACE loop
+   (**WBUF/matrix destroyed**) -> room2 pre-pass (re-copies) ... **VERIFY the
+   matrix is really re-copied for EVERY room/blob entry, including Lara's.** If
+   any entry path re-enters the pre-pass *below* my copy (or skips vc_self), that
+   entry transforms with a garbage matrix = scattered geometry. This fits the
+   symptom (Lara worst) better than anything else. **Move the matrix somewhere
+   private before anything else** — even if it costs a byte diet elsewhere.
+2. **Register liveness across my inserted blocks.** The matrix copy uses
+   r0-r4,r22; the rotate uses r0,r1,r2,r3,r21,r24,r25. Verified r5 (vcount), r18
+   (cache ptr), r11-r17 (camera), r30 (mailbox) are untouched — but this was
+   eyeballed, not proven. `jas` hazard-checks; consider a targeted audit.
+3. **Bank-1 interaction.** `moveta r0,r0 / moveta r1,r1` writes bank1 r0/r1.
+   BANKDIET=0 in this config so nothing else claims them — re-check if BANKDIET
+   is ever enabled with MMULTX.
+4. **The black screen at "the dip"** is a separate, harder symptom (hang, not
+   just wrong pixels) — likely a wild vertex feeding a huge blitter span. Any
+   root-cause fix should be re-tested specifically by walking to the dip.
+
+## Perf hint (INVALID as an A/B, but recorded)
+ON v2 (broken geometry) read fpsT 490/443/430/455 (median ~449 = 4.49 fps) vs
+side A's median 406 (4.06), with maxvbl 5-6 vs A's 13-15 and spind near zero.
+**Do not quote this as the MMULT win** — it renders the wrong scene, so the work
+performed differs. It is only weak evidence that the direction is not a slowdown.
+
+## Next-session plan (recommended order)
+1. Move MTXBUF off WBUF to private SRAM; re-verify the matrix survives every
+   dispatch entry. Re-flash and look at Lara.
+2. If still broken, BISECT on silicon rather than hypothesise: build variants that
+   (a) run the MMULT rotate but THROW AWAY the result and use imul32's values
+   (isolates "does merely executing MMULT corrupt state?"), then (b) use the
+   MMULT result for rx only, then ry, then rz2. One flash each, ~7 min, but each
+   one is decisive where reasoning has not been.
+3. Only after correct geometry: redo the A/B against side A median 406.
+
 Branch: mmult-phase1-precompose. Related: MMULT_SCOPE.md, CULLWALK_SCOPE.md.
