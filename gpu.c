@@ -202,19 +202,31 @@ void gpu_geotex_setclip(int x0, int x1, int y0, int y1)
  * to ~1-2px (max 3 camera units) vs the imul32 rotate. Host-verified (300k
  * poses); see MMULT_IMPL.md. The kernel reads g_xform_mtx's pointer from the
  * $F03F20 param scrap under .if MMULTX. */
-#define G_XFORM_MTX_PTR 0xF03F20u
-static uint32_t g_xform_mtx[9];
+/* The matrix is APPENDED TO THE CAMERA BLOCK (longs 7..15) rather than published
+ * via a scratch SRAM slot. An earlier cut parked the DRAM pointer at $F03F20 on
+ * the strength of a stale map comment ("4B, ex-SHADEK") — but SHADEK STILL LIVES
+ * THERE and SHADEPASS rewrites it ONCE PER FACE. Result: room 1 transformed
+ * correctly, then its face loop clobbered the pointer and every later room/blob
+ * (Lara included, she is drawn last) copied garbage as its matrix -> vertices
+ * scattered across the screen, scenery popup, and a hang once a wild vertex
+ * reached the blitter. The camera block needs no new slot: the 68k writes its
+ * pointer to PARAMS[4] ($F03F10) every kick and the kernel never writes PARAMS.
+ * We re-publish an extended copy, so main.c's camblk[] stays 8 longs. */
+static uint32_t g_camext[16];   /* [0..6] camera as passed, [7..15] the 3x3 */
 static uint32_t mtx_pack(int c){ return ((uint32_t)c << 16) | (uint32_t)(c & 0xFFFF); }
-static void build_xform_mtx(const void *camblk)
+static const void *build_xform_mtx(const void *camblk)
 {
     const int32_t *cb = (const int32_t *)camblk;   /* cY4,sY4,cP4,sP4 (Q12, signed) */
+    const uint32_t *cu = (const uint32_t *)camblk;
     int cY = cb[0], sY = cb[1], cP = cb[2], sP = cb[3];
     int sYsP = (sY*sP + 2048) >> 12, cYsP = (cY*sP + 2048) >> 12;
     int sYcP = (sY*cP + 2048) >> 12, cYcP = (cY*cP + 2048) >> 12;
-    g_xform_mtx[0]=mtx_pack(cY);    g_xform_mtx[1]=mtx_pack(0);   g_xform_mtx[2]=mtx_pack(-sY);
-    g_xform_mtx[3]=mtx_pack(-sYsP); g_xform_mtx[4]=mtx_pack(cP);  g_xform_mtx[5]=mtx_pack(-cYsP);
-    g_xform_mtx[6]=mtx_pack(sYcP);  g_xform_mtx[7]=mtx_pack(sP);  g_xform_mtx[8]=mtx_pack(cYcP);
-    *(volatile uint32_t *)G_XFORM_MTX_PTR = (uint32_t)g_xform_mtx;
+    int i;
+    for (i = 0; i < 7; i++) g_camext[i] = cu[i];
+    g_camext[ 7]=mtx_pack(cY);    g_camext[ 8]=mtx_pack(0);   g_camext[ 9]=mtx_pack(-sY);
+    g_camext[10]=mtx_pack(-sYsP); g_camext[11]=mtx_pack(cP);  g_camext[12]=mtx_pack(-cYsP);
+    g_camext[13]=mtx_pack(sYcP);  g_camext[14]=mtx_pack(sP);  g_camext[15]=mtx_pack(cYcP);
+    return g_camext;
 }
 #endif
 
@@ -223,7 +235,7 @@ void gpu_geotex_kick(const void *room, void *fb, const void *camblk,
 {
     G_CTRL = 0;
 #ifdef MMULTX
-    build_xform_mtx(camblk);
+    camblk = build_xform_mtx(camblk);   /* publish camera + appended 3x3 */
 #endif
     *(volatile uint32_t *)(G_PARAMS + 0)  = (uint32_t)room;
     *(volatile uint32_t *)(G_PARAMS + 8)  = (uint32_t)vtxcache;
@@ -253,7 +265,7 @@ void gpu_geotex_dispatch(const uint32_t *list, void *fb, const void *camblk,
     volatile uint32_t *sl = (volatile uint32_t *)0xF03F74u;
     uint32_t n = list[0], i;
 #ifdef MMULTX
-    build_xform_mtx(camblk);
+    camblk = build_xform_mtx(camblk);   /* publish camera + appended 3x3 */
 #endif
     if (n > 3) n = 3;      /* list ends $F03FA4; tail = kernel vars */      /* SRAM cap SHRUNK 8->5 (2026-07-20): the list now
                               ends at $F03FC8, freeing $F03FC8-FF for kernel

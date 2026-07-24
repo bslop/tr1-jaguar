@@ -181,7 +181,11 @@ V_BUF		.equ	$F03FE8
 ; !!! $F03F74-$F03FF7 is the PER-FRAME DISPATCH LIST (gpu.c copies count +
 ; 8 room entries there each kick) — it is NOT free scratch. A relocation
 ; onto it broke multi-room dispatch (2026-07-20). Real leftover scraps:
-; $F03F20 (4B, ex-SHADEK), $F03F38-3F (8B), $F03EF0-FF (16B, PROFGPU=0
+; !!! $F03F20 IS *NOT* FREE — it is SHADEK (see the .equ below), rewritten ONCE
+; PER FACE whenever SHADEPASS=1. This line used to read "$F03F20 (4B,
+; ex-SHADEK)" and that stale claim cost a silicon regression on 2026-07-24
+; (matrix pointer parked there -> clobbered after room 1 -> scattered geometry).
+; $F03F38-3F (8B), $F03EF0-FF (16B, PROFGPU=0
 ; builds only). Task 6 needs a 5-entry list + code diet to fit.
 ; chain A u/v DDA state
 ; AU/BU blocks moved into the tail freed by the 3-entry dispatch list
@@ -649,12 +653,22 @@ vc_self:
 	addq	#4,r0
 	load	(r0),r17		; camz
 	.if MMULTX
-	; --- MMULT rotate setup: copy the 9 precomposed Q12 coeffs (68k wrote the
-	;     DRAM ptr to $F03F20) into MTXBUF (= WBUF, free during the pre-pass),
-	;     then set MTXC = 3 (width 3, by-row). Each coeff is in both 16-bit
-	;     halves so MMULT's low-16 SRAM fetch reads it. r0-r4,r22 free here. ---
-	movei	#$F03F20,r0
-	load	(r0),r1			; r1 = DRAM matrix ptr (build_xform_mtx)
+	; --- MMULT rotate setup: copy the 9 precomposed Q12 coeffs into MTXBUF
+	;     (= WBUF, verified free during the pre-pass — the face loop clobbers it
+	;     but every room re-enters vc_self and re-copies). MTXC = 3 (by-row).
+	;     Each coeff is in both 16-bit halves so MMULT's low-16 SRAM fetch reads
+	;     it. r0-r4,r22 free here (r4 = room base is dead after hdr_parse).
+	;     The matrix is APPENDED TO THE CAMERA BLOCK at +28, read via PARAMS[4]
+	;     ($F03F10) — the 68k rewrites that every kick and the kernel never
+	;     writes PARAMS. DO NOT park this pointer in $F03F20: that is SHADEK,
+	;     which SHADEPASS rewrites once per face, so room 2+ (and Lara) would
+	;     copy a shade byte pattern as their matrix. That was the 2026-07-24
+	;     scattered-Lara regression. ---
+	movei	#$F03F10,r0		; PARAMS[4] = camera block DRAM ptr
+	load	(r0),r1
+	nop
+	nop
+	addq	#28,r1			; -> the 9 appended matrix longs
 	movei	#WBUF,r2		; MTXBUF dest in GPU SRAM
 	moveq	#9,r3			; 9 longs
 	movei	#mmx_copy,r22
