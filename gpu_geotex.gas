@@ -704,6 +704,23 @@ vc_loop:
 	sub	r15,r8			; dx
 	sub	r16,r9			; dy
 	sub	r17,r20			; dz
+	.if MMXDIAG
+	; TEMP DIAGNOSTIC: OR |dx|,|dy|,|dz| into $1C0010. Any bit >=15 set in the
+	; result means some component exceeded s16 -> the bank-1 pack truncates it
+	; (the documented MMULT range risk). Read with jagemu peek.
+	movei	#$001C0010,r2
+	load	(r2),r3
+	move	r8,r0
+	abs	r0
+	or	r0,r3
+	move	r9,r0
+	abs	r0
+	or	r0,r3
+	move	r20,r0
+	abs	r0
+	or	r0,r3
+	store	r3,(r2)
+	.endif
 	.if MMULTX
 	; --- MMULT rotate: (rx,ry,rz2) = R*(dx,dy,dz) via 3 hardware MMULTs against
 	;     the precomposed 3x3 in MTXBUF, replacing the 8 imul32 (vcf1..8). Pack

@@ -113,4 +113,50 @@ REMAINING: (a) rig fps A/B + visual on the spawn config; (b) s16 range guard
 in the Caves frame but unverified at scale); (c) optional MTXA auto-advance
 (silicon-confirmed) to drop the 2 per-row MTXA stores.
 
+## RIG A/B — STAGED AND READY (2026-07-24)
+
+**Builds** (in `probes/`, self-contained; assets embedded):
+
+| build | flag | kernel | md5 |
+|---|---|---|---|
+| `AB_MMULT_OFF.cof` | MMULTX=0 | **3668**/3680 | `8211a82f534517037a4c7fbe85c66283` |
+| `AB_MMULT_ON.cof`  | MMULTX=1 | **3612**/3680 | `b9380f43c431b989a467408b7e82b9b9` |
+
+Config (identical both sides except MMULTX), **built with `bins_planes`** (STAGEDIET
+requires FACE_PLANES bins — the live tree carries bins_statics, so `cp
+probes/bins_planes/* .` before rebuilding, and `make clean` between flag flips):
+```
+MULTIROOM=1 GEOMDIRECT=1 SHADEPASS=1 JERRYPOSE=1 AUTOSTART=1 STAGEDIET=1 \
+PIPELINE=1 PIPESTAGE=2 HOPDIAL=1 HOPBOOT=1 XCULL=1 BEXIT=1 \
+NOGD=1 PROFILE=1 NOPROFGPU=1 QUIETFPS=1
+```
+A's kernel is **3668 = the documented PLAY_XB baseline exactly** → config reproduced.
+NOGD=1 (Skunkboard console) is what carries `fpsT`; note NOGD builds CANNOT run in
+jagemu (the skunk handshake spins with no board) — use NOGDONLY for emu work.
+
+**Run:**
+```sh
+cd .../cobweb/calib   # skunkflash.sh is generic
+./skunkflash.sh <path>/probes/AB_MMULT_OFF.cof 90 /tmp/ab_off.log
+./skunkflash.sh <path>/probes/AB_MMULT_ON.cof  90 /tmp/ab_on.log
+grep -a fpsT /tmp/ab_off.log /tmp/ab_on.log
+```
+**Read `fpsT` ONLY** (loop-top window, includes logic). fps100 is inflated ~4.7×
+— see pacing-campaign. Compare medians over a settled stretch, same scene/pose;
+wall-clock block cadence is the backup oracle.
+
+**Emu pre-gate results (silicon fidelity, 1200f spawn, NOGDONLY twin):**
+- 0 illegal both sides, both render (93/86 colors).
+- GPU instret +0.88% for MMULTX=1 — **not a valid perf oracle** (jagemu doesn't
+  model imul32's mult latency vs MMULT's systolic cost). The rig decides.
+- **KNOWN VISUAL DELTA: ~3.7% of pixels differ — one wall face present in OFF,
+  absent in ON**, stable across frames 1200/1500. NOT s16 overflow: a range probe
+  (MMXDIAG=1, ORs |dx|,|dy|,|dz| into $1C0010) read **$00007FFF at spawn = no
+  component ever exceeded s16**. Cause is a cull knife-edge: with BEXIT=1 a single
+  vertex crossing NEAR (rz2≈64) aborts its WHOLE face, so the ±3-unit precompose
+  rounding flips one face. Inherent to any precision change, not a transform bug —
+  but **eyeball the ON build for a missing wall** during the run.
+
+`MMXDIAG=1` is retained as a default-off diagnostic flag (kernel byte-identical off).
+
 Branch: mmult-phase1-precompose. Related: MMULT_SCOPE.md, CULLWALK_SCOPE.md.
