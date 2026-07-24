@@ -735,24 +735,37 @@ vc_loop:
 	shlq	#16,r1			; dy << 16
 	or	r1,r0			; r0 = (dy<<16)|(dx&FFFF)  [elem0=dx, elem1=dy]
 	move	r20,r1			; r1 = dz                  [elem2 = low(r1)]
+	; DRAIN DISCIPLINE (2026-07-24 silicon regression): the first cut chained the
+	; 3 MMULTs with only ~4 instructions between them and 6 nops before reading —
+	; it rendered CORRECTLY in jagemu (which models MMULT as instantaneous) but
+	; produced SCATTERED/garbage vertices on real Tom. cobweb's silicon-validated
+	; p_mmult settles 8 nops after every mmult before its result is touched and
+	; never lets two mmults run close together. Match that exactly; the systolic
+	; result lands late and a too-short settle lets a later access catch it.
 	movei	#$F02108,r2		; G_MTXA
 	movei	#WBUF,r3
 	store	r3,(r2)			; MTXA -> row0
 	moveta	r0,r0			; vector -> bank1 (REQUIRED immediately pre-mmult)
 	moveta	r1,r1
 	mmult	r0,r21			; r21 = row0 . vec  (rx, Q12)
+	.rept	8
+	nop				; settle row0 (validated spacing)
+	.endr
 	movei	#WBUF+12,r3
 	store	r3,(r2)			; MTXA -> row1
 	moveta	r0,r0
 	moveta	r1,r1
 	mmult	r0,r24			; r24 = row1 . vec  (ry, Q12)
+	.rept	8
+	nop				; settle row1
+	.endr
 	movei	#WBUF+24,r3
 	store	r3,(r2)			; MTXA -> row2
 	moveta	r0,r0
 	moveta	r1,r1
 	mmult	r0,r25			; r25 = row2 . vec  (rz2, Q12)
-	.rept	6
-	nop				; drain the systolic result before reading it
+	.rept	8
+	nop				; settle row2 before the sharq reads it
 	.endr
 	sharq	#12,r21			; rx
 	sharq	#12,r24			; ry
