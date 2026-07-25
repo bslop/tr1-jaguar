@@ -278,3 +278,25 @@ assembled to 3724/3680 (44 over, not the estimated ~30); without FARDIAL
   gpu_geotex.gas.pre_xb_diet / Makefile.pre_xb_diet.
 - Tree at session end: ship bins verified byte-equal (all 10 files),
   mrt_spawn.h = ship, default build green. XCULL/BEXIT remain opt-in.
+
+---
+
+## ⚠️ TRAP: `SHADEPASS=0` IS NOT "SHADING OFF" — IT IS "SHADING BROKEN" (2026-07-24)
+
+The RAMP atlas and the runtime shade pass are **two halves of one system**.
+Extractor (`tools/tr2jag_multiroom.py:637`): with `RAMP_PAL`, *"every face uses
+the single full-bright (lvl 3) tile copy; the darkening that lvl used to bake
+MOVES to the runtime shade pass"*. The kernel agrees: `k = 0: full bright`.
+
+So building with `SHADEPASS=0` against RAMP_PAL assets renders **every surface at
+full brightness**. On silicon the user immediately reported "all the textures are
+wrong — I should be seeing different ones". It is not a lighting toggle; it
+deletes the only source of shading in the pipeline.
+
+Measured anyway (probes/GOV_noCRY.cof): fpsT median 406 -> 441 (+8.6%, Welch
+t=1.83) and kernel 3668 -> 3470 (-198B). **Real numbers, unshippable config** —
+quote them only as "what the shade pass costs", never as a proposed build.
+
+**A genuine shading-off comparison requires rebuilding the atlas with
+`RAMP_PAL=0`** so the levels are baked back into the tiles (costs ~+212KB of
+atlas, which is what the ramp work saved in the first place).
