@@ -3413,6 +3413,38 @@ int main(void)
                 gpu_sync(); g_tominflight = 0;
 #endif
             }
+#ifdef JLOOPS
+            /* JERRY HEARTBEAT, ON-SCREEN (2026-07-25).  Console readout is not
+               available: a NOGD build black-screened the board — SKUNK_CONSOLE's
+               startup handshake, the failure the ledger already records twice.
+               So draw it instead.
+               PLACEMENT IS THE WHOLE TRICK: right after gpu_sync (Tom is IDLE)
+               and BEFORE the flip, so `video_backbuffer()` is still the frame
+               Tom just finished.  This is why the normal PROFILE bar strip is
+               #if'd out under PIPELINE — that one does a Blitter `blit_band`
+               grab while Tom is mid-render and wedged the kernel.  These are
+               plain 68k stores into an idle buffer: no Blitter, no grab.
+                 row 4 = jloops (Jerry main_loop passes per 60 renders) x4 px
+                 row 8 = jrend  (60 renders) x4 px = a FIXED 240 px reference
+               BARS EQUAL  -> Jerry keeps up; he idle-polls between poses, and
+                              jagemu's "100% busy" was a model artifact.
+               TOP BAR SHORT -> Jerry OVERRUNS the frame, and jerry_pose_sync
+                              (2.23% of wall) understates his real cost. */
+            { static uint32_t jl_prev; static int jl_a, jl_b, jl_n;
+              if (++jl_n >= 60) {
+                  uint32_t j = *(volatile uint32_t *)0xF1C32Cu;
+                  jl_a = (int)(j - jl_prev) * 4;  jl_prev = j;
+                  jl_b = jl_n * 4;  jl_n = 0;
+                  if (jl_a > RENDER_W-1) jl_a = RENDER_W-1;
+                  if (jl_a < 0)         jl_a = 0;
+                  if (jl_b > RENDER_W-1) jl_b = RENDER_W-1;
+              }
+              { uint8_t *jfb = (uint8_t *)video_backbuffer(); int xx;
+                for (xx = 0; xx < RENDER_W; xx++) {
+                    jfb[4*RENDER_W+xx] = 0; jfb[8*RENDER_W+xx] = 0; }
+                for (xx = 0; xx < jl_a; xx++) jfb[4*RENDER_W+xx] = 255;
+                for (xx = 0; xx < jl_b; xx++) jfb[8*RENDER_W+xx] = 255; } }
+#endif
             if (g_pipeframe)   { video_flip(); g_pipeframe = 0; }
 #endif
 #ifdef FARDIAL
@@ -3912,6 +3944,27 @@ int main(void)
                      honest number (fps100 kept only for ledger continuity). */
                   { int fpsT = pftt2 ? (int)((6000L*(long)pfn)/(long)pftt2) : 0;
                     dbg_kv("fpsT", fpsT); }
+#ifdef JLOOPS
+                  /* JERRY HEARTBEAT (2026-07-25). jagemu cannot answer whether
+                     Jerry keeps up: its DSP accounting contradicts itself (IPC
+                     0.537 under `run`, exactly 1.000 under `serve`, and the
+                     heartbeat below disagrees with both). So read it on
+                     silicon. LOOP_COUNT is bumped once per pass through
+                     dsp_pose.das main_loop, and do_pose returns THROUGH
+                     main_loop (dsp_pose.das:957), so every completed pose
+                     bumps it exactly once.
+                       jloops / jrend  ~= 1  -> Jerry keeps up, he is idle-polling
+                                       <<  1 -> Jerry OVERRUNS the frame, and
+                                                jerry_pose_sync (2.23% of wall)
+                                                understates his true cost.
+                     Read-only probe of DSP SRAM; costs one long load per
+                     60-render block. */
+                  { static uint32_t jlc_prev;
+                    uint32_t jlc = *(volatile uint32_t *)0xF1C32Cu;
+                    dbg_kv("jloops", (int)(jlc - jlc_prev));
+                    dbg_kv("jrend",  (int)pfn);
+                    jlc_prev = jlc; }
+#endif
                   pftt2 = 0;
 #if defined(QUIETFPS) && defined(SKUNK_CONSOLE)
                   /* FLOOR DECOMPOSITION (compact, every 4th block = ~7 prints

@@ -470,6 +470,15 @@ ifdef STATICS
 CFLAGS   += -DSTATICS
 CXXFLAGS += -DSTATICS
 endif
+
+# JLOOPS=1 (2026-07-25): stream Jerry's main_loop heartbeat (LOOP_COUNT in DSP
+# SRAM at $F1C32C) alongside fpsT, with the block's render count, so silicon
+# can answer whether Jerry keeps up.  jagemu cannot: its DSP accounting is
+# self-contradictory (see the Jerry commit).  Needs SKUNK_CONSOLE (NOGD=1).
+ifdef JLOOPS
+CFLAGS   += -DJLOOPS
+CXXFLAGS += -DJLOOPS
+endif
 STAGEDIET_DEF := -dSTAGEDIET=$(if $(STAGEDIET),1,0)
 ifdef STAGEDIET
 ifdef PROFGPU
