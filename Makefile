@@ -475,6 +475,14 @@ endif
 # SRAM at $F1C32C) alongside fpsT, with the block's render count, so silicon
 # can answer whether Jerry keeps up.  jagemu cannot: its DSP accounting is
 # self-contradictory (see the Jerry commit).  Needs SKUNK_CONSOLE (NOGD=1).
+# FARCLIP=N (2026-07-25): room-level far-cull distance (default 9000).
+# Draw-distance experiment now that Tom is 90.3% saturated — the portal-hop
+# dial (HOPBOOT) is already at its tight end, so this is what is left.
+ifdef FARCLIP
+CFLAGS   += -DFARCLIP=$(FARCLIP)
+CXXFLAGS += -DFARCLIP=$(FARCLIP)
+endif
+
 ifdef JLOOPS
 CFLAGS   += -DJLOOPS
 CXXFLAGS += -DJLOOPS

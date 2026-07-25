@@ -3534,7 +3534,17 @@ int main(void)
                        the camera or entirely past the far clip (never the room
                        you're in / partly in view). */
                     if (depth + rrad[ri] < 0)      continue;   /* fully behind   */
-                    if (depth - rrad[ri] > 9000)   continue;   /* fully past far */
+                    /* FARCLIP=N (2026-07-25): room-level far cull distance.
+                       Was a bare 9000. Made settable to measure what draw
+                       distance is still worth cutting now that Tom is 90.3%
+                       saturated and is the thing to cut work FROM — note the
+                       portal-hop dial (HOPBOOT) is already at its tight end
+                       (1 = current room + neighbours), so this and the sliver
+                       thresholds are what remain. */
+#ifndef FARCLIP
+#define FARCLIP 9000
+#endif
+                    if (depth - rrad[ri] > FARCLIP) continue;  /* fully past far */
                     /* SLIVER CULL: a room seen only through a tiny distant
                        window costs full per-face setup for ~nothing on
                        screen (long corridors stacked 10+ rooms = the dip).
