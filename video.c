@@ -474,6 +474,22 @@ void video_flip(void)
         pend_fix1 = (op_link << 24)
                   | ((uint32_t)DISPLAY_H << 14)
                   | ((uint32_t)BASE_Y << 4);
+#else
+        /* COMPLETION BARRIER (2026-07-25). gpu_sync() waits for Tom's GPU
+         * PROGRAM, not for the Blitter: the kernel launches a span and moves
+         * on, so the last span(s) can still be transferring into `done` when
+         * we publish it. HALFRES never had this hole — blit_double() ends
+         * with blit_wait() (blit.c), so by the time IT publishes, the Blitter
+         * is idle and the display buffer is whole. That trailing wait is half
+         * of what "blit_double was also the frame barrier" meant; the other
+         * half (render off-screen) is already satisfied here, and MEASURED:
+         * 400 consecutive fields sampled in jagemu show draw_buf is never
+         * front_fb nor pending_fb (0 violations). So this is the one piece
+         * the direct-to-display path was actually missing.
+         * Cost is ~nil when the Blitter is already idle, which is the normal
+         * case after gpu_sync; it is an I/O-register poll, not a DRAM poll. */
+        while (!(B_CMD & BLIT_IDLE))
+            ;
 #endif  /* scaled path: phrase 0's second long is constant (fs_ph1) */
         pending_fb = (uint32_t)done;
     }
