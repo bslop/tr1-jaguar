@@ -73,14 +73,25 @@ static fbpix rbuf[RENDER_W * RENDER_H] __attribute__((aligned(16)));
  * hardware crash decodes from a camera capture. */
 fbpix *const crash_fbs[3] = { fb0, fb1, fb2 };
 
-static uint32_t op_list[16] __attribute__((aligned(16)));
+/* The scaled (LOWRES) path repairs the OP list from ASSEMBLY in startup.S's
+ * vblank stub — video.c is compiled by jcc68k, which emits ~10 instructions per
+ * store, far too slow to beat the OP's object fetch at VC 32. Those builds must
+ * therefore export the state the stub touches; every other build keeps it
+ * file-local exactly as before. */
+#if defined(LOWRES) && !defined(HALFRES)
+#define OPSTATIC          /* exported to startup.S */
+#else
+#define OPSTATIC static
+#endif
+
+OPSTATIC uint32_t op_list[16] __attribute__((aligned(16)));
 static uint16_t a_vdb_g, a_vde_g;   /* active vertical window (VC half-lines) */
 
 volatile uint32_t frame_count;
 
 static fbpix *draw_buf;               /* CPU renders here                    */
-static uint32_t front_fb;             /* what the OP displays                */
-static volatile uint32_t pending_fb;  /* buffer the ISR should show, 0=none  */
+OPSTATIC uint32_t front_fb;           /* what the OP displays                */
+OPSTATIC volatile uint32_t pending_fb;/* buffer the ISR should show, 0=none  */
 
 /* FAST OP-LIST REPAIR (plain unscaled object only). The OP destroys ONLY
  * phrase 0 of the bitmap object (data ptr / ypos / height) as it draws; the
@@ -88,8 +99,10 @@ static volatile uint32_t pending_fb;  /* buffer the ISR should show, 0=none  */
  * PAST the object fetch at 32 — under render-time bus starvation (~10-20%
  * bus service). The ISR now restores just the two destroyed longs from
  * values PRECOMPUTED outside the ISR (flip values prepared in video_flip). */
-static volatile uint32_t op_fix0, op_fix1;     /* phrase 0 for front_fb  */
-static volatile uint32_t pend_fix0, pend_fix1; /* phrase 0 for pending_fb */
+OPSTATIC volatile uint32_t op_fix0;            /* phrase 0 for front_fb  */
+static volatile uint32_t op_fix1;
+OPSTATIC volatile uint32_t pend_fix0;          /* phrase 0 for pending_fb */
+static volatile uint32_t pend_fix1;
 static uint32_t op_link;                       /* link field, set at build */
 
 #if defined(LOWRES) && !defined(HALFRES)
@@ -124,7 +137,7 @@ static uint32_t op_link;                       /* link field, set at build */
  * call, no arithmetic, no OLP write (OLP is not destroyed — the plain path has
  * never rewritten it per field). Only phrase 0's data pointer varies per flip;
  * phrases 1 and 2 are build-time constants. */
-static uint32_t fs_ph1, fs_ph2, fs_ph3;   /* constant longs of the scaled object */
+uint32_t fs_ph1, fs_ph2, fs_ph3;          /* constant longs of the scaled object */
 /* #define LOWRES_DIAG_PLAIN 1 -- ISOLATION TEST (HW-verified 2026-07-08): with
  * this defined, LOWRES displays the 320x120 fb as a PLAIN bitmap (no scale) and
  * the room renders CORRECTLY in the top 120 lines -> kernel+fb are FINE; the

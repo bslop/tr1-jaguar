@@ -137,6 +137,30 @@ vblank_stub:
 					| the C handler; d1 is gcc scratch)
 	btst	#0,%d2			| video pending?
 	beq.s	1f
+#if defined(LOWRES) && !defined(HALFRES)
+	| ---- FAST SCALED-OBJECT REPAIR (deadline-critical) -------------------
+	| The OP consumes the TYPE-1 scaled object as it draws (phrase 0's data
+	| ptr / ypos / height, and the scale phrase's REMAINDER) and re-fetches
+	| it at VC 32 — only a few half-lines after this interrupt. video.c is
+	| compiled by jcc68k, which folds no constant offsets and spills every
+	| local, so the same repair written in C costs ~79 instructions and has
+	| been measured overshooting that fetch. Here it is 11, before the C
+	| handler is even entered. d0/d1 are already saved above.
+	| The C handler re-does this harmlessly (it sees pending_fb == 0), but
+	| by then the deadline is already met.
+	move.l	pending_fb,%d0
+	beq.s	2f
+	move.l	pend_fix0,%d1		| flip: adopt the queued buffer now
+	move.l	%d1,op_fix0
+	move.l	%d0,front_fb
+	clr.l	pending_fb
+2:	move.l	op_fix0,op_list		| [0] data ptr | link
+	move.l	fs_ph1,op_list+4	| [1] height | ypos | TYPE=1
+	move.l	fs_ph2,op_list+8	| [2] iwidth
+	move.l	fs_ph3,op_list+12	| [3] dwidth | pitch | depth | xpos
+	clr.l	op_list+16		| [4] REMAINDER
+	move.l	#0x4020,op_list+20	| [5] VSCALE 2.0x | HSCALE 1.0x
+#endif
 	jsr	vblank_handler		| only run the frame flip on VIDEO ints
 1:
 	| ack ONLY the latches observed at entry. The old blanket #$0303 ack

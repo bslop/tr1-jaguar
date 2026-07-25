@@ -255,11 +255,15 @@ ifdef HALFRES
 LOWRES     := 1
 CFLAGS     += -DHALFRES
 CXXFLAGS   += -DHALFRES
+ASFLAGS    += -DHALFRES
 endif
 
 ifdef LOWRES
 CFLAGS     += -DLOWRES
 CXXFLAGS   += -DLOWRES
+# startup.S's vblank stub carries the deadline-critical scaled-object repair
+# (LOWRES && !HALFRES); it needs both flags to select that block.
+ASFLAGS    += -DLOWRES
 LOWRES_DEF := -dLOWRES=1
 else
 LOWRES_DEF := -dLOWRES=0
