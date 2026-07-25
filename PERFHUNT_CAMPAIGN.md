@@ -601,3 +601,49 @@ CONSEQUENCES (these supersede the previous section):
 
 METHOD NOTE: one 240-render block was not enough to attribute a ~6% effect. Do
 not draw per-phase conclusions from a single PACEPROBE block.
+
+## ★ JERRY IS THE BOTTLENECK — NOSOUND = +18.4% fps (2026-07-24)
+
+**pc-histogram wall-clock accounting (25s, boot excluded, /tmp/emu_off.cof):**
+| | busy |
+|---|---|
+| 68000 awake | **25.6%** |
+| Tom GPU | 127.9% (Blitter 57.7%) |
+| **Jerry DSP** | **145.5%  <-- busiest** |
+
+Top 68k hotspots are `jerry_roomx_kick` and `jerry_pose_kick` (~10% combined) —
+the 68k SPINNING ON JERRY, not computing.
+
+**This retracts the earlier "the 68k is the critical path" conclusion.** That came
+from reading PACEPROBE as `68k work = pp_per - pp_wait`, but `pp_wait` counts ONLY
+blocking on **Tom**. The 68k also blocks on **Jerry** (jerry_pose_sync) and on
+vblank, so all of that got miscounted as compute. The 68k is awake 25.6%.
+
+**SILICON A/B — NOSOUND=1 (new flag: AUDIO_PUMP compiled out of the DSP kernel at
+all 5 inline sites, 2520 -> 1536 B, plus the 68k skips the SCLK/SMODE DAC start):**
+| | baseline | NOSOUND | |
+|---|---|---|---|
+| fpsT median | 403 | **477** | **+18.4%** |
+| frame period | 7533 hl | 6388 hl | -15.2% |
+| Tom span | 6147 | 5845 | -4.9% |
+| 68k blocked on Tom | 458 | 1031 | +125% |
+
+**Biggest measured win of the whole campaign.** Everything else this session
+landed between null and 6% (MMULT null, OPDBL null, SLITDISPLAY 6%, governor a
+phantom).
+
+NOT SHIPPABLE AS-IS (silent game). The prize is now quantified, so the real work
+is making the audio service CHEAPER, not absent:
+- AUDIO_PUMP is INLINED AT 5 SITES and polls the Timer2 divider on EVERY pass
+  even when no tick elapsed (loadw + 2 nop + cmp + movei + jump + 2 nop before
+  the fast skip). At ~11kHz DAC vs Jerry's pass rate, the overwhelming majority
+  of those polls do nothing.
+- Ideas: service audio from the I2S interrupt only (the vector already exists);
+  or poll at ONE site per outer iteration instead of 5; or widen the tick check
+  so a pass servicing N samples costs one poll.
+- Also worth testing: how much of Jerry's load is the POSE (JERRYPOSE) vs audio —
+  a NOSOUND+no-JERRYPOSE run would split it.
+
+DO NOT move more work onto Jerry (the sort/emit port idea) until his duty cycle
+is measured with a cheaper audio path — he is the most loaded core, which also
+explains why the roomx co-transform offload measured NULL.

@@ -18,6 +18,15 @@
 ; crash in ISR context), restores. FLAGS ARE CLOBBERED: insert only before
 ; the loop's own compare. ----
 .macro	AUDIO_PUMP
+	.if NOSOUND=1
+	; NOSOUND (2026-07-24): compile the sample service OUT of Jerry entirely.
+	; The pump is inlined at 5 sites and pays its poll on EVERY pass even when
+	; no tick elapsed, so it is a standing tax on Jerry's throughput. Freeing
+	; Jerry is the prerequisite for moving 68k work (painter sort / lara emit)
+	; onto a RISC — the 68k is the measured critical path (~6175 hl) and is the
+	; slowest core on the machine, running all code/data over the contended bus.
+	; Pairs with jerry.c skipping SCLK/SMODE so the DAC never ticks.
+	.else
 	loadw	(r16),r22		; Timer2 divider counter (r16 from init)
 	nop
 	nop
@@ -209,6 +218,7 @@ pfall\~:
 	or	r1,r1			; instruction may overwrite r0/r1 while the
 					; SRAM loads are still in flight (TRM bug 13)
 pskip\~:
+	.endif
 .endm
 
 	.org	$F1B000

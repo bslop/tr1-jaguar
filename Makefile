@@ -74,6 +74,14 @@ ifdef MMULTX
 CFLAGS   += -DMMULTX
 endif
 
+# make NOSOUND=1: compile Jerry's AUDIO_PUMP out of the DSP kernel AND skip the
+# 68k's SCLK/SMODE DAC start. Frees Jerry (he is ~88%% busy on audio+pose) so
+# 68k work can be moved onto a RISC. Silent build - measurement/dev only.
+ifdef NOSOUND
+CFLAGS   += -DNOSOUND
+CXXFLAGS += -DNOSOUND
+endif
+
 # make GEOMXFORM=1 OVERLAP=1: async - 68k builds frame N+1's packets
 # while Tom draws frame N (double-buffered packets, fire-and-return kick).
 ifdef OVERLAP
@@ -378,7 +386,7 @@ $(BUILD)/gpu_bltex.bin: gpu_bltex.gas | $(BUILD)
 	$(OBJCOPY) -O binary $(BUILD)/gpu_bltex.elf $@
 
 $(BUILD)/dsp_pose.bin: dsp_pose.das | $(BUILD)
-	$(JAS) $< -o $@ --dsp $(call jasd,$(LOWRES_DEF))
+	$(JAS) $< -o $@ --dsp $(call jasd,$(LOWRES_DEF) -d NOSOUND=$(if $(NOSOUND),1,0))
 	@sz=$$(stat -c%s $@); if [ $$sz -gt 4192 ]; then \
 	  echo "!!! dsp_pose.bin $$sz bytes OVERLAPS MBLK at F1C060 (max 4192 = F1C060-F1B000; OUT_D is dead since direct-DRAM pose)"; \
 	  rm -f $@; exit 1; fi

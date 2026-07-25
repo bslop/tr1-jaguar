@@ -27,9 +27,12 @@ int jerry_init(void)
     *(volatile uint32_t *)0xF1A100u = 0;   /* D_FLAGS: clear irq state */
     for (i = 0; i < n; i++)
         dst[i] = src[i];
+#ifndef NOSOUND
     *(volatile uint32_t *)0xF1A150u = 37;      /* SCLK: 32-BIT reg! ~11kHz */
     *(volatile uint32_t *)0xF1A154u = 0x15;    /* SMODE: 32-BIT reg! I2S   */
     *(volatile uint16_t *)0xF14000u = 0x0100;  /* JOYSTICK: unmute DAC   */
+#endif  /* NOSOUND: never start the DAC clock, so no ticks for Jerry to service
+         * (the DSP kernel also compiles AUDIO_PUMP out — see dsp_pose.das) */
     *(volatile uint32_t *)(D_PARAMS + 0) = (uint32_t)dsp_mailbox;
     *(volatile uint32_t *)(D_PARAMS + 60) = 0;   /* mcount=0 -> hello mode */
     dsp_mailbox[0] = 0;
