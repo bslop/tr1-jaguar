@@ -504,3 +504,37 @@ CAVEAT: hl_tom is NOT Tom's render span under PIPELINE (it is dispatch..kick).
 Tom's true span needs PACEPROBE (pp_smax/pp_span), which memory records at
 5800-6300 hl in earlier builds — comparable to the whole frame, so Tom is still
 a wall too. Cutting only one side will stall at the other's floor.
+
+## PACEPROBE SILICON VERDICT (2026-07-24): THE 68k IS THE CRITICAL PATH
+
+PLAY_XB + PACEPROBE, 479 renders over two 4-block windows:
+
+| | hl/render | % of frame |
+|---|---|---|
+| frame period (pp_per/pp_coll) | **7533** | 100% (14.4 fields) |
+| Tom kick->collect (pp_span) | 6147 | 82% |
+| **68k BLOCKED on Tom (pp_wait)** | **458** | **6%  <-- discriminator** |
+| **68k's own work (per - wait)** | **7075** | **94%** |
+
+**Tom overlaps almost perfectly; the 68k only stalls on him 6% of the frame.
+The 68k's own 7075 hl EXCEEDS Tom's 6147 hl span, so the frame is paced by the
+68k.** This is the sanity check the MMULT campaign skipped, and it inverts the
+long-standing assumption that "Tom is the wall" (true for GPU-busy %, but not
+for the CRITICAL PATH under PIPELINE).
+
+CEILING FOR 68k WORK: cutting 68k work down to Tom's span = 7533 -> 6147 hl =
+**18.4% faster, ~4.2 -> ~5.1 fps**, after which Tom binds. Only **~930 hl** has
+to go to reach that floor, while the shelved levers target far more:
+  - painter sort (hl_mdep)      ~2200 hl   -> M68A2 (implemented, unmeasured)
+  - lara_finish (hlr_pose)  ~1240-1730 hl  -> LEMITDIET / M68A3 (implemented)
+So M68A2 ALONE could plausibly deliver the whole 18%. Both are C-only, zero
+kernel bytes.
+
+BEYOND ~5.1 fps requires TOM work as well (his 6147 hl becomes the floor) — the
+two must be cut together, which is why single-lever fps promises keep failing.
+
+CAVEAT — pp_smax/pp_pmax are CONTAMINATED: both read ~37000 hl (~1.2s), which
+matches the skunk-console print-burst stall almost exactly (every 4th block now
+emits ~17 dbg_kv values with PACEPROBE on). Treat the worst-single-span figures
+from a NOGD build as instrumentation, NOT as real game stalls. pp_span/pp_wait/
+pp_per are averages over 240 renders and are only mildly inflated.
