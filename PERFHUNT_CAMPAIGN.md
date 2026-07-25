@@ -679,3 +679,35 @@ Where the 465 hl can come from (all measured this session):
 - 117 wasted delay slots in gpu_geotex.gas (jas flags the pattern) — Tom-side,
   no visual cost, but Tom is no longer the pole so this alone may not cross.
 - The 68k's own 4046 hl is the real target now.
+
+## ★★★ SESSION CLOSE 2026-07-24: THE BOTTLENECK IS THE BLITTER / DRAM BUS
+
+pc-histogram on NOSOUND+HALFRES+M68DIET (68000 awake 36.0%, Tom 92.4%, Jerry
+142.6%): the top 68k hotspot is an unnamed `0x582+0x..` cluster with **642,876
+executions ~= 49% of 68k awake time**. `0x582` is **blit.o's SIZE** in the map
+(`.text 0x00005fb0 0x582 build/blit.o`), NOT `__mulsi3` (that is at 0x76B0). So
+the cluster is inside blit.c, and since `blit_double`/`blit_band` already drive
+the BLITTER (A1/A2 + B_CMD), the hot code is **`blit_wait()` — the 68k SPINNING
+on the Blitter.** Plus `blit_double+0x134` at 10.7%.
+
+**=> ~60% of 68k time is in blit.o, and ~49% is spin-waiting. Hand-written 68k
+assembler cannot help: there is no arithmetic there to speed up.** The Blitter's
+throughput (and the DRAM bus feeding it) is the machine's limit.
+
+This unifies every result of the session:
+- MMULT removed Tom INSTRUCTIONS -> null.
+- SLITDISPLAY freed OP BANDWIDTH -> sped the **68k** 13.6% (Tom unchanged).
+- M68DIET cut 68k MEMORY TRAFFIC -> sped **Tom** 38.6% (a C-side change!).
+- Verified in emu that M68DIET draws the SAME geometry (236 px, non-black within
+  0.04%) — so that 38.6% is bandwidth relief, not reduced work.
+
+NEXT LEVERS, ranked:
+1. **Fewer Blitter passes / pixels.** `blit_double` runs TWO passes with waits,
+   so HALFRES gives part of its win back. A single-pass double, or reviving the
+   OP scaler (LOWRES — currently blacks the screen on MULTIROOM+FB8), removes it.
+2. **Overlap `blit_wait`** — dead 68k time that could run game logic.
+3. NOT 68k assembler. NOT more Tom instruction work.
+
+Position: frame 5715 hl = 10.89 fields = N=11 = 5.51 fps. N=10 (6.00 fps) needs
+frame < 5250 hl, i.e. **465 hl / -8.1%** — and the banked HALFRES+M68DIET gains
+land the moment it crosses.
