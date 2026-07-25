@@ -436,3 +436,30 @@ against a typical 4-6, with spind (gpu_sync spins) spiking on the same blocks.
 Prior PACEPROBE data attributes the worst single Tom kick->collect span at
 ~19000 hl (~0.6s) vs a typical 5800-6300 hl — i.e. **Tom doing ~3x the work on
 spike frames**, consistent with hop-depth/room-count blowups that g_hopcap caps.
+
+### SILICON RESULT: retuned GOVERNOR + CRY off (probes/GOV_noCRY.cof, 2026-07-24)
+`govt = 0` on EVERY block -> **the governor never tripped**, so GOV_HI=22 is still
+too high (no frame span ever exceeded 22 fields) and it contributed NOTHING.
+That makes attribution clean: the whole delta is SHADEPASS=0 (CRY ramp off).
+
+| | baseline (CRY on) | CRY off |
+|---|---|---|
+| fpsT median / mean | 406 / 411.4 | **441 / 445.6** (+8.6% / +8.3%) |
+| Welch t | — | **1.83** (suggestive, not yet conclusive) |
+| maxvbl median / max | 5 / **15** | 6 / **12** |
+| blocks with maxvbl>=10 | 3/13 (23%) | 2/10 (20%) |
+| kernel bytes | 3668 | **3470** (-198) |
+
+Reading:
+- **CRY/SHADEPASS costs ~8% of frame time on silicon** — directionally consistent
+  with cobweb's "jsim thinks shade is ~free, silicon pays 23%". Worth more
+  samples to firm up (t=1.83).
+- **The stall spikes are NOT fixed.** Spike RATE is essentially unchanged
+  (23% -> 20% of blocks) and median maxvbl is no better. Turning off shading
+  makes frames cheaper on average; it does not remove the worst-frame excursions.
+- **Governor still unproven** — it has never actually engaged. Next threshold
+  pass: frame period is ~13.6 fields typical (fpsT 441) and spikes evidently stay
+  <=22, so try `GOV_HI=17 GOV_LO=13 GOV_K=20`. If it still never trips, the
+  spikes are inside the RENDER span (maxvbl) but absorbed by PIPELINE at the
+  loop-top level, and the governor is watching the wrong signal — it should then
+  gate on the render span, not the loop-top period.
