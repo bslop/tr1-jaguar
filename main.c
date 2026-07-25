@@ -3549,8 +3549,23 @@ int main(void)
                        window costs full per-face setup for ~nothing on
                        screen (long corridors stacked 10+ rooms = the dip).
                        Skipping it leaves a few dark pixels in a doorway. */
+                    /* SLIVERW/SLIVERH (2026-07-25): the sliver thresholds made
+                       settable.  Now that Tom is 90.3% saturated and the
+                       portal-hop dial is already at its tight end (so the room
+                       far clip is provably inert — see the FARCLIP commit),
+                       this is the LAST knob that trades picture for Tom cycles.
+                       Note the defaults were chosen when the framebuffer was
+                       240 lines; at LOWRES's 120 a 6px height is 5% of the
+                       screen, so the vertical threshold is effectively already
+                       twice as aggressive as it reads. */
+#ifndef SLIVERW
+#define SLIVERW 16
+#endif
+#ifndef SLIVERH
+#define SLIVERH 6
+#endif
                     if (ri != g_curroom && prv[ri] == 1 &&
-                        (prx1[ri] - prx0[ri] < 16 || pry1[ri] - pry0[ri] < 6))
+                        (prx1[ri] - prx0[ri] < SLIVERW || pry1[ri] - pry0[ri] < SLIVERH))
                         continue;
 #ifdef ABLADDER
                     /* content ladder: admit only the first g_abrooms rooms
