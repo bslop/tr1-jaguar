@@ -20,6 +20,16 @@ JAS     := $(HOME)/Documents/Git/cobweb/sim/target/release/jas
 # rmac writes defines as -dNAME=V; jas wants -d NAME=V
 jasd     = $(subst -d,-d ,$(1))
 
+# !!! FLAG SEMANTICS — `make FOO=0` TURNS FOO **ON** !!!  (verified 2026-07-25)
+# Every boolean flag here is tested with `ifdef FOO` or `$(if $(FOO),1,0)`, and
+# BOTH are true for ANY non-empty value — including the string "0".  Checked:
+# `make SHADEPASS=0` expands to `-d SHADEPASS=1`.  Not one flag tests its value.
+# ==> Express "off" by OMITTING the variable.  Never write FOO=0 in an A/B arm,
+#     and never describe an omitted flag as "FOO=0" in a commit message — that
+#     reads back later as an arm that was actually built with the flag ON.
+# (Value-carrying flags are different and DO work: HOPBOOT, FARCLIP, SLIVERW,
+#  SLIVERH, PIPESTAGE, ROOMCAP pass their value through with -DFOO=$(FOO).)
+
 BUILD     := build
 LOAD_ADDR := 0x4000
 
@@ -527,6 +537,19 @@ endif
 #   ROWDIET=1 (PERFHUNT 2026-07-22): row-loop diet — per-RUN DIVCTRL
 #            toggles + clip window in r4/r21 + off==0 fall-through
 #            (multiply path out-of-line).  Requires TRAPEZOID=0 (r4/r21).
+#
+# KERNEL BYTE BUDGET — size it against the SHIPPED PLAY FLAG SET, not a subset.
+# The play config is MULTIROOM GEOMDIRECT SHADEPASS JERRYPOSE STAGEDIET PIPELINE
+# PIPESTAGE=2 HOPDIAL HOPBOOT XCULL BEXIT ROWDIET STATICS BANKDIET, and BANKDIET
+# + ROWDIET together are worth 136 bytes (movefa vs movei residents + the row
+# loop diet).  Measured 2026-07-25:
+#     play set            = 3532 / 3680     (148 B free)
+#     play set + UVNEG    = 3548 / 3680     (132 B free)
+#     same set, BANKDIET and ROWDIET OFF    = 3668, and +UVNEG = 3684 = OVER.
+# The 3668 figure above and the "UVNEG is 4 B over the ceiling" note in 53f5d84
+# both came from that BANKDIET/ROWDIET-off kernel.  ==> UVNEG is NOT byte-blocked
+# on the shipping config; it has 132 B of headroom.  Rebuild before believing any
+# "N bytes over" claim, and record which flags the number was measured under.
 ifdef RUNBATCH
 ifndef BANKDIET
 $(error RUNBATCH=1 requires BANKDIET=1 (RUNC/BATCHC live in the alternate bank))

@@ -2150,6 +2150,10 @@ uf_v_ok:
 	; Branchless max(x,0): x & ~(x >> 31 arithmetic). 8 instructions, no movei,
 	; no branch, no delay slots. r2/r3 are scratch here — the pack rewrites
 	; both immediately below.
+	; BYTE BUDGET (re-measured 2026-07-25): +16 B on the SHIPPED play flag set
+	; is 3532 -> 3548 of 3680 — 132 B SPARE, and XCULL stays on. The earlier
+	; "3684, 4 B over" was sized against a kernel built with BANKDIET and
+	; ROWDIET off, which is not what ships. This is not byte-blocked.
 	move	r7,r2
 	sharq	#31,r2			; -1 if u0 < 0 else 0
 	not	r2
