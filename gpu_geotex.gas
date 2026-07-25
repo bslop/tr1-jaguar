@@ -2095,6 +2095,47 @@ bwait_done:
 	movei	#$00014218,r1		; PITCH1|PIXEL8|WID320|XADDPIX
 	store	r1,(r15+10)
 	.endif
+	.if UVFIX=1
+	; FIX (2026-07-25): clamp the span's STARTING texel to the atlas.
+	; UVPROBE measured u0 reaching 8191 in a 256-wide atlas and v0 going
+	; NEGATIVE. 8191 = $1FFF is exactly the 13-bit mask result, i.e. a
+	; NEGATIVE u turned positive by the logical shlq#19/shrq#19 that strips
+	; the per-corner shade-k bits. Sampling u=8191 walks ~32 atlas rows away
+	; -> the long-standing streaks. Clamp u0 to [0,255], v0 to [0,1031].
+	movei	#$00FF0000,r1		; 255.0
+	cmp	r1,r7			; u0 - 255.0
+	jr	MI,uf_u_ok
+	nop
+	move	r1,r7
+uf_u_ok:
+	movei	#$04070000,r1		; 1031.0
+	cmp	r1,r20			; v0 - 1031.0
+	jr	MI,uf_v_hi
+	nop
+	move	r1,r20
+uf_v_hi:
+	cmpq	#0,r20
+	jr	PL,uf_v_ok
+	nop
+	moveq	#0,r20			; v0 was negative -> atlas top
+uf_v_ok:
+	.endif
+	.if UVPROBE=1
+	; DIAGNOSTIC (2026-07-25): OR-accumulate every span's STARTING texel
+	; coords so out-of-range starts are visible as high bits set.
+	;   $1C0010 |= u0 (16.16)   legit u <= 255  -> only bits 16-23 should set
+	;   $1C0014 |= v0 (16.16)   legit v <= 1031 -> only bits 16-25 should set
+	; Bits 24+/26+ (or bit 31 = negative) prove a bad edge-walk start.
+	; r1/r2 are both reloaded by the pack below, so clobbering them is safe.
+	movei	#$001C0010,r1
+	load	(r1),r2
+	or	r7,r2
+	store	r2,(r1)
+	movei	#$001C0014,r1
+	load	(r1),r2
+	or	r20,r2
+	store	r2,(r1)
+	.endif
 	; A1_PIXEL = (v0 & $FFFF0000) | (u0 >> 16)   integer texel start (v<<16)|u
 	move	r20,r0
 	.if BANKDIET=1
