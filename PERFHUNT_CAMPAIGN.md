@@ -538,3 +538,34 @@ matches the skunk-console print-burst stall almost exactly (every 4th block now
 emits ~17 dbg_kv values with PACEPROBE on). Treat the worst-single-span figures
 from a NOGD build as instrumentation, NOT as real game stalls. pp_span/pp_wait/
 pp_per are averages over 240 renders and are only mildly inflated.
+
+## SLITDISPLAY: THE BUS IS SECONDARY — AND THE 68k IS COMPUTE-BOUND (2026-07-24)
+
+OP presents 64 lines instead of 240 (-73% of OP framebuffer fetch); ALL render
+work identical. Same PACEPROBE instrumentation as the baseline.
+
+| | baseline | SLITDISPLAY | delta |
+|---|---|---|---|
+| frame period | 7533 hl | 7108 hl | **-5.6%** (4.18 -> 4.43 fps) |
+| Tom kick->collect | 6147 | 5807 | **-5.5%** |
+| **68k own work** | **~6175** | **~6189** | **UNCHANGED** |
+| 68k blocked on Tom | 458 | 919 | +101% |
+
+At 8bpp the OP streams 320*240*60 = 4.6 MB/s. Cutting 73% of that freed roughly
+13% of total DRAM bandwidth and bought 5.6% of frame time — real, but NOT the
+dominant constraint. The bus-bottleneck theory is therefore only PARTLY true.
+
+**The decisive detail: the 68k's own work did not move at all (6175 -> 6189).**
+So the 68k's ~6175 hl is GENUINE COMPUTE, not memory stalls — bandwidth relief
+does not touch it. That resolves the ambiguity left by the earlier critical-path
+analysis and means **cutting 68k instructions DOES convert to frame time**:
+M68A2 (painter sort ~2200 hl) and LEMITDIET/M68A3 (lara_finish ~1240-1730 hl)
+are worth measuring, and are not bus-masked.
+
+Tom, by contrast, IS bus-sensitive (-5.5% from bandwidth alone), so Tom-side
+gains can come from either fewer instructions or less DRAM traffic.
+
+IMPLICATION FOR TARGETS: resolution cuts shrink fill + OP fetch (Tom + bus) but
+NOT the 68k's compute. Scene-complexity cuts (rooms/faces) are the only knob that
+shrinks BOTH. g_hopcap is runtime-adjustable via D-pad LEFT/RIGHT in HOPDIAL
+builds — a free fps-vs-draw-distance sweep with no extra flashes.
