@@ -350,6 +350,22 @@ $(BUILD)/gd_input.o: gd_input.c | $(BUILD)
 # 2026-07-20). Repro asm saved; narrowing for the cobweb report.
 $(BUILD)/jerry.o: jerry.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
+# make ... GCCHOT=1 : pin the remaining PER-FRAME TUs to gcc as well.
+# Rationale (2026-07-24): jcc68k emits ~1.9x gcc -O2's text (note above), and
+# main.c was already pinned back here "for PERFORMANCE ... the game crawls".
+# blit.c is where the 68k pc-histogram puts ~60% of awake time and gpu.c runs
+# every kick, so both were still paying that 1.9x on the critical path.
+# video.c carries the vblank ISR, where jcc68k costs ~10 instructions per store.
+# Correctness risk is nil (gcc is the reference compiler); this only opts out of
+# dogfooding cobweb's codegen on the hot path.
+ifdef GCCHOT
+$(BUILD)/blit.o: blit.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/gpu.o: gpu.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/video.o: video.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+endif
 endif
 
 $(BUILD)/%.o: %.cpp | $(BUILD)
