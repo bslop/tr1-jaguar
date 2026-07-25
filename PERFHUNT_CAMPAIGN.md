@@ -464,3 +464,43 @@ GOVERNOR).  Judge on silicon fps100 variance across a walk + play feel.
   hop BFS cache. Back to the bench (emu-diagnosable).
 - Resident restored: PLAY_XBR. SILICON QUEUE now: (1) collect-pacing
   fix, (2) governor churn fix, (3) LEMITDIET behind the pacing door.
+
+---
+
+## SILICON PHASE BREAKDOWN (2026-07-24) — the 68k is a CO-BOTTLENECK
+
+From the hl_* counters captured during the valid A/B window (NOGD + jcp attached),
+PLAY_XB config. hl_* are half-lines (HLP = frame_count*525 + VC, 525/field),
+accumulated every render and printed+reset every 4th 60-render block => **divide
+by 240**. Validation: the sequential phases sum to 14.0-14.6 fields/frame, which
+matches the independently measured fpsT period (13.6-14.8). Interpretation sound.
+
+| phase | hl/frame | % of frame |
+|---|---|---|
+| **hl_logic (68k game logic)** | **~4440** | **54-59%** |
+| hl_mdep (depth + painter sort) | ~2200 | 27-29% (span inside logic) |
+| hlr_pose (Jerry pose read) | 1240-1730 | 16-23% |
+| hl_flip | 570-1230 | 7.5-16% |
+| hl_clear | 350-570 | 4.6-7.8% |
+| hl_tom | 85-290 | 1-4% (dispatch..kick ONLY under PIPELINE) |
+
+**hl_logic alone is ~4440 hl = 8.5 fields = a hard ceiling of ~7 fps even if Tom
+cost nothing.** We measure 4.06 fps (14.8 fields), so Tom's concurrent span adds
+~6 fields on top. Both are large; the frame is roughly max(68k serial, Tom) plus
+the non-overlapped tail.
+
+CONSEQUENCE FOR THE ROADMAP: M68DIET was SHELVED "until Tom < ~3800 hl" on the
+assumption Tom was the only thing worth cutting. That is wrong — **the 68k caps
+us at ~7 fps regardless**, so 68k work is not premature, it is the second half of
+any path past 7 fps. And the largest identifiable 68k sub-phase is the depth/
+painter sort (hl_mdep, ~29% of frame), which **M68DIET's M68A2 already
+implements** (subset painter sort), C-only, zero kernel bytes, currently unshipped.
+
+NEXT (cheap, silicon): A/B `M68DIET=1` (or just `M68A2=1`) against the baseline,
+judged on fpsT medians with jcp attached for the whole run. Unlike MMULT this
+targets a phase measured on SILICON, not a jsim estimate.
+
+CAVEAT: hl_tom is NOT Tom's render span under PIPELINE (it is dispatch..kick).
+Tom's true span needs PACEPROBE (pp_smax/pp_span), which memory records at
+5800-6300 hl in earlier builds — comparable to the whole frame, so Tom is still
+a wall too. Cutting only one side will stall at the other's floor.

@@ -88,6 +88,7 @@ static volatile uint32_t pending_fb;  /* buffer the ISR should show, 0=none  */
  * PAST the object fetch at 32 — under render-time bus starvation (~10-20%
  * bus service). The ISR now restores just the two destroyed longs from
  * values PRECOMPUTED outside the ISR (flip values prepared in video_flip). */
+static uint32_t cur_list;                      /* OPDBL: active copy, 0 or 8 */
 static volatile uint32_t op_fix0, op_fix1;     /* phrase 0 for front_fb  */
 static volatile uint32_t pend_fix0, pend_fix1; /* phrase 0 for pending_fb */
 static uint32_t op_link;                       /* link field, set at build */
@@ -191,6 +192,15 @@ static void build_object_list(uint32_t fb_addr)
     op_link = link;
     op_fix0 = op_list[0];
     op_fix1 = op_list[1];
+
+    /* OPDBL: second copy of the bitmap object at op_list[8..11], linking to the
+     * SAME STOP (op_list[4]) so its phrase 0 is byte-identical to the first —
+     * one pair of precomputed fix values repairs either copy. op_list is
+     * 16-aligned so [8] (offset 32) is phrase-aligned. See vblank_handler. */
+    op_list[8]  = op_list[0];
+    op_list[9]  = op_list[1];
+    op_list[10] = op_list[2];
+    op_list[11] = op_list[3];
 }
 #endif
 
@@ -212,6 +222,7 @@ void video_dump_oplist(void) {}
 static void point_op_at_list(void)
 {
     uint32_t olp = (uint32_t)op_list;
+    cur_list = 0;                /* OPDBL: copy 0 is the one we point at first */
     OLP = (olp >> 16) | (olp << 16);
     OBF = 0;
 }
@@ -224,18 +235,34 @@ void vblank_handler(void)
 #if !(defined(LOWRES) && !defined(HALFRES))
     /* fast path: restore ONLY the OP-destroyed phrase — 2 stores, no calls.
        Flip values were precomputed in video_flip, outside the ISR. */
-    if (pf) {
-        op_list[0] = pend_fix0;
-        op_list[1] = pend_fix1;
+    /* OPDBL (2026-07-24): double-buffered object list. The OP destroys phrase 0
+       of the bitmap object as it draws (counts height down in place), and the
+       old repair had to beat the OP's object fetch at VC 32 — video.c's own note
+       records the rebuild finishing at VC 33-35 under bus starvation. Losing
+       that race leaves the OP re-using the decremented height, so it stops early
+       and the bottom N scanlines stay black for a field. Now two identical
+       objects (op_list[0..3], op_list[8..11]) share one STOP: each field we
+       point OLP at the copy repaired during the PREVIOUS field (one critical
+       store), then repair the copy the OP just consumed with a field of slack.
+       Costs one field of flip latency (~16ms, imperceptible at ~4fps). */
+    {
+        uint32_t nxt = cur_list ^ 8u;
+        uint32_t olp = (uint32_t)&op_list[nxt];
+        OLP = (olp >> 16) | (olp << 16);   /* CRITICAL: one store, beats VC 32 */
+        OBF = 0;
+        cur_list = nxt;
+    }
+    if (pf) {                              /* off the critical path from here */
         op_fix0 = pend_fix0;
         op_fix1 = pend_fix1;
         front_fb = pf;
         pending_fb = 0;
-    } else {
-        op_list[0] = op_fix0;
-        op_list[1] = op_fix1;
     }
-    OBF = 0;
+    {   /* repair the copy the OP just released, ready for the next field */
+        uint32_t rel = cur_list ^ 8u;
+        op_list[rel]     = op_fix0;
+        op_list[rel + 1] = op_fix1;
+    }
 #else
     /* scaled object: OP also destroys the scale-remainder phrase — keep the
        full rebuild (fast repair not implemented for this path) */
