@@ -2136,6 +2136,29 @@ uf_v_ok:
 	or	r20,r2
 	store	r2,(r1)
 	.endif
+	.if UVNEG=1
+	; ROOT-CAUSE FIX (2026-07-25): clamp the span start to >= 0, LOW SIDE ONLY.
+	; The pack below is not sign-safe: u0 goes through `shrq #16` (LOGICAL), so
+	; a u0 of $FFFF8000 (-0.5) packs as 65535 rather than -1; and v0 goes
+	; through `and $FFFF0000`, which keeps the sign bits, so a v0 of $FFFF0000
+	; (-1.0) packs as v=65535. A span whose start lands a FRACTION of a texel
+	; negative therefore samples a MAXIMAL texel coordinate -> the streaks.
+	; Only the LOW side is wrong, and clamping it needs no atlas bounds — which
+	; is exactly why UVFIX's upper clamp to [0,255]/[0,1031] regressed Lara:
+	; the upper half was never the necessary part, and it hardcoded the ROOM
+	; atlas while build_lara_part passes its own atlasW/g_ltx_atH.
+	; Branchless max(x,0): x & ~(x >> 31 arithmetic). 8 instructions, no movei,
+	; no branch, no delay slots. r2/r3 are scratch here — the pack rewrites
+	; both immediately below.
+	move	r7,r2
+	sharq	#31,r2			; -1 if u0 < 0 else 0
+	not	r2
+	and	r2,r7			; u0 = max(u0, 0)
+	move	r20,r3
+	sharq	#31,r3			; -1 if v0 < 0 else 0
+	not	r3
+	and	r3,r20			; v0 = max(v0, 0)
+	.endif
 	; A1_PIXEL = (v0 & $FFFF0000) | (u0 >> 16)   integer texel start (v<<16)|u
 	move	r20,r0
 	.if BANKDIET=1
