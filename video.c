@@ -110,6 +110,21 @@ static uint32_t op_link;                       /* link field, set at build */
  * fills the exact same vertical window the 240-line bitmap did. */
 #define FS_HSCALE 0x20u   /* 1.0x  - no horizontal scaling (full 320 width)      */
 #define FS_VSCALE 0x40u   /* 2.0x  - 120 source lines fill the 240-line window   */
+#define FS_SCALE  (((uint32_t)FS_VSCALE << 8) | (uint32_t)FS_HSCALE)
+
+/* FAST OP-LIST REPAIR FOR THE SCALED OBJECT (2026-07-24).
+ * The scaled path used to rebuild all 8 longs AND reprogram OLP from inside the
+ * vblank ISR every field. The plain path's probe (see above) already showed that
+ * the full rebuild chronically finishes at VC 33-35 — PAST the OP's object fetch
+ * at VC 32 — once render-time bus starvation cuts the 68k to ~10-20% bus service.
+ * That is the leading explanation for LOWRES blacking out on MULTIROOM+FB8 while
+ * it was HW-verified fine on the older, lightly-loaded single-room RGB16 path:
+ * the OP walks a half-written list.
+ * Fix: precompute every long outside the ISR and let the ISR do plain stores, no
+ * call, no arithmetic, no OLP write (OLP is not destroyed — the plain path has
+ * never rewritten it per field). Only phrase 0's data pointer varies per flip;
+ * phrases 1 and 2 are build-time constants. */
+static uint32_t fs_ph1, fs_ph2, fs_ph3;   /* constant longs of the scaled object */
 /* #define LOWRES_DIAG_PLAIN 1 -- ISOLATION TEST (HW-verified 2026-07-08): with
  * this defined, LOWRES displays the 320x120 fb as a PLAIN bitmap (no scale) and
  * the room renders CORRECTLY in the top 120 lines -> kernel+fb are FINE; the
@@ -153,10 +168,17 @@ static void build_object_list(uint32_t fb_addr)
                | BASE_X;
 
     op_list[4] = 0;                                 /* SCALE: REMAINDER = 0 */
-    op_list[5] = ((uint32_t)FS_VSCALE << 8) | (uint32_t)FS_HSCALE;
+    op_list[5] = FS_SCALE;
 
     op_list[6] = 0;                                 /* STOP */
     op_list[7] = 4;
+
+    /* cache everything the ISR must restore, so the ISR itself only stores */
+    op_link = link;
+    op_fix0 = op_list[0];
+    fs_ph1  = op_list[1];
+    fs_ph2  = op_list[2];
+    fs_ph3  = op_list[3];
 #endif
 }
 #else
@@ -237,14 +259,28 @@ void vblank_handler(void)
     }
     OBF = 0;
 #else
-    /* scaled object: OP also destroys the scale-remainder phrase — keep the
-       full rebuild (fast repair not implemented for this path) */
+    /* scaled object: the OP destroys phrase 0 (data ptr / ypos / height) AND the
+       scale phrase's REMAINDER. Restore from precomputed values — stores only,
+       no call, no arithmetic, no OLP reprogram (see FAST OP-LIST REPAIR above).
+       Phrase 1 is restored too: it costs 2 stores and removes a failure class. */
+    /* NOTE: video.c is compiled by jcc68k (NOT gcc -O2 — see the Makefile).
+       jcc68k folds no constant offsets and keeps every local in memory, so an
+       indexed store costs ~10 instructions and a walking pointer ~13 (measured
+       by disassembly). Indexed is the cheaper phrasing here; ~60 instructions
+       total is still ~6x below the rebuild this replaces, and the probe showed
+       that rebuild overshooting the VC-32 fetch by only 1-3 half-lines. */
     if (pf) {
+        op_fix0 = pend_fix0;
         front_fb = pf;
         pending_fb = 0;
     }
-    build_object_list(front_fb);
-    point_op_at_list();
+    op_list[0] = op_fix0;          /* [0] data ptr | link                   */
+    op_list[1] = fs_ph1;           /* [1] height | ypos | TYPE=1            */
+    op_list[2] = fs_ph2;           /* [2] iwidth                            */
+    op_list[3] = fs_ph3;           /* [3] dwidth | pitch | depth | xpos     */
+    op_list[4] = 0;                /* [4] REMAINDER — destroyed every field */
+    op_list[5] = FS_SCALE;         /* [5] vscale | hscale                   */
+    OBF = 0;
 #endif
     frame_count++;
 }
@@ -380,9 +416,11 @@ void video_flip(void)
         /* precompute the ISR's phrase-0 repair values here (main-loop time)
            so the flip path in the ISR is also just 2 stores */
         pend_fix0 = ((uint32_t)done << 8) | (op_link >> 8);
+#if !(defined(LOWRES) && !defined(HALFRES))
         pend_fix1 = (op_link << 24)
                   | ((uint32_t)DISPLAY_H << 14)
                   | ((uint32_t)BASE_Y << 4);
+#endif  /* scaled path: phrase 0's second long is constant (fs_ph1) */
         pending_fb = (uint32_t)done;
     }
 #endif
