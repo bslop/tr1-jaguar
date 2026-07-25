@@ -2135,6 +2135,38 @@ dh_dup:
 dh_dvp:
 	move	r27,r9			; dv (signed 16.16) -> r9
 	.endif
+	.if UVCLAMP=1
+	; DIAGNOSTIC (2026-07-25): clamp the per-pixel texel step to +/-64.0.
+	; Hypothesis: large faces at GRAZING angles get an enormous du/dv, which
+	; overflows A1_INC's 16-bit integer fields (du>>16 / dv&$FFFF0000) and
+	; wraps the sampler, producing streaks parallel to the face edge. A sane
+	; face never steps 64 texels per pixel, so this is a no-op for good
+	; geometry and a visible fix for the degenerate ones.
+	movei	#$00400000,r1		; +64.0 in 16.16
+	cmp	r1,r8			; du - LIM
+	jr	MI,uc_du_lo
+	nop
+	move	r1,r8
+uc_du_lo:
+	movei	#$FFC00000,r1		; -64.0
+	cmp	r1,r8			; du + LIM
+	jr	PL,uc_du_ok
+	nop
+	move	r1,r8
+uc_du_ok:
+	movei	#$00400000,r1
+	cmp	r1,r9			; dv - LIM
+	jr	MI,uc_dv_lo
+	nop
+	move	r1,r9
+uc_dv_lo:
+	movei	#$FFC00000,r1
+	cmp	r1,r9			; dv + LIM
+	jr	PL,uc_dv_ok
+	nop
+	move	r1,r9
+uc_dv_ok:
+	.endif
 	; A1_INC = (dv & $FFFF0000) | (du >> 16)     integer per-pixel U:V step
 	move	r9,r0
 	.if BANKDIET=1
