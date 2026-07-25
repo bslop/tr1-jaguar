@@ -159,6 +159,47 @@ static void build_object_list(uint32_t fb_addr)
                | (1u << 15) | OP_DEPTH | BASE_X;
     op_list[4] = 0;
     op_list[5] = 4;
+#elif defined(OPPLAIN)
+    /* SCALER-BISECT PROBE (2026-07-25). Silicon shows the LOWRES display
+     * breaking up mid-frame (a stationary white band + garbled rows over the
+     * lower ~45%, with Lara drawn COMPLETE on top of it) while the SAME .cof
+     * renders clean in jagemu — so the corruption is on the DISPLAY side, and
+     * jagemu cannot arbitrate it (its OP never writes objects back and is
+     * never bus-starved). Two candidates remain and they need opposite fixes:
+     *   (a) the TYPE-1 scaled object cannot survive render-time bus pressure
+     *       (it re-fetches 3 phrases/line and writes back the remainder — ~50%
+     *       more OP bus traffic per line than the plain object, and the
+     *       Makefile already records the scaler "blacking out under heavy
+     *       multiroom fill" while the unscaled path survives);
+     *   (b) the renderer and the scan-out genuinely share a buffer.
+     * OPPLAIN=1 shows the SAME 320x120 framebuffer through a PLAIN (TYPE-0)
+     * unscaled object — top 120 lines, black below — changing NOTHING else:
+     * same render, same flip protocol, same ISR repair, same buffers.
+     *   bands GONE  -> the scaler is the culprit (a), LOWRES-via-scaler is dead
+     *   bands STAY  -> a real draw/scan race (b), fix the barrier
+     * One flash, one photo. */
+    uint32_t link = ((uint32_t)&op_list[4]) >> 3;   /* STOP at op_list[4] */
+
+    op_list[0] = (fb_addr << 8) | (link >> 8);
+    op_list[1] = (link << 24)
+               | ((uint32_t)RENDER_H << 14)         /* on-screen height (120) */
+               | ((uint32_t)BASE_Y << 4);           /* TYPE 0 = plain bitmap  */
+
+    op_list[2] = SCREEN_PWIDTH >> 4;
+    op_list[3] = ((uint32_t)SCREEN_PWIDTH << 28)
+               | ((uint32_t)SCREEN_PWIDTH << 18)
+               | (1u << 15)                         /* PITCH 1 */
+               | OP_DEPTH
+               | BASE_X;
+
+    op_list[4] = 0;                                 /* STOP */
+    op_list[5] = 4;
+
+    op_link = link;
+    op_fix0 = op_list[0];
+    fs_ph1  = op_list[1];
+    fs_ph2  = op_list[2];
+    fs_ph3  = op_list[3];
 #else
     /* FIX (HW-verified 2026-07-08): a BARE scaled object (scaled bitmap ->
      * STOP, NO branch gating) is correct. My earlier BRANCH

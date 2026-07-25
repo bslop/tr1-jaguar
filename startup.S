@@ -158,8 +158,14 @@ vblank_stub:
 	move.l	fs_ph1,op_list+4	| [1] height | ypos | TYPE=1
 	move.l	fs_ph2,op_list+8	| [2] iwidth
 	move.l	fs_ph3,op_list+12	| [3] dwidth | pitch | depth | xpos
+#ifdef OPPLAIN
+	clr.l	op_list+16		| [4] STOP (high long)
+	moveq	#4,%d1			| [5] STOP (type 4) — plain-object probe
+	move.l	%d1,op_list+20
+#else
 	clr.l	op_list+16		| [4] REMAINDER
 	move.l	#0x4020,op_list+20	| [5] VSCALE 2.0x | HSCALE 1.0x
+#endif
 #endif
 	jsr	vblank_handler		| only run the frame flip on VIDEO ints
 1:

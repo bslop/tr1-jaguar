@@ -258,6 +258,17 @@ CXXFLAGS   += -DHALFRES
 ASFLAGS    += -DHALFRES
 endif
 
+# make ... LOWRES=1 OPPLAIN=1: SCALER-BISECT PROBE (2026-07-25).  Displays the
+# 320x120 framebuffer through a PLAIN unscaled OP object (top 120 lines, black
+# below) instead of the TYPE-1 scaled object — everything else identical.
+# Splits "the OP scaler cannot survive render-time bus pressure" from "the
+# renderer and the scan-out share a buffer"; see video.c build_object_list.
+ifdef OPPLAIN
+CFLAGS     += -DOPPLAIN
+CXXFLAGS   += -DOPPLAIN
+ASFLAGS    += -DOPPLAIN
+endif
+
 ifdef LOWRES
 CFLAGS     += -DLOWRES
 CXXFLAGS   += -DLOWRES
