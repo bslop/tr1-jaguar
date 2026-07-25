@@ -403,3 +403,36 @@ session's first build (calib/probes.s style, ~30 min of rig time).
 RUNBATCH racy-death hunt paths, in order: (1) div-latency probe ->
 recalibrate -> poison-hunt in emu; (2) RBNOUV walking bisect on rig;
 (3) GPU breadcrumb stage markers. Console holds PLAY_XBRSP (good build).
+
+---
+
+## GOVERNOR IS MIS-TUNED BY ~4x — THE fps100 LIE POISONED ITS THRESHOLDS (2026-07-24)
+
+Silicon measurement of the PLAY_XB baseline (14 fpsT blocks) gives the loop-top
+frame period directly (fpsT = 6000*60/pftt2):
+
+  12.0 12.5 13.2 13.7 13.8 14.6 14.7 14.8 15.1 15.1 15.4 16.7 17.4 17.6 fields
+  min 12.0 / median 14.8 / max 17.6
+
+GOVERNOR ships with `GOV_HI=6` (trip when a frame span EXCEEDS this) and
+`GOV_LO=4` (calm when at/below). Against real frame periods:
+- **EVERY frame exceeds GOV_HI=6** -> the governor trips on the first frame.
+- **NO frame is ever <= GOV_LO=4** -> `g_gov_calm` can never reach GOV_K.
+=> **`g_hopcap` is clamped to 1 permanently, with no path back.** Fewer rooms
+drawn forever. That is why GOVERNOR was never validated on silicon.
+
+Root cause: the thresholds were picked when fps100 (~20 fps, ~3 fields/frame)
+was believed. TRUE fps is ~4 (fpsT), i.e. ~15 fields/frame — the SAME ~4.7x
+error the pacing campaign already found in fps100, propagated into a control
+loop. Anything else tuned against fps100 numbers should be re-checked.
+
+Retuned for the true cadence and staged as `probes/GOV_retuned.cof`:
+`GOVERNOR=1 GOV_HI=22 GOV_LO=16 GOV_K=20` (trip above normal-worst ~18; calm at
+or below ~16 so recovery is reachable). GOVERNOR is C-only — kernel stays 3668,
+byte-identical to the baseline.
+
+Target being attacked: maxvbl render-span spikes of 13-15 fields (215-250ms)
+against a typical 4-6, with spind (gpu_sync spins) spiking on the same blocks.
+Prior PACEPROBE data attributes the worst single Tom kick->collect span at
+~19000 hl (~0.6s) vs a typical 5800-6300 hl — i.e. **Tom doing ~3x the work on
+spike frames**, consistent with hop-depth/room-count blowups that g_hopcap caps.
