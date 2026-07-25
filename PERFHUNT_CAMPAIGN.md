@@ -647,3 +647,35 @@ is making the audio service CHEAPER, not absent:
 DO NOT move more work onto Jerry (the sort/emit port idea) until his duty cycle
 is measured with a cheaper audio path — he is the most loaded core, which also
 explains why the roomx co-transform offload measured NULL.
+
+## ★★ FRAME TIME IS VSYNC-QUANTIZED — fps CAN ONLY BE 60/N (2026-07-24)
+
+`video_flip` blocks until the vblank ISR clears `pending_fb`, so a render is
+released only at a field boundary. **Frame time therefore quantizes to whole
+fields and fps can only take the values 60/N.** Measured, silicon:
+
+| build | frame | fields | measured fps | 60/round(fields) |
+|---|---|---|---|---|
+| baseline | 7533 hl | 14.35 | 4.18 | 4.29 |
+| NOSOUND | 6388 | 12.17 | 4.93 | 5.00 |
+| +HALFRES | 5818 | 11.08 | 5.41 | 5.45 |
+| +M68DIET | 5715 | 10.89 | 5.51 | 5.45 |
+
+**This explains "improvements that measure null".** M68DIET cut **Tom's span
+-38.6%** (4214 -> 2588 hl) and **68k own time -24.7%** (5376 -> 4046) yet moved
+fps +0.4%, because the frame stayed inside the same 11-field bucket. The work is
+NOT wasted — it is BANKED, and lands in full the moment a boundary is crossed.
+
+**Rule for this project: only judge a change by FRAME TIME (pp_per), never by
+fps, unless the change crosses a field boundary.** Several earlier "nulls" this
+session may have been partly quantization; re-read them as hl deltas.
+
+CURRENT POSITION: 5715 hl, N=11 (5.45 fps). Next boundary N=10 = 6.00 fps needs
+frame < 5250 hl => **465 hl / -8.1% more**. After that N=9 = 6.67 fps (< 4725),
+N=8 = 7.50 fps (< 4200).
+
+Where the 465 hl can come from (all measured this session):
+- Tom is now only 2588 hl of a 5715 hl frame; the 68k side dominates.
+- 117 wasted delay slots in gpu_geotex.gas (jas flags the pattern) — Tom-side,
+  no visual cost, but Tom is no longer the pole so this alone may not cross.
+- The 68k's own 4046 hl is the real target now.

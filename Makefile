@@ -386,7 +386,7 @@ $(BUILD)/gpu_bltex.bin: gpu_bltex.gas | $(BUILD)
 	$(OBJCOPY) -O binary $(BUILD)/gpu_bltex.elf $@
 
 $(BUILD)/dsp_pose.bin: dsp_pose.das | $(BUILD)
-	$(JAS) $< -o $@ --dsp $(call jasd,$(LOWRES_DEF) -d NOSOUND=$(if $(NOSOUND),1,0))
+	$(JAS) $< -o $@ --dsp $(call jasd,$(LOWRES_DEF) -d NOSOUND=$(if $(NOSOUND),1,0) -d AUDIOLITE=$(if $(AUDIOLITE),1,0))
 	@sz=$$(stat -c%s $@); if [ $$sz -gt 4192 ]; then \
 	  echo "!!! dsp_pose.bin $$sz bytes OVERLAPS MBLK at F1C060 (max 4192 = F1C060-F1B000; OUT_D is dead since direct-DRAM pose)"; \
 	  rm -f $@; exit 1; fi

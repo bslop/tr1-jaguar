@@ -913,7 +913,18 @@ lz_hi:
 	or	r2,r1
 	store	r1,(r10)
 	addq	#4,r10
+	.if AUDIOLITE=0
 	AUDIO_PUMP
+	.else
+	; AUDIOLITE (2026-07-24): the INNER-loop sample poll is the whole cost of
+	; the audio service — 8 instrs (loadw + 2 nop + cmp + movei + jump + 2 nop)
+	; on EVERY iteration of this countdown loop, while the DAC only ticks
+	; ~11kHz. Jerry is the busiest core (145% vs the 68k's 25.6%) and removing
+	; audio entirely measured +18.4% fps, so this poll is the target. Here we
+	; drop the inner poll and let the OUTER resident-loop pump (line ~380)
+	; service the DAC. If that is not frequent enough the symptom is audible
+	; underrun/crackle, NOT a hang — back off to a divided poll instead.
+	.endif
 	subq	#1,r13
 	movei	#vert_loop,r22
 	jump	NE,(r22)
