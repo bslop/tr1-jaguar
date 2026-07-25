@@ -489,6 +489,28 @@ static int g_abrooms = ABBOOT;   /* boots Lara-only (0) unless -DABBOOT=N */
 #ifdef FARDIAL
 static int g_fardist = 9000;   /* per-vert kernel far cull; OPTION+UP/DOWN */
 #endif
+/* LOADING PROGRESS BAR (2026-07-25, user request).  The loading panel is
+   painted and FLIPPED, so its buffer is the one the OP is displaying while the
+   68k grinds through the 10-15 s level load.  Nothing else is drawing yet — the
+   render loop has not started — so the bar is painted DIRECTLY into that same
+   buffer.  No second buffer, no flips, no race, and it appears immediately.
+   load_prog(num,den) is safe to call before the panel exists (g_loadfb is 0). */
+static uint8_t *g_loadfb;
+static int g_loadlh, g_loadbx0, g_loadbx1, g_loadby, g_loadbh;
+static void load_prog(int num, int den)
+{
+    int inner0, inner1, w, x, y;
+    if (!g_loadfb || den <= 0) return;
+    if (num < 0) num = 0;
+    if (num > den) num = den;
+    inner0 = g_loadbx0 + 1;
+    inner1 = g_loadbx1 - 1;
+    w = ((inner1 - inner0) * num) / den;
+    for (y = g_loadby + 1; y < g_loadby + g_loadbh - 1; y++)
+        for (x = inner0; x < inner0 + w; x++)
+            g_loadfb[y*RENDER_W + x] = 255;
+}
+
 #ifdef HOPDIAL
 /* live draw-distance dial (user experiment 2026-07-21): OPTION+RIGHT/LEFT
    raises/lowers the portal-hop dispatch cap. 4 = uncapped;
@@ -2396,6 +2418,19 @@ int main(void)
           int n=(font_load[0]<<8)|font_load[1];
           int palOff=(font_load[2]<<8)|font_load[3];
           const int DIV=1;             /* native glyphs at 240 lines = small+sharp */
+          /* DIVY (2026-07-25): VERTICAL decimation only. The glyphs are
+             authored for a 240-line screen. Under LOWRES the panel is painted
+             into the 120-line render buffer and the OP scaler doubles it, so
+             drawing at native height made the word 2x too TALL. Sample every
+             other glyph row (full width) and the scaler restores the correct
+             aspect — the same trick the title art uses. HALFRES paints at a
+             real 240 via the _hi path, and the full-res build is 240 natively,
+             so both keep DIVY=1. */
+#if defined(LOWRES) && !defined(HALFRES)
+          const int DIVY=2;
+#else
+          const int DIVY=1;
+#endif
           int totw=0, gi, px2, py2, gx, gy, sx2, sy2, ox, oy;
 #ifdef HALFRES
           uint8_t *lfb=(uint8_t*)video_backbuffer_hi();
@@ -2428,21 +2463,41 @@ int main(void)
                 totw += inkw[gi] + 2;
             }
             totw -= 2;
-            ox=RENDER_W-totw-10; oy=LH-16/DIV-8;     /* lower-right corner */
+            ox=RENDER_W-totw-10; oy=LH-16/DIVY-8/DIVY;   /* lower-right corner */
             for (gi=0; gi<n && gi<16; gi++) {
                 const uint8_t *rec=font_load+4+gi*8;
                 int w=rec[1], h=rec[2];
-                int yoff=(16-h)/DIV;         /* baseline-align short glyphs */
+                int yoff=(16-h)/DIVY;        /* baseline-align short glyphs */
                 uint32_t po=((uint32_t)rec[4]<<24)|((uint32_t)rec[5]<<16)
                            |((uint32_t)rec[6]<<8)|rec[7];
-                for (gy=0; gy<h/DIV; gy++)
+                for (gy=0; gy<h/DIVY; gy++)
                   for (gx=0; gx<inkw[gi]; gx++) {
-                      int v=font_load[po+gy*DIV*w+gx*DIV];
+                      int v=font_load[po+gy*DIVY*w+gx*DIV];
                       int X=ox+gx, Y=oy+yoff+gy;
                       if (v && X>=0&&X<RENDER_W&&Y>=0&&Y<LH)
                           lfb[Y*RENDER_W+X]=255;   /* flat white */
                   }
                 ox += inkw[gi] + 2;
+            } }
+          /* PROGRESS BAR (2026-07-25, user request): an empty outlined bar
+             along the bottom. It is filled by load_prog() as the load runs.
+             Geometry is derived from LH so it is correct in all three display
+             configs (LOWRES 120 + OP scaler, HALFRES 240 via _hi, full 240). */
+          /* Height matters more than it looks: the frame costs 2 rows, so a
+             3-row bar at LH=120 left ONE row of fill and read as a solid line
+             whatever the progress was.  8 rows (LOWRES) / 14 (240) leaves a
+             readable interior in both. */
+          { int bh = (LH >= 240) ? 14 : 8;
+            int by = LH - bh - 4, bx0 = 10, bx1 = RENDER_W - 10, xx2;
+            g_loadfb = lfb; g_loadlh = LH;
+            g_loadbx0 = bx0; g_loadbx1 = bx1; g_loadby = by; g_loadbh = bh;
+            for (xx2 = bx0; xx2 < bx1; xx2++) {         /* top+bottom rules */
+                lfb[by*RENDER_W+xx2] = 255;
+                lfb[(by+bh-1)*RENDER_W+xx2] = 255;
+            }
+            for (py2 = by; py2 < by+bh; py2++) {        /* end caps */
+                lfb[py2*RENDER_W+bx0] = 255;
+                lfb[py2*RENDER_W+bx1-1] = 255;
             } }
           CRUMB(0xFFFE);               /* WHITE: panel painted */
 #ifdef HALFRES
@@ -2524,7 +2579,10 @@ int main(void)
                           else root>>=1; bit>>=2; }
               int r=(int)(root*4u+4u); if (r<1) r=1;
               rcx[i] = ix + xS*512; rcz[i] = iz + zS*512; rrad[i] = r; }
+            /* room table = the first 3/8 of the load, one step per room */
+            load_prog(3*(i+1), 8*roomCount);
         }
+        load_prog(3, 8);
         /* Lara mesh + start in room 0 (first in the set), on the floor */
         /* TEXTURED Lara from PSX (mrt_lara.bin): baked per-face UVs + posed
          * run-cycle frames, sharing the room atlas/palette. */
@@ -2539,6 +2597,7 @@ int main(void)
           g_ltx_tris   = g_ltx_quads + g_lnq*24;
           g_ltx_frames = g_ltx_tris + g_lnt*18;
         }
+        load_prog(5, 8);
         /* runtime-skinning skeleton (mrt_lskin.bin) */
         { const uint8_t *b = S_lskin;
           int mc = rd16(b), animc = rd16(b+8), framec = rd16(b+10);
@@ -2817,6 +2876,10 @@ int main(void)
           clut[254]=0x0000; clut[255]=0xFFFF;
           clut[g_pickidx]=0xFA37;                   /* gold pickup */
           clut[g_dooridx]=0x918D; }                  /* brown wood door */
+        /* load complete: fill the bar, and drop the panel pointer so no
+           later call can scribble into a buffer the renderer now owns. */
+        load_prog(8, 8);
+        g_loadfb = 0;
 
 
         for (;;) {
