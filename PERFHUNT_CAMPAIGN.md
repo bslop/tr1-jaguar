@@ -569,3 +569,35 @@ IMPLICATION FOR TARGETS: resolution cuts shrink fill + OP fetch (Tom + bus) but
 NOT the 68k's compute. Scene-complexity cuts (rooms/faces) are the only knob that
 shrinks BOTH. g_hopcap is runtime-adjustable via D-pad LEFT/RIGHT in HOPDIAL
 builds — a free fps-vs-draw-distance sweep with no extra flashes.
+
+### CORRECTION (same day): I read the SLITDISPLAY result off ONE block and got it BACKWARDS
+
+The section above was written from block 1 alone (239 renders). With BOTH blocks
+(479 renders) the attribution reverses:
+
+| | baseline | SLITDISPLAY | delta |
+|---|---|---|---|
+| frame period | 7533 | 7073 | **-6.1%** (4.18 -> 4.45 fps) |
+| Tom kick->collect | 6147 | 6135 | **-0.2% (UNCHANGED)** |
+| **68k own time** | **7075** | **6113** | **-13.6%** |
+| 68k blocked on Tom | 458 | 960 | +110% |
+
+**It is the 68k that is bus-sensitive, not Tom.** Freeing ~13% of DRAM bandwidth
+cut 68k time by 13.6% and did nothing measurable for Tom.
+
+That is mechanistically right and I should have predicted it: **Tom's kernel runs
+from GPU SRAM** (the whole point of the 3680-byte SRAM budget everyone fights
+over), so Tom fetches no instructions over the bus — only texels and pixels. The
+**68k fetches ALL code and data from DRAM**, so it pays the contention.
+
+CONSEQUENCES (these supersede the previous section):
+- Bandwidth reduction hits the CRITICAL PATH (the 68k) directly. Resolution cuts,
+  sound-off, and any DRAM-client reduction are therefore FIRST-CLASS levers, not
+  Tom-only ones.
+- Tom's 6147 hl is compute/blit-bound and will NOT respond to bandwidth work;
+  Tom needs instruction/algorithm cuts.
+- The 68k is BOTH compute-heavy (M68A2/LEMITDIET still valid) AND bus-sensitive.
+  Both attacks stack on the same critical path.
+
+METHOD NOTE: one 240-render block was not enough to attribute a ~6% effect. Do
+not draw per-phase conclusions from a single PACEPROBE block.
