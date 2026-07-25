@@ -16,7 +16,13 @@ OUT="${2:?usage: build_cof.sh <disc> <outdir>}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"     # the jaguar/ tree
 cd "$HERE"
 RMAC="${RMAC:-$HOME/jaguar-tools/bin/rmac}"
-BUILD_FLAGS="${BUILD_FLAGS:-MULTIROOM=1 HALFRES=1 CFLAGS_EXTRA=-DJERRYPOSE}"
+# LOWRES (2026-07-25): render 320x120 and let the OP's hardware vertical
+# scaler display it at 240, instead of HALFRES's Blitter line-double.  That
+# deletes 2 Blitter passes / 76800 B per frame.  MATCHED silicon A/B, same
+# session and route: 6.00 -> 7.50 fps (+25%), frames whole.  The path was
+# unusable until the flip grew a Blitter COMPLETION barrier (video.c) — see
+# the LOWRES BARRIER notes; do not switch back without reading them.
+BUILD_FLAGS="${BUILD_FLAGS:-MULTIROOM=1 LOWRES=1 CFLAGS_EXTRA=-DJERRYPOSE}"
 
 say() { printf '\n\033[1;36m==>\033[0m %s\n' "$*"; }
 

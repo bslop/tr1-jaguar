@@ -2288,9 +2288,17 @@ int main(void)
                   (void)gymload_img; (void)gymload_pal;
                   if (shown != page)
                       video_set_clut(title_pal);
-#ifdef HALFRES
+#ifdef LOWRES
                   /* art is 320x240: take every other row for the 120-line fb
-                     (the OP line-double displays it full height again).
+                     (displayed full height again — by the Blitter line-double
+                     under HALFRES, by the OP vertical scaler under LOWRES).
+                     Was #ifdef HALFRES, which sent the plain LOWRES build down
+                     the blit_copy path below: that copies RENDER_H rows, i.e.
+                     only the TOP HALF of the 240-line art, which the scaler
+                     then stretched over the whole screen — the mangled title
+                     visible in any LOWRES filmstrip. Both half-height paths
+                     want the same decimation; the full-240 build still takes
+                     the straight copy.
                      (Native-240 composite tried 2026-07-12: too slow on the
                      68k — revisit with a Blitter composite, task #29.) */
                   { int yy2, xx2;
