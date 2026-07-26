@@ -179,3 +179,37 @@ Concretely:
 That is the principled repair; deleting geometry is not. It also retires
 `TINYCULL` for Lara, and would fix the same class of bug on any future runtime
 blob (props, pickups) rather than just her head.
+
+## ★★★ 2026-07-26 — THE WHOLE HIDDEN-SURFACE THEORY IS WRONG
+### 1. The bug lives in the IDLE scene, and jagemu reproduces it there
+Every measurement in this campaign used a WALKING strip (`--press up
+--press-after 1000`, start 1300), where the artifact is rare and small. **Render
+her standing still instead — plain `screenshot --frames 1500` with NO input —
+and the pale face-patch is plainly visible in the middle of her hair, exactly
+what the user sees on silicon.** That is the reproduction case. Use it.
+
+### 2. A CORRECT back-face cull does not remove it
+`LPLANES=1` (real per-face planes, validated: 34 visible from behind + 51 from
+the front = 85 exactly) and an ORDER-PRESERVING hide of the 10 rear-skin faces
+both render **pixel-for-pixel the same head as the baseline** in the idle scene.
+Silicon agrees: the user sees no change.
+
+### 3. ⇒ The offending polygon is FRONT-FACING. It is a TEXTURE problem.
+If an exact plane cull keeps the face, the face is genuinely visible from this
+camera — so this was never a hidden-surface failure. **A legitimately-visible
+rear-of-head polygon is TEXTURED WITH HER FACE.** That is a texture/UV
+assignment problem in the DATA path, not a renderer problem.
+
+**This retires the entire cull line of attack:**
+- `TINYCULL` — sub-pixel sign guard. Keep for ROOM geometry; irrelevant here.
+- `LPLANES` — correct and perf-neutral (spans -0.07%), but does NOT fix this.
+- dropping/hiding faces — chasing the wrong mechanism.
+
+### NEXT: which texture lands on which head polygon
+The head is 85 faces; 32 are >50% skin-textured, 22 facing front and **10 facing
+rear**. Those 10 are legitimately visible from behind and carry face texels.
+Check the extractor's Lara face->texture assignment (`build_lara` reads
+`v0..v3` then `flags`, and `tex = fl & 0x7FFF`) against what TR1 actually
+intends, and compare a known-good render of TR1 Lara's head from behind. Note
+the room path had EXACTLY this class of bug once — "extractor read room faces
+verts-first, PSX is TEX-first" — fixed for rooms, never re-checked for Lara.
