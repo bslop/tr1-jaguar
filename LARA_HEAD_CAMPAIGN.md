@@ -545,3 +545,21 @@ the tail of Jerry's vertex buffer before Jerry has finished it, or the final
 mesh write racing the completion flag. `dsp_pose.das` has a documented history
 of exactly this class (races fixed 2026-07-20: AUDIO_PUMP restore, indexed-store
 root). Instrument Jerry's per-mesh write completion against Tom's read of mesh 14.
+
+---
+# ⬜ SEPARATE BUG (user, 2026-07-26) — FLOATING SHADED POLY CHUNKS
+**"Chunks of shaded polys that seem to rise up into the player's view. Looks like
+CRY mode shading that is wrongly placed."** Awaiting a video capture from the
+user — DO NOT theorise before seeing it (this campaign lost a day to exactly that).
+
+Context worth having ready, NOT a diagnosis:
+- The framebuffer is **8bpp indexed + RGB16 CLUT**, not CRY (`VMODE $06C7`), so
+  "CRY-like" here likely means the RAMP shade steps, not a CRY-mode pixel.
+- `SHADEPASS` applies a **RECT shade over each face's bounding-box rows**:
+  `SH_Y0` is armed at the cull ("this face rasters") and `pkt_done` shades rows
+  y0..y1. A bbox that is armed but not matched to the face it belongs to would
+  paint exactly this — **rectangular shaded chunks in the wrong place**.
+- Related known-good/bad references: `PHRASE_shade.cof`, `RECTSHADE_v1..v3.cof`,
+  `RAMP_fullbright.cof` in `probes/` are all shade-pass experiments from 07-20.
+- The user is on `probes/PLAY_NOJERRY.cof` (COLRAMP + SHADE=1, JERRYPOSE OFF,
+  no TINYCULL, no LPLANES).
