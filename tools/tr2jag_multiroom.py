@@ -721,6 +721,7 @@ def main():
     #   242..245 Lara flat-shade swatch
     #   246..253 Lara colored-face tones
     #   254..255 UI black/white
+    _ramp_bases=None
     if RAMP_PAL:
         # ---- ramp palette: RAMP_K bases x RAMP_M shades ----------------
         # Weighted Lloyd (k-means) over the FULL-BRIGHT colour histogram.
@@ -791,6 +792,7 @@ def main():
                 palette[bi*RAMP_M+s]=jag16((r*f)>>8,(g2*f)>>8,(b*f)>>8)
         print("RAMP palette: %d bases x %d shades, %d colours mapped"
               % (len(bases),RAMP_M,len(uniq)))
+        _ramp_bases=bases
     elif len(uniq)>240:
         keep_l=[c for c,_ in hist_lara.most_common(64)]
         _kl=set(keep_l)
@@ -909,10 +911,25 @@ def main():
         print("!! more than 30 distinct colored indices:", col_indices)
     col_pal={}                 # colored index -> palette slot
     print("lara colored-face tones (idx->RGB16):", end=" ")
+    # LARA_COLRAMP (2026-07-26): under RAMP_PAL, point each flat tone at the
+    # nearest RAMP BASE (bi*RAMP_M) instead of a reserved flat slot 246..253.
+    # The reserved band is NOT ramp-aligned, so a runtime shade k added to it
+    # walks into 254/255 = the UI black/white -- that is why shading her
+    # COLOURED faces turned her limbs grey-green/black.  On a ramp base, k just
+    # steps down the ramp like every other surface in the game.
+    _COLRAMP = int(os.environ.get("LARA_COLRAMP","0")) and RAMP_PAL and _ramp_bases
     for j,ci in enumerate(col_indices[:30]):
-        slot=LARA_COL_BASE+j
-        palette[slot]=lara_col_tone(ci); col_pal[ci]=slot
-        print("%d:%04x" % (ci, palette[slot]), end=" ")
+        tone=lara_col_tone(ci)
+        if _COLRAMP:
+            tr,tg,tb=((tone>>11)&31,(tone>>1)&31,(tone>>6)&31)
+            bi=min(range(len(_ramp_bases)),
+                   key=lambda i:(tr-_ramp_bases[i][0])**2+(tg-_ramp_bases[i][1])**2
+                               +(tb-_ramp_bases[i][2])**2)
+            col_pal[ci]=bi*RAMP_M
+        else:
+            slot=LARA_COL_BASE+j
+            palette[slot]=tone; col_pal[ci]=slot
+        print("%d:%04x%s" % (ci, tone, "->ramp%d"%(col_pal[ci]//RAMP_M) if _COLRAMP else ""), end=" ")
     print()
     LARA_COL_SW_Y=atlas_h
     atlas+=bytearray(ATLAS_W*LARA_CELL)
@@ -1299,7 +1316,11 @@ def main():
         # 242..253, which are NOT ramp-aligned (ramp bases are bi*RAMP_M), so
         # adding k there walks into 254/255 = the UI black/white -> her limbs
         # went grey-green/black with white blotches when I shaded everything.
-        if not _LSHADE or f['colored']: return uvl
+        # once LARA_COLRAMP puts her flat tones on ramp bases, COLOURED faces
+        # are shadeable too -- shading only half of her is what the user
+        # rejected on silicon ("weird shading on her butt", discoloured shorts).
+        if not _LSHADE: return uvl
+        if f['colored'] and not _COLRAMP: return uvl
         u0,v0=uvl[0]
         return [((u0 & 0x1FFF) | (_LSHADE<<13), v0)] + list(uvl[1:])
     _pq=[]; _pt=[]                      # mesh-local planes, in EMIT order

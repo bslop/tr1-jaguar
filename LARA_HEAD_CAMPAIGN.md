@@ -390,3 +390,42 @@ Do what RAMP_PAL's own design intends — **give Lara a real per-face runtime k*
    Decode them, convert to k the same way room faces do, pack into `u[0]` 13-15.
 Then she shades with the world, the highlights stop blazing, and it is correct
 at every light level instead of one hardcoded compromise.
+
+## ✅✅ 2026-07-26 — THE FIX: `LARA_COLRAMP=1 LARA_SHADE=k`
+The two-part repair the RAMP_PAL design always implied.
+
+**1. `LARA_COLRAMP=1` — put her flat tones on RAMP BASES.**
+Her COLOURED faces used reserved flat slots 246..253, which are NOT ramp-aligned,
+so a runtime k walked into 254/255 (UI black/white) and turned her limbs
+grey-green/black. Now each tone is matched to the nearest ramp base
+(`bi*RAMP_M`), so k just steps down the ramp like every other surface:
+`6->ramp23  8->ramp0  10->ramp18  13->ramp23  14->ramp23  21->ramp19  25->ramp8  34->ramp22`
+
+**2. `LARA_SHADE=k` — now applies to ALL her faces, textured AND coloured.**
+Shading only half of her is exactly what the user rejected on silicon ("weird
+shading on her butt", discoloured shorts/backpack). With the tones ramp-aligned,
+the whole character darkens together.
+
+### MEASURED (idle screenshot, the scene that shows the bug)
+| build | bright px on skull | Lara mean luma |
+|---|---|---|
+| baseline | **79** | 95 |
+| `LARA_COLRAMP=1 LARA_SHADE=1` | **15** | 88 |
+| `LARA_COLRAMP=1 LARA_SHADE=2` | **0** | 82 |
+No grey-green, no black blotches, no white leak — she darkens UNIFORMLY.
+k=1 keeps her skin warmest; k=2 removes the blob completely. **Needs the user's
+eye on silicon to choose.**
+
+### WHY THIS IS THE RIGHT SHAPE OF FIX
+RAMP_PAL bakes every tile full-bright ON PURPOSE and moves darkening to the
+runtime shade pass. Lara was the ONE object that never got a k, so she alone
+stayed full-bright — her hair highlight blew out to (247,219,132) and read as a
+face. This gives her the k the design always intended.
+
+### STILL A COMPROMISE — the last step
+k is UNIFORM here, not per-face. The complete version decodes the per-vertex
+normals/intensity TR1 stores in her mesh (the extractor SKIPS them:
+`p += vAbs*8 if vCount>0 else vAbs*2`) and emits a real per-face k, so she
+tracks the room light instead of one hardcoded step. `build_lara_part` could
+even OR a room-derived k in as it copies each face record, giving her per-ROOM
+lighting for ~nothing.
