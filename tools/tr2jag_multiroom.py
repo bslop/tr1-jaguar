@@ -1167,7 +1167,10 @@ def main():
     ltris.sort(key=_fzkey)
     print("LARA FACE DIET: quads %d->%d tris %d->%d (minarea %g)"%(
         _nq0,len(lquads),_nt0,len(ltris),_MINAREA))
-    lb+=struct.pack(">HHHHHH", vcount, len(lquads), len(ltris),
+    _DROPH=set(int(x) for x in os.environ.get("LARA_DROPFACE","").split(",") if x.strip()!="")
+    _nqk=sum(1 for i in range(len(lquads)) if i not in _DROPH)
+    _ntk=sum(1 for i in range(len(ltris)) if len(lquads)+i not in _DROPH)
+    lb+=struct.pack(">HHHHHH", vcount, _nqk, _ntk,
                     nframes, ATLAS_W, atlas_h)
     # LARA WINDING FIX (2026-07-20): TR1 character meshes contain mirrored /
     # inconsistently-wound faces (the PSX never backface-culls models); the
@@ -1209,11 +1212,22 @@ def main():
             _fliphist[_meshof(vl)]=_fliphist.get(_meshof(vl),0)+1
             return vl[0:1]+vl[:0:-1], uvl[0:1]+uvl[:0:-1]
         return vl, uvl
+    # DIAGNOSTIC (2026-07-25): drop specific Lara face indices (position in
+    # lquads+ltris) to prove which faces paint skin on the back of her skull.
+    _DROP=set(int(x) for x in os.environ.get("LARA_DROPFACE","").split(",") if x.strip()!="")
+    if _DROP: print("LARA_DROPFACE: dropping %d faces %s"%(len(_DROP),sorted(_DROP)))
+    _fi=[0]
     for f in lquads:
+        if _fi[0] in _DROP:
+            _fi[0]+=1; nq_drop=1; continue
+        _fi[0]+=1
         vv4,uv4=_windfix(list(f['v']), list(lara_quad_uv(f)))
         lb+=struct.pack(">HHHH", *vv4)
         for (u,vv) in uv4: lb+=struct.pack(">HH",u,vv)
     for f in ltris:
+        if _fi[0] in _DROP:
+            _fi[0]+=1; continue
+        _fi[0]+=1
         vv3,uv3=_windfix(list(f['v']), list(lara_tri_uv(f)))
         lb+=struct.pack(">HHH", *vv3)
         for (u,vv) in uv3: lb+=struct.pack(">HH",u,vv)
