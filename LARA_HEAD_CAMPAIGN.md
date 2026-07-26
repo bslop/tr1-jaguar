@@ -292,3 +292,23 @@ Make Lara's textures participate in the ramp palette like room tiles, then give
 her a real per-face k (TR1 stores per-vertex normals/intensity in the mesh; the
 extractor currently SKIPS them: `p += vAbs*8 if vCount>0 else vAbs*2`). Then she
 shades with the world and the highlights stop blazing.
+
+## ❌ 2026-07-26 — LARA_SHADE REJECTED ON SILICON (user, same session)
+Flashed `LARA_SHADE=3` (textured faces only). User reports:
+"weird shading on her butt", "discoloration on her shorts and backpack",
+"a layer of shading over her head", and **the head still glitches**.
+
+**Why: shading only her TEXTURED faces makes her INTERNALLY INCONSISTENT.**
+The pixel diff is clean proportional darkening (206,146,90 -> 123,81,49, ~0.6x)
+applied to just **16.3% of her pixels** — the textured ones. Her shorts,
+backpack and hair darkened; her SKIN did not, because skin is drawn by COLOURED
+faces which I skipped to avoid the 242..253 swatch slots walking into 254/255.
+So half of her is lit and half is not. That is worse than the original artifact.
+
+**And the head still glitches**, so full-brightness highlights were at most part
+of the story — not the whole cause.
+
+⇒ `LARA_SHADE` is a DEAD END as built. Shading Lara at all requires her COLOURED
+faces to be shadeable too, i.e. the reserved swatch band (242..253) must become
+ramp-aligned like the texel ramps (`bi*RAMP_M`). That is an asset-pipeline
+change to the palette layout, not a face-record tweak. Flag kept DEFAULT 0.
