@@ -508,3 +508,40 @@ mesh write racing the completion flag. Note `dsp_pose.das` already has a history
 of exactly this class — "REAL dsp_pose races (AUDIO_PUMP restore, indexed-store
 root)" were found and fixed 2026-07-20.
 **Next: instrument Jerry's per-mesh write completion vs Tom's read of mesh 14.**
+
+## 2026-07-26 — SILICON VERDICT ON `JERRYPOSE=OFF`, AND WHERE THE FPS WENT
+**User on hardware: "Head seems a bit more stable though there is a chunk
+missing" + "Framerate is slower."** So disabling JERRYPOSE is CONFIRMED as
+addressing the twitch, at a real frame-rate cost, and it introduces a NEW
+geometry gap.
+
+### The chunk is reproducible in jagemu
+Idle head pixels: **JERRYPOSE on 450 → off 443**, and her hair mass is visibly
+narrower on one side. Small in this frame, clearly visible to the user on
+silicon. **Chase it in the 68k pose path (`build_lara_part`) — it is NOT present
+when Jerry poses her.**
+
+### Where the frame rate went — the bottleneck MOVED back to the 68k
+| | JERRYPOSE on | off |
+|---|---|---|
+| 68000 awake | 17.6% (old ledger) | **52.7%** |
+| Tom GPU busy | 90.3% | 88.4% |
+| spans (1500 fields) | 8,399,792 | 6,066,592 (**−27.8%**) |
+| 68k instret | 17,242,812 | 18,193,062 (+5.5%) |
+
+### ❌ `LEMITDIET` CANNOT HELP HERE — measured EXACTLY 0.00%
+spans/instret/cycles identical to the digit. **It optimises `lara_finish`, which
+is the JERRYPOSE FINISH path — with Jerry off that code never executes.** Do not
+spend time on it while Lara is 68k-posed.
+
+### ⇒ THE FRAME RATE IS IN JERRY. FIX `dsp_pose.das`, DO NOT WORK AROUND IT.
+Every alternative is worse: LEMITDIET is inert, `M68DIET` is CONVICTED TOXIC
+(−62% on silicon), and dieting her faces re-opens the gaps that `LARA_MINAREA=0`
+exists to prevent. The one lever that recovers the fps AND keeps the head steady
+is repairing the DSP pose.
+**The lead is precise: it corrupts the LAST MESH JERRY WRITES (her head), while
+every earlier mesh is bit-stable.** That is a write/read boundary — Tom reading
+the tail of Jerry's vertex buffer before Jerry has finished it, or the final
+mesh write racing the completion flag. `dsp_pose.das` has a documented history
+of exactly this class (races fixed 2026-07-20: AUDIO_PUMP restore, indexed-store
+root). Instrument Jerry's per-mesh write completion against Tom's read of mesh 14.
