@@ -259,3 +259,36 @@ and compare against the atlas tile.
 ### REMAINING
 Quad 150 accounts for 8 of 15 patch px. The other 7 are in half B (43 tris) and
 have NOT been bisected yet. Same method, same script (`idle_round.sh`).
+
+## ★★★ 2026-07-26 — BISECT COMPLETE + MECHANISM
+### The culprit faces (all REAR of the skull, all pale hair-highlight texels)
+| blob face | tex | z vs head centre | patch px |
+|---|---|---|---|
+| **quad 150** | 490 | −63.7 | **8** |
+| **tri 374** | 526 | −56.9 | **3** |
+| **tri 373** | 524 | −56.9 | **2** |
+| tri 369 | 522 | −47.2 | ~1 |
+| tri 370 / 371 | 523 / 525 | −54.5 | 1 (edge) |
+Total 15/15 accounted for. Neighbours 148/149 (tex 489) are dark-brown HAIR and
+are correct. The pale tiles are **hair-strand highlight textures** — bold
+(247,219,132) zigzags on dark brown — not a face. At 320x120 a cluster of them
+on the back of her skull READS as a face. That is the artifact.
+
+### ⇒ MECHANISM: Lara is rendered COMPLETELY UNSHADED
+**All 375 of her faces carry shade level k=0** (max `u`=246, so the k bits in
+`u[0]` 13-15 are never set), while room geometry carries **k=1..7**. Her hair
+highlights therefore render at FULL BRIGHTNESS in a shaded world.
+
+### ⚠️ BUT `LARA_SHADE=k` IS NOT THE FIX — IT BREAKS HER COLOURS
+Packing k into her `u[0]` makes the patch vanish (**0/15**) but her limbs turn
+GREY-GREEN at k=3 and BLACK with white blotches at k=4. The atlas stores each
+ramp's BRIGHTEST entry and k steps down inside an 8-slot ramp
+(`palette[bi*RAMP_M + s]`, `idx_of[c] = bi*RAMP_M`); Lara's tiles are not
+ramp-aligned that way, so k walks into slots her textures do not own.
+**Flag kept, default 0, as the proof of mechanism — do NOT ship it.**
+
+### THE ACTUAL FIX
+Make Lara's textures participate in the ramp palette like room tiles, then give
+her a real per-face k (TR1 stores per-vertex normals/intensity in the mesh; the
+extractor currently SKIPS them: `p += vAbs*8 if vCount>0 else vAbs*2`). Then she
+shades with the world and the highlights stop blazing.

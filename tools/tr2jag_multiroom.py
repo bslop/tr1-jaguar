@@ -1245,6 +1245,19 @@ def main():
         nx,ny,nz=int(round(nx*k)),int(round(ny*k)),int(round(nz*k))
         d=nx*p[0][0]+ny*p[0][1]+nz*p[0][2]
         return (nx,ny,nz,d)
+    # ---- LARA_SHADE (2026-07-26) ----------------------------------------
+    # Lara ships with shade level k=0 on ALL 375 faces (verified: max u=246, so
+    # the k bits in u[0] 13-15 are never set), while room geometry carries k=1..7.
+    # She therefore renders FULL BRIGHT in a shaded world.  The visible symptom is
+    # her pale HAIR-HIGHLIGHT texels (247,219,132) blazing on the back of her
+    # skull, which at 320x120 reads as "her face is on the back of her head".
+    # k is a per-face darkening step the SHADEPASS applies; 0 = full bright.
+    _LSHADE=int(os.environ.get("LARA_SHADE","0"))
+    if _LSHADE: print("LARA_SHADE: packing k=%d into u[0] of every Lara face"%_LSHADE)
+    def _shade_uv(uvl):
+        if not _LSHADE: return uvl
+        u0,v0=uvl[0]
+        return [((u0 & 0x1FFF) | (_LSHADE<<13), v0)] + list(uvl[1:])
     _pq=[]; _pt=[]                      # mesh-local planes, in EMIT order
     for f in lquads:
         if _fi[0] in _DROP:
@@ -1252,7 +1265,7 @@ def main():
         _fi[0]+=1
         vv4,uv4=_windfix(list(f['v']), list(lara_quad_uv(f)))
         if (_fi[0]-1) in _TINT: uv4=[(_TU,_TV)]*4
-        _pq.append(_plane_of(vv4))
+        _pq.append(_plane_of(vv4)); uv4=_shade_uv(uv4)
         lb+=struct.pack(">HHHH", *vv4)
         for (u,vv) in uv4: lb+=struct.pack(">HH",u,vv)
     for f in ltris:
@@ -1261,7 +1274,7 @@ def main():
         _fi[0]+=1
         vv3,uv3=_windfix(list(f['v']), list(lara_tri_uv(f)))
         if (_fi[0]-1) in _TINT: uv3=[(_TU,_TV)]*3
-        _pt.append(_plane_of(vv3))
+        _pt.append(_plane_of(vv3)); uv3=_shade_uv(uv3)
         lb+=struct.pack(">HHH", *vv3)
         for (u,vv) in uv3: lb+=struct.pack(">HH",u,vv)
     # LPLANES table -> a generated header (no blob-format change, no new binary
