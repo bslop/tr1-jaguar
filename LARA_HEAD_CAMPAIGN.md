@@ -606,3 +606,31 @@ Context to check first, NOT a diagnosis: `inset_uv()` pulls every face corner on
 texel toward the UV centroid (anti-bleed), and the atlas cell borders / the 1-px
 inset are the obvious candidates for a uniform edge fringe. Also worth ruling in
 or out: the `SHADEPASS` rect shade over each face's bbox rows.
+
+### 2026-07-26 — the Jerry HANDSHAKE is sound; four more suspects eliminated
+| suspect | verdict |
+|---|---|
+| **DSP ISR clobbering pose registers** | **DEAD — no ISR runs.** `dsp_pose.das:350`: the I2S interrupt is **PARKED** (disabled 2026-07-12, "save/restore tears it"), and `NOSOUND=1` compiles the sample service out entirely (`dsp_pose.das:21`). |
+| **stale done-flag** (sync returns on the previous frame's flag) | **DEAD** — `jerry_pose_kick` does `dsp_mailbox[0] = 0;` *before* `D_CMD = 1` (jerry.c). |
+| **magic mismatch** between the two sides | **DEAD** — `jerry.c:85 MAGIC_POSE_DONE 0x0D5BD05E` == `dsp_pose.das:238 MAGIC_DONE $0D5BD05E`. |
+| **Tom drawing the blob while Jerry rewrites it** | **guarded** — `main.c:3521` has an explicit PIPELINE collect point: "Present it before any blitter (clear) or pose (lara_blob) work — both would collide with a live render." And PIPELINE-off still shows the bug. |
+
+### ⚠️ CAVEAT BEFORE MORE DSP WORK IN JAGEMU
+This ledger already records **"'Jerry 100.0% busy' is a MODEL ARTIFACT"** with
+three irreconcilable DSP readings of the same ROM, and a standing request to
+cobweb about the run-vs-serve DSP divergence. **The frozen-pose instability is
+measured IN JAGEMU.** The user does see the twitch on silicon and does see it
+improve with JERRYPOSE off, so the effect is real — but the exact per-frame
+vertex values from `peek` may be partly a DSP-model artifact.
+**Confirm on silicon before trusting a jagemu-only DSP diagnosis.**
+
+### NEXT STEP (localises it inside Jerry, one measurement)
+Peek Jerry's WORKING MATRIX for mesh 14 across frames (frozen pose), not just the
+output verts:
+- matrix stack `MSTACK = $F1C0C0` (20 x 48 B); the live matrix block is the one
+  `mesh_loop` writes each iteration.
+- **If the MATRIX differs frame to frame** the error is upstream, in the
+  node/rotation chain feeding the last mesh.
+- **If the matrix is IDENTICAL but the VERTS differ**, the fault is in
+  `vert_loop`'s store path (r10 cursor / packing), not the maths.
+That splits the remaining space cleanly and is one `peek` run per arm.
