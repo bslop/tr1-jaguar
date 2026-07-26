@@ -1632,15 +1632,28 @@ lc_ret:
 	move	r12,r0			; cur   = old aci
 	move	r24,r1			; ni
 	movei	#AU,r7			; chain A u/v block
+.if JMPDIET=1
+	; BRANCH DIET (2026-07-25): uv_edge exits with `jump T,(r20)`, and r20
+	; pointed at a stub whose ONLY job was to branch to lchain — a taken
+	; branch landing on a taken branch.  Every taken branch costs 3 refill
+	; ticks (HW-calibrated), and jump_refill is 16.9% of Tom's cycles, so
+	; returning STRAIGHT to the loop head deletes 3 ticks per chain step per
+	; chain.  r20 is never clobbered inside uv_edge and both of its exits go
+	; through r20, so this is a pure equivalence.
+	movei	#lchain,r20		; return straight to the loop head
+.else
 	movei	#lc_uv,r20		; return addr
+.endif
 	movei	#uv_edge,r22
 	jump	T,(r22)
         move	r24,r12
 	nop
+.if JMPDIET=0
 lc_uv:
 	movei	#lchain,r22
 	jump	T,(r22)
 	nop
+.endif
 lchain_done:
 
 	; ---- chain B: while (y >= byend && guardB++ <= n)  dir -1 ----
@@ -1671,15 +1684,21 @@ rc_ret:
 	move	r13,r0			; cur = old bci
 	move	r24,r1			; ni
 	movei	#BU,r7			; chain B u/v block
+.if JMPDIET=1
+	movei	#rchain,r20		; return straight to the loop head (see lchain)
+.else
 	movei	#rc_uv,r20		; return addr
+.endif
 	movei	#uv_edge,r22
 	jump	T,(r22)
         move	r24,r13
 	nop
+.if JMPDIET=0
 rc_uv:
 	movei	#rchain,r22
 	jump	T,(r22)
 	nop
+.endif
 rchain_done:
 	; SCANLINE-RUN BATCH: rows until the next chain event (or bottom+1).
 	; The inner loop below runs spans WITHOUT chain checks or the r14/r15
