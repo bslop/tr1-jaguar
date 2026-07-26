@@ -1283,8 +1283,13 @@ def main():
         f.write("//   TRIS   tcount*18: u16 v0,v1,v2   ; u16 (u,v)x3\n")
         f.write("//   FRAMES framecount*(vcount*6): s16 x,y,z  (Lara-local, +Y down, world units)\n")
         f.write("#define MRT_LARA_VCOUNT     %d\n" % lara['vcount'])
-        f.write("#define MRT_LARA_QCOUNT     %d\n" % len(lquads))
-        f.write("#define MRT_LARA_TCOUNT     %d\n" % len(ltris))
+        # MUST match what was actually EMITTED into mrt_lara.bin, not the
+        # pre-drop list length.  LARA_DROPFACE removes faces from the blob; if
+        # these counts still said len(lquads) the C side would read past the end
+        # of Lara's blob (tolerated in jagemu, BLACK SCREEN on silicon - cost a
+        # flash 2026-07-25).
+        f.write("#define MRT_LARA_QCOUNT     %d\n" % _nqk)
+        f.write("#define MRT_LARA_TCOUNT     %d\n" % _ntk)
         f.write("#define MRT_LARA_FRAMECOUNT %d\n" % lara['framecount'])
         f.write("#define MRT_LARA_FRAMESIZE  %d  // bytes per frame (vcount*6)\n" % (lara['vcount']*6))
         f.write("#define MRT_LARA_RUNFRAMES  %d  // run cycle = frames 0..RUNFRAMES-1\n" % lara['runFrames'])

@@ -68,6 +68,39 @@ passes, so the screen-space test is her only hidden-surface mechanism.
 4. The static `_fzkey` front/back ordering cannot fix it — it is baked in T-pose,
    so it stops being true the moment she turns.
 
+## ☠️☠️ 2026-07-25 LATE — THE SKIN-PIXEL METRIC IS CONFOUNDED BY HER NECK
+**`LARA_DROPFACE=<all 85 head faces>` (whole head deleted) makes the skull-box
+skin count GO UP: 360 vs 331.** Deleting the head exposes the NECK STUMP, which
+is a larger skin area than the artifact. So the counter was never measuring the
+artifact — **the number said "worse" while the picture said "fixed".**
+**Judge this bug from IMAGES, not from a skin-pixel count.** Side-by-side zooms
+of the skull box are the only reliable instrument found so far.
+
+## ✅ CONFIRMED BY CONSTRUCTION: the artifact IS the head mesh
+With mesh 14 deleted the yellow face-patch is **completely gone** from the
+render. So the source is a head face — not another mesh, not the background.
+
+## ❌ THE 10-FACE DROP DID NOT FIX IT (silicon, user-verified)
+`LARA_DROPFACE=316,317,322,323,325,326,331,332,333,334` flashed to hardware:
+**user still sees the face rotating around her head.** Those 10 were chosen from
+**T-POSE normals with a fixed ±z front/back assumption**, which does not survive
+the real pose and camera. The selection method is wrong, not just the set.
+
+## ☠️ FLASH BURNED: dropping faces WITHOUT fixing the header counts
+The extractor writes `MRT_LARA_QCOUNT/TCOUNT` from `len(lquads)/len(ltris)` —
+the PRE-drop lengths — while `LARA_DROPFACE` shrinks the blob. The C side then
+reads **10 tris past the end of Lara's blob**: tolerated in jagemu (it just
+reads neighbouring ROM), **BLACK SCREEN on silicon**. Fixed by emitting `_nqk`/
+`_ntk`. **Verify `blob header == mrt_lara.h` before every flash.**
+**And verify a ROM at a frame where LARA IS ON SCREEN (~1300 with AUTOSTART),
+not at frame 400 — that is the TITLE, where she isn't loaded and the bug
+cannot show.**
+
+## ALSO ELIMINATED (measured, don't re-run)
+- **Every mesh is wound the same way.** Signed volume is NEGATIVE for all 15
+  meshes including the head ⇒ the head is NOT inside-out relative to the body,
+  and the cull convention is globally consistent.
+
 ## NEXT — ISOLATION, NOT ANOTHER HYPOTHESIS
 Identify WHICH faces emit the skin texels on the skull: render mesh 14 alone from
 a fixed rear camera and colour-code or disable faces individually. 85 faces, so a
