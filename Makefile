@@ -247,6 +247,12 @@ endif
 # relying on the kernel's screen-space signed area (whose sign is quantised on
 # her sub-pixel head triangles -> her face painted over the back of her skull).
 # Needs mrt_lplanes.h from the extractor.  Also shrinks the blob Tom chews.
+# LFREEZE=1: pin Lara's pose to one animation frame (head-twitch diagnostic).
+ifdef LFREEZE
+CFLAGS   += -DLFREEZE
+CXXFLAGS += -DLFREEZE
+endif
+
 ifdef LPLANES
 CFLAGS   += -DLPLANES
 CXXFLAGS += -DLPLANES

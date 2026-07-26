@@ -1202,6 +1202,15 @@ static void lanim_step(int loop, int step){   /* advance + compute g_lframe   */
     g_lanim_fr += step;
     if(g_lanim_fr >= cnt){ if(loop) g_lanim_fr %= cnt; else g_lanim_fr = cnt-1; }
     g_lframe = st + g_lanim_fr; g_anim_start = st;
+#ifdef LFREEZE
+    /* DIAGNOSTIC (2026-07-26): pin the pose to ONE animation frame.  Splits the
+     * head twitch into its two possible causes -- if her head still churns
+     * frame-to-frame with a COMPLETELY STATIC pose, the instability is
+     * NUMERICAL (accumulated .12 error down a 15-deep matrix chain, head last);
+     * if it goes quiet, it is the idle animation being amplified down that
+     * chain. */
+    g_lframe = st; g_anim_start = st;
+#endif
 }
 
 /* --- collectible PICKUP: a small spinning cube drawn by the same gpu_geotex

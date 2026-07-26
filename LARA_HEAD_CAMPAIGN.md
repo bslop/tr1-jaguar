@@ -469,3 +469,42 @@ metric. If the head still moves with a frozen pose the instability is numerical,
 not animation; if it stops, it is the idle animation being amplified down the
 chain and the fix is precision in the pose math (or rounding the head's final
 vertices consistently).
+
+## ★★★★★★ 2026-07-26 — ROOT CAUSE: **JERRYPOSE**. Her head is posed by the DSP.
+The frozen-pose test split it in one shot. `LFREEZE=1` pins `g_lframe` to one
+animation frame, so the pose, the camera and every input are CONSTANT:
+
+| build (frozen pose) | head | body |
+|---|---|---|
+| ship (JERRYPOSE) | **1.086** | 0.000 |
+| PIPELINE off | 1.269 | 0.000 |
+| PIPESTAGE=1 | 1.086 | 0.000 |
+| **JERRYPOSE OFF (68k poses her)** | **0.000** | **0.000** |
+
+**With identical inputs the 68k path is BIT-STABLE and the Jerry path is not.**
+Her body is 0.000 in every arm — only the head moves, and her head is the LAST
+mesh Jerry writes. It is not culling, not shading, not texture, not aliasing,
+not the pipeline. **It is the DSP pose path.**
+
+### Why every previous fix failed
+They all operated on the wrong layer. The vertices themselves are unstable
+before anything downstream sees them, so cull flags, planes, winding, palette
+and filtering could never touch it — and two of them (`TINYCULL`, `LPLANES`)
+made the twitch measurably WORSE (3.47 -> 4.75/4.80) and must not ship.
+
+### The immediate lever: `probes/PLAY_NOJERRY.cof` (JERRYPOSE off)
+⚠️ **PERF CAVEAT, UNRESOLVED.** jagemu says moving her pose back to the 68k costs
+**-27.8% spans / -26.8% GPU cycles** (68k instret +5.5%) — i.e. the 68k becomes
+the limiter. BUT the ledger is explicit that **jsim cannot price 68k<->Jerry work
+moves and silicon is the only oracle**, and silicon previously measured
+JERRYPOSE as ~neutral-to-slightly-slower (4.72 vs 4.83-4.94, 2026-07-20).
+**Do not trust the -27% without a silicon A/B.**
+
+### The REAL fix (keeps both the frame rate and the head)
+Find the bug in `dsp_pose.das` rather than disabling it. It hits the LAST mesh
+written, which is exactly the signature of a write/read boundary: Tom reading
+the tail of Jerry's vertex buffer before Jerry has finished it, or Jerry's final
+mesh write racing the completion flag. Note `dsp_pose.das` already has a history
+of exactly this class — "REAL dsp_pose races (AUDIO_PUMP restore, indexed-store
+root)" were found and fixed 2026-07-20.
+**Next: instrument Jerry's per-mesh write completion vs Tom's read of mesh 14.**
