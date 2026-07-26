@@ -1254,8 +1254,12 @@ def main():
     # k is a per-face darkening step the SHADEPASS applies; 0 = full bright.
     _LSHADE=int(os.environ.get("LARA_SHADE","0"))
     if _LSHADE: print("LARA_SHADE: packing k=%d into u[0] of every Lara face"%_LSHADE)
-    def _shade_uv(uvl):
-        if not _LSHADE: return uvl
+    def _shade_uv(uvl, f):
+        # ONLY textured faces. Her COLOURED faces use the reserved swatch slots
+        # 242..253, which are NOT ramp-aligned (ramp bases are bi*RAMP_M), so
+        # adding k there walks into 254/255 = the UI black/white -> her limbs
+        # went grey-green/black with white blotches when I shaded everything.
+        if not _LSHADE or f['colored']: return uvl
         u0,v0=uvl[0]
         return [((u0 & 0x1FFF) | (_LSHADE<<13), v0)] + list(uvl[1:])
     _pq=[]; _pt=[]                      # mesh-local planes, in EMIT order
@@ -1265,7 +1269,7 @@ def main():
         _fi[0]+=1
         vv4,uv4=_windfix(list(f['v']), list(lara_quad_uv(f)))
         if (_fi[0]-1) in _TINT: uv4=[(_TU,_TV)]*4
-        _pq.append(_plane_of(vv4)); uv4=_shade_uv(uv4)
+        _pq.append(_plane_of(vv4)); uv4=_shade_uv(uv4,f)
         lb+=struct.pack(">HHHH", *vv4)
         for (u,vv) in uv4: lb+=struct.pack(">HH",u,vv)
     for f in ltris:
@@ -1274,7 +1278,7 @@ def main():
         _fi[0]+=1
         vv3,uv3=_windfix(list(f['v']), list(lara_tri_uv(f)))
         if (_fi[0]-1) in _TINT: uv3=[(_TU,_TV)]*3
-        _pt.append(_plane_of(vv3)); uv3=_shade_uv(uv3)
+        _pt.append(_plane_of(vv3)); uv3=_shade_uv(uv3,f)
         lb+=struct.pack(">HHH", *vv3)
         for (u,vv) in uv3: lb+=struct.pack(">HH",u,vv)
     # LPLANES table -> a generated header (no blob-format change, no new binary
