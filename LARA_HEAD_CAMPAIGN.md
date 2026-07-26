@@ -153,5 +153,29 @@ whose sign is quantised on sub-pixel triangles. Give her REAL per-face planes:
    normal by it and emit a real plane prefix instead of the `0xF800` dummy;
 3. the kernel's STAGEDIET N·C test then culls her correctly at every angle, with
    no dependence on projected area.
-Cost: ~9 muls per face per frame on the 68k (or on Jerry, who has proven
-headroom). That is the principled repair; deleting geometry is not.
+### The cheap formulation — DO NOT rotate 375 normals per frame
+Naively rotating a normal per face costs ~15 muls x 375 faces on a 68000 and
+would dominate the frame. Use the standard trick instead: her meshes are RIGID,
+so the face normal is STATIC in mesh-local space. Transform the CAMERA into each
+mesh's local space once — **15 transforms per frame, not 375** — and the per-face
+test collapses to `N_local . (C_local - P_local) < 0`, i.e. a dot product against
+numbers the extractor can bake offline.
+
+Concretely:
+1. **Extractor**: bake the real mesh-local plane `{N_local, d_local}` into every
+   Lara face record, replacing the `0xF800` dummy. ZERO runtime cost — it is the
+   same 12-byte prefix the room faces already carry, and `STAGEDIET` already
+   knows how to read it.
+2. **Runtime**: `build_lara_part` already builds each mesh's pose matrix `m`.
+   Invert-transform the camera through it (a transpose for the rotation plus a
+   translate, since `m` is orthonormal) to get `C_local` for that mesh.
+3. **Kernel**: `STAGEDIET`'s existing `N.C < d` test then culls her EXACTLY, with
+   no dependence on projected area — so it holds at every angle and is immune to
+   the sub-pixel sign flips entirely.
+   The one piece of new plumbing: `CAMLOC` is a single global read per face, so
+   the blob needs a per-mesh `C_local` the kernel picks up as it crosses each
+   mesh group (Lara's faces are already emitted grouped by mesh via `morder`).
+
+That is the principled repair; deleting geometry is not. It also retires
+`TINYCULL` for Lara, and would fix the same class of bug on any future runtime
+blob (props, pickups) rather than just her head.
