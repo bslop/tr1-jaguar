@@ -429,3 +429,43 @@ normals/intensity TR1 stores in her mesh (the extractor SKIPS them:
 tracks the room light instead of one hardcoded step. `build_lara_part` could
 even OR a room-derived k in as it copies each face record, giving her per-ROOM
 lighting for ~nothing.
+
+## ★★★★★ 2026-07-26 — THE SYMPTOM IS **TEMPORAL**: her head TWITCHES
+User: "her head keeps twitching" + "I can see through part of it". That is a
+MOTION symptom, and every metric in this campaign was a STILL-FRAME metric.
+
+### Measured on silicon (20 s capture, she is standing still)
+| region | mean frame-to-frame change | p90 |
+|---|---|---|
+| **her head** | **1.419** | **4.409** |
+| whole screen | 0.205 | 0.297 |
+**Her head changes ~7x more than the entire rest of the screen**, on EVERY
+rendered frame (6 events/sec at ~6 fps), while the scene around her is static.
+⚠️ Capture was 720x**480** here, not 576 — check `Image.open(...).shape` before
+decoding raw frames or the numbers are garbage.
+
+### jagemu REPRODUCES it — a proper temporal metric at last
+`jagemu video <rom> --count 16 --every 8 --start 1400`, then mean |frame N+1 -
+frame N| over a HEAD box vs a BODY box:
+| build | head | body | ratio |
+|---|---|---|---|
+| baseline | **3.468** | 0.657 | 5.3x |
+| `LPLANES=1` | 4.748 | 0.657 | 7.2x |
+| `TINYCULL=2` | 4.804 | 0.623 | 7.7x |
+
+### ⇒ BOTH CULL FLAGS MAKE THE TWITCH WORSE — TURN THEM OFF
+`TINYCULL` and `LPLANES` each destabilise the head further, and `TINYCULL` culls
+sub-pixel faces, which is the likely source of "I can see through part of it".
+**They were mitigations for a theory that is dead; they must not ship.**
+`probes/PLAY_LARAFIX_noTC.cof` = COLRAMP + SHADE=1, both culls OFF.
+
+### NEXT: why does the HEAD alone move every frame?
+She is mesh 14 — the LAST mesh, deepest in the matrix-stack chain — so it carries
+the MOST accumulated fixed-point (.12) error from `sk_rot`/`sk_translate`. A
+small joint jitter at the end of a 15-deep chain moves the head further than the
+torso, and at LOWRES (half vertical resolution) that lands as whole-pixel snap.
+**Test next:** freeze `g_lframe` (constant pose) and re-measure the temporal
+metric. If the head still moves with a frozen pose the instability is numerical,
+not animation; if it stops, it is the idle animation being amplified down the
+chain and the fix is precision in the pose math (or rounding the head's final
+vertices consistently).
