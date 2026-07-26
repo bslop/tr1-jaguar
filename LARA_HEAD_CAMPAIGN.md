@@ -213,3 +213,12 @@ Check the extractor's Lara face->texture assignment (`build_lara` reads
 intends, and compare a known-good render of TR1 Lara's head from behind. Note
 the room path had EXACTLY this class of bug once — "extractor read room faces
 verts-first, PSX is TEX-first" — fixed for rooms, never re-checked for Lara.
+
+### Also eliminated 2026-07-26: the "unread COLOURED face lists" theory
+OpenLara's PC-format mesh reader (`format.h:5806-5811`) reads FOUR lists —
+rCount, tCount, **crCount, ctCount** — while our `build_lara` reads only the two
+textured lists. That looked like the bug. It is not: auditing the words that
+actually follow Lara's textured lists in LEVEL1.PSX gives **garbage**
+(65528, 65529, 86, ...) for all 15 meshes, so TR1 PSX does not carry separate
+coloured lists and our two-list reader is right. The `tex < 256` colour
+heuristic stands.
