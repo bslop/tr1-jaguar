@@ -222,3 +222,40 @@ actually follow Lara's textured lists in LEVEL1.PSX gives **garbage**
 (65528, 65529, 86, ...) for all 15 meshes, so TR1 PSX does not carry separate
 coloured lists and our two-list reader is right. The `tex < 256` colour
 heuristic stands.
+
+## ★★★ 2026-07-26 — CULPRIT NAMED: QUAD 150 / objtex 490
+### The instrument that finally worked
+The patch is **exactly palette colour (247,219,132)** on the skull. Count THOSE
+pixels in `y40..90, x130..190` of the idle screenshot:
+  baseline **15** | head deleted **0** | all-head hidden **0**
+Every earlier metric had a FLOOR made of her shoulder skin (222,162,99) — that
+is why "wins" of 24% and 73% were invisible to the user. Use the exact colour.
+
+### The tool that finally worked
+`LARA_TINTFACE` (all 4 UVs -> one texel) is an ORDER-PRESERVING **label**: the
+tinted faces render flat OLIVE (idx 136). My earlier "it makes faces invisible"
+note was WRONG — it was read off the walking scene where the head is tiny.
+Hiding all 85 head faces turns the whole head olive, which is the control.
+
+### Bisect (idle scene, order-preserving, all controls clean)
+    hide 42 (half A) -> 7    hide 43 (half B) -> 8
+    hide A1 (21)     -> 7    hide A1a (10)    -> 7
+    hide quads 148-150 -> 7  hide 148 -> 15   hide 149 -> 15
+    **hide 150 alone -> 7**  (removes 8 of the 15 patch px)
+
+### QUAD 150 IS A REAR-OF-SKULL FACE CARRYING A FACE-LIKE TEXTURE
+    quad 150  verts 298,297,295,296   z = -50..-53  (centroid 64 BEHIND centre)
+              tex = objtex **490**    uv (57,929)-(70,950)
+    atlas tile at that uv: dominant colour **(247,219,132)** = THE PATCH COLOUR,
+      with dark-brown banding — reads as face/skin, not hair.
+    quads 148,149 (also rear) use objtex 489 -> dark brown HAIR. Correct.
+Original disc data: objtex 489 = page 6 (144,104)-(176,144); objtex 490 = page 7
+(56,136)-(72,160). So TR1 itself points this rear quad at 490; the open question
+is whether our decode of 490 (tile 7, **clut 81**) is faithful. The
+`tex_preview/page_07.png` crop looks structurally similar but is rendered with a
+different CLUT, so colour cannot be compared from it — decode 490 with clut 81
+and compare against the atlas tile.
+
+### REMAINING
+Quad 150 accounts for 8 of 15 patch px. The other 7 are in half B (43 tris) and
+have NOT been bisected yet. Same method, same script (`idle_round.sh`).
