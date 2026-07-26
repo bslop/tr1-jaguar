@@ -242,6 +242,19 @@ endif
 # face re-emit via pre-grouped per-mesh payload banks + movem.l bursts
 # (cpu68k.S) + one-time plane prefixes + changed-window emit.  C/asm only,
 # zero kernel bytes.  Blob content byte-identical to the legacy emit.
+# LPLANES=1 (2026-07-26, LARA_HEAD_CAMPAIGN.md): cull Lara's BACK FACES on the
+# 68k with real per-face planes baked mesh-local by the extractor, instead of
+# relying on the kernel's screen-space signed area (whose sign is quantised on
+# her sub-pixel head triangles -> her face painted over the back of her skull).
+# Needs mrt_lplanes.h from the extractor.  Also shrinks the blob Tom chews.
+ifdef LPLANES
+CFLAGS   += -DLPLANES
+CXXFLAGS += -DLPLANES
+ifdef LEMITDIET
+$(error LPLANES=1 and LEMITDIET=1 are incompatible: LEMITDIET pre-groups the face payload into banks and would bypass the per-face cull)
+endif
+endif
+
 ifdef LEMITDIET
 CFLAGS   += -DLEMITDIET
 CXXFLAGS += -DLEMITDIET

@@ -695,6 +695,20 @@ static void sk_translate(SkMat *m,int x,int y,int z){
         m->t[i]+=(mul16(m->R[i][0],x) + mul16(m->R[i][1],y) + mul16(m->R[i][2],z))>>12;
 }
 static SkMat g_skstack[20];
+#ifdef LPLANES
+/* LPLANES (2026-07-26): cull Lara's back faces on the 68k using REAL per-face
+ * planes, so the artifact does not depend on the kernel's screen-space signed
+ * area (whose sign is quantised on her sub-pixel head triangles -> her face
+ * painted over the back of her skull).  Her meshes are RIGID, so the plane is
+ * STATIC in mesh-local space and baked by the extractor; at runtime we only
+ * transform the CAMERA into each mesh's space -- 15 per frame, not 375 normal
+ * rotations.  Visible iff (N . C_local - d) < 0  (N points inward: WINDSIGN=-1).
+ * This also SHRINKS the blob Tom has to chew, so it should pay for itself. */
+#include "mrt_lplanes.h"
+static int32_t g_clocal[MRT_LSKIN_MCOUNT][3];   /* camera in each mesh's space */
+static int32_t g_lcamL[3];                       /* camera in LARA-local space  */
+static int g_lp_cull;                            /* faces culled this frame    */
+#endif
 
 /* SPLIT POSE: resumable across mesh ranges so each half hides under a
  * different GPU room draw (pose ~60ms > one room's ~40ms of GPU time).
@@ -727,6 +741,21 @@ static void build_lara_part(uint8_t *buf, int atlasW, int m0, int m1)
         h[5]=(uint16_t)offX; h[6]=0; h[7]=(uint16_t)offZ;
         ps_w = (uint16_t *)(buf + 16);
         ps_sp = 0;
+#ifdef LPLANES
+        /* camera -> LARA-LOCAL space, ONCE per frame.  The vertex path maps
+         * Lara-local (mx,my,mz) to world with the heading matrix
+         * [laC laS; -laS laC] >> 14 plus the base offsets, so the inverse is
+         * that matrix TRANSPOSED.  Clamped to s16 so mul16 (muls.w) is legal
+         * even if the camera ends up unusually far from her. */
+        { int dx = g_camx - (wbaseX + rx0);
+          int dy = g_camy - base_y;
+          int dz = g_camz - (wbaseZ + rz0);
+          if (dx >  30000) dx =  30000; else if (dx < -30000) dx = -30000;
+          if (dz >  30000) dz =  30000; else if (dz < -30000) dz = -30000;
+          g_lcamL[0] = (mul16(dx,laC) - mul16(dz,laS)) >> 14;
+          g_lcamL[1] = dy;
+          g_lcamL[2] = (mul16(dx,laS) + mul16(dz,laC)) >> 14; }
+#endif
     }
     w = ps_w;
     for (i = m0; i < m1; i++) {
@@ -742,6 +771,15 @@ static void build_lara_part(uint8_t *buf, int atlasW, int m0, int m1)
             sk_translate(&m, nd[1], nd[2], nd[3]);
         }
         sk_rot_yxz(&m, a3[0], a3[1], a3[2]);
+#ifdef LPLANES
+        /* camera -> this mesh's local space: undo the mesh matrix (R is
+         * orthonormal, so R^T is its inverse) after undoing Lara's heading. */
+        { int j; int32_t lm[3];
+          lm[0]=g_lcamL[0]-m.t[0]; lm[1]=g_lcamL[1]-m.t[1]; lm[2]=g_lcamL[2]-m.t[2];
+          for (j=0;j<3;j++)
+              g_clocal[i][j]=(mul16(m.R[0][j],lm[0]) + mul16(m.R[1][j],lm[1])
+                            + mul16(m.R[2][j],lm[2])) >> 12; }
+#endif
         for (k = 0; k < vlen; k++) {
             int lx=vp[0], ly=vp[1], lz=vp[2]; vp += 3;
             int mx=m.t[0]+((mul16(m.R[0][0],lx) + mul16(m.R[0][1],ly) + mul16(m.R[0][2],lz))>>12);
@@ -774,16 +812,36 @@ static void build_lara_part(uint8_t *buf, int atlasW, int m0, int m1)
     { const uint16_t *qb=(const uint16_t*)g_ltx_quads;
       const uint16_t *tb=(const uint16_t*)g_ltx_tris;
       int mo, x;
+#ifdef LPLANES
+      int nq_out=0, nt_out=0;
+      g_lp_cull=0;
+#define LP_BACKFACE(tab,dtab,idx,mm) \
+        ((mul16(tab[idx][0],(int)g_clocal[mm][0]) + mul16(tab[idx][1],(int)g_clocal[mm][1]) \
+        + mul16(tab[idx][2],(int)g_clocal[mm][2])) - dtab[idx] >= 0)
+#endif
       for (mo=0;mo<mc;mo++){ int mm=morder[mo];
         for (x=mq_start[mm];x<mq_start[mm+1];x++){
             const uint16_t *s=qb+mq_list[x]*12;
+#ifdef LPLANES
+            if (LP_BACKFACE(mrt_lplane_qn,mrt_lplane_qd,mq_list[x],mm)) { g_lp_cull++; continue; }
+            nq_out++;
+#endif
             EMIT_PLANE(w);
             for(k=0;k<12;k++) w[k]=s[k]; w+=12; } }
       for (mo=0;mo<mc;mo++){ int mm=morder[mo];
         for (x=mt_start[mm];x<mt_start[mm+1];x++){
             const uint16_t *s=tb+mt_list[x]*9;
+#ifdef LPLANES
+            if (LP_BACKFACE(mrt_lplane_tn,mrt_lplane_td,mt_list[x],mm)) { g_lp_cull++; continue; }
+            nt_out++;
+#endif
             EMIT_PLANE(w);
             for(k=0;k<9;k++) w[k]=s[k]; w+=9; } }
+#ifdef LPLANES
+      /* the blob header MUST match what was actually emitted - a stale count
+       * here is exactly what black-screened a flash on 2026-07-25 */
+      h[1]=(uint16_t)nq_out; h[2]=(uint16_t)nt_out;
+#endif
     }
 #undef mdepth
 #undef morder
