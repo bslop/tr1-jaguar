@@ -230,6 +230,14 @@ pskip\~:
 D_PARAMS	.equ	$F1C240
 MBLK		.equ	$F1C060		; matrix: 12 longs (R[9] then t[3])
 OUT_D		.equ	$F1B700		; posed verts out: 300*8 = 2400B
+; ---- 2026-07-26 RELOCATED OUT OF THE ANGLE WINDOW ----------------------
+; ISR_COUNT/LOOP_COUNT/WAKE_D used to live at $F1C328/$F1C32C/$F1C330, which are
+; D_PARAMS+0xE8/+0xEC/+0xF0 -- INSIDE the angle window (+0x40..+0xF4) at angle
+; longs 42/43/44, i.e. **MESH 14's THREE ROTATION ANGLES: LARA'S HEAD**.
+; main_loop increments LOOP_COUNT every pass, so Jerry was overwriting her head's
+; Y angle AFTER the 68k copied the pose in -- her head twitched every frame while
+; the rest of her was bit-stable.  They now live in the free 5-long gap between
+; CAMB_D (ends $F1C0AB) and MSTACK.  CMD_D at +0xF8 was always correctly OUTSIDE.
 MSTACK		.equ	$F1C0C0		; matrix stack: 20 x 48 bytes
 SKV_D		.equ	$F1C3C0		; mesh-local verts s16-PACKED: 1800B
 SINTAB_D	.equ	$F1CB00		; 256*4 sine 16.16
@@ -261,12 +269,12 @@ V1_LANE		.equ	$F1C354
 V1_PTR		.equ	$F1C358
 V1_CVAL		.equ	$F1C35C
 ISR_STACK	.equ	$F1C3B8		; ISR stack TOP (grows DOWN into $F1C360+)
-ISR_COUNT	.equ	$F1C328		; ISR fire counter (probe; far from stack)
-WAKE_D		.equ	$F1C330		; ISR->main "sample due" flag
+ISR_COUNT	.equ	$F1C0AC		; ISR fire counter (probe; far from stack)
+WAKE_D		.equ	$F1C0B4		; ISR->main "sample due" flag
 PUMP_SAVE	.equ	$F1C360		; 6 longs: pump register save area
 V0_NCNT		.equ	$F1C378		; voice 0 QUEUED next-buffer len (0=empty)
 V0_NPTR		.equ	$F1C37C		;   queued next-buffer DRAM address
-LOOP_COUNT	.equ	$F1C32C		; main-loop heartbeat (probe)
+LOOP_COUNT	.equ	$F1C0B0		; main-loop heartbeat (probe)
 D_FLAGS_R	.equ	$F1A100
 JPIT1_R		.equ	$F10000		; Jerry PIT: prescale-1
 JPIT2_R		.equ	$F10002		;   divide-1: f = 26.59MHz/((p+1)*(d+1))

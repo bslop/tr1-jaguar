@@ -2993,8 +2993,8 @@ int main(void)
             { extern volatile uint32_t frame_count;
               static uint32_t nextvb, lws, lvc;
               if (frame_count >= nextvb) {
-                  uint32_t ws = *(volatile uint32_t *)0xF1C328u;
-                  uint32_t vc = *(volatile uint32_t *)0xF1C330u;
+                  uint32_t ws = *(volatile uint32_t *)0xF1C0ACu;
+                  uint32_t vc = *(volatile uint32_t *)0xF1C0B4u;
                   dbg_kv("vb", (long)frame_count);
                   { static uint32_t lfa;
                     uint32_t fa = *(volatile uint32_t *)0xF1C388u;
@@ -3012,7 +3012,7 @@ int main(void)
                GREEN = ~11kHz (latch-poll works on HW), RED = 0 (latch not
                readable), YELLOW = something in between/over. */
             { static uint32_t hbn, lastc;
-              uint32_t c = *(volatile uint32_t *)0xF1C328u;  /* poll counter */
+              uint32_t c = *(volatile uint32_t *)0xF1C0ACu;  /* poll counter */
               uint32_t d = c - lastc; lastc = c;             /* per game frame */
               hbn++;
               if (hbn & 8) CRUMB(0x07C0);                    /* phase: blue */
@@ -3024,7 +3024,7 @@ int main(void)
               { extern void *video_fb_n(int); int b2, x2;
                 extern volatile uint32_t frame_count;
                 static uint32_t lastvc, lastvb;
-                uint32_t vcc = *(volatile uint32_t *)0xF1C330u;   /* WAKE_D reused */
+                uint32_t vcc = *(volatile uint32_t *)0xF1C0B4u;   /* WAKE_D reused */
                 uint32_t vb = frame_count, dvb = vb - lastvb; lastvb = vb;
                 if (!dvb) dvb = 1;
                 /* bar1 = LIVE v0 CNT (the metronome step drains 3752 ->
@@ -3562,7 +3562,7 @@ int main(void)
                               (2.23% of wall) understates his real cost. */
             { static uint32_t jl_prev; static int jl_a, jl_b, jl_n;
               if (++jl_n >= 60) {
-                  uint32_t j = *(volatile uint32_t *)0xF1C32Cu;
+                  uint32_t j = *(volatile uint32_t *)0xF1C0B0u;
                   jl_a = (int)(j - jl_prev) * 4;  jl_prev = j;
                   jl_b = jl_n * 4;  jl_n = 0;
                   if (jl_a > RENDER_W-1) jl_a = RENDER_W-1;
@@ -4115,7 +4115,7 @@ int main(void)
                      Read-only probe of DSP SRAM; costs one long load per
                      60-render block. */
                   { static uint32_t jlc_prev;
-                    uint32_t jlc = *(volatile uint32_t *)0xF1C32Cu;
+                    uint32_t jlc = *(volatile uint32_t *)0xF1C0B0u;
                     dbg_kv("jloops", (int)(jlc - jlc_prev));
                     dbg_kv("jrend",  (int)pfn);
                     jlc_prev = jlc; }

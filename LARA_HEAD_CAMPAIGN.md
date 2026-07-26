@@ -634,3 +634,50 @@ output verts:
 - **If the matrix is IDENTICAL but the VERTS differ**, the fault is in
   `vert_loop`'s store path (r10 cursor / packing), not the maths.
 That splits the remaining space cleanly and is one `peek` run per arm.
+
+# ✅✅✅ 2026-07-26 — **ROOT CAUSE FOUND AND FIXED**
+## Jerry's counters were allocated ON TOP OF Lara's head rotation angles.
+`D_PARAMS = $F1C240`. The 68k copies `mcount*3 = 45` angle longs into the window
+`D_PARAMS+0x40 .. +0xF4` ($F1C280..$F1C334). Mesh 14 — **her head** — uses angle
+longs **42, 43, 44**, which land at **+0xE8/+0xEC/+0xF0**:
+| angle long | address | what else was declared there |
+|---|---|---|
+| 42 (head ax) | $F1C328 | `ISR_COUNT` |
+| 43 (head ay) | $F1C32C | **`LOOP_COUNT`** — bumped EVERY `main_loop` pass |
+| 44 (head az) | $F1C330 | `WAKE_D` |
+`CMD_D` at +0xF8 was correctly OUTSIDE the window; these three never were.
+**Jerry overwrote her head's own Y rotation angle after the 68k had copied the
+pose in** — so her head, and only her head, was re-rotated every frame.
+
+## How it was found (the method that finally worked)
+1. `LFREEZE=1` pins the animation frame ⇒ every input constant.
+2. Temporal metric: mean |frame N+1 − frame N| over a HEAD box vs a BODY box.
+   Body 0.000, head 1.086 ⇒ only the head is unstable.
+3. `peek` the posed head verts ⇒ they change with frozen inputs ⇒ DATA is wrong,
+   not a read race.
+4. `peek MBLK ($F1C060)` = mesh 14's matrix ⇒ **varies**; `peek MSTACK` = the
+   matrix it POPs ⇒ **constant** ⇒ the fault is in mesh 14's own rotate.
+5. Its rotate reads angles 42/43/44 ⇒ address arithmetic ⇒ collision.
+
+## The fix (commit below)
+Relocate `ISR_COUNT`/`LOOP_COUNT`/`WAKE_D` into the free 5-long gap between
+`CAMB_D` (ends $F1C0AB) and `MSTACK` ($F1C0C0): now $F1C0AC/$F1C0B0/$F1C0B4.
+The 68k's 6 probe reads in `main.c` were moved to match.
+
+| build (frozen pose) | head | body |
+|---|---|---|
+| JERRYPOSE, buggy | 1.086 | 0.000 |
+| **JERRYPOSE, FIXED** | **0.000** | **0.000** |
+| 68k pose (reference) | 0.000 | 0.000 |
+
+**And the frame rate comes back** — spans over 1500 fields:
+JERRYPOSE buggy 8,399,792 · **FIXED 8,050,208 (−4.2%)** · JERRYPOSE OFF
+6,066,592 (−27.8%). So the fix keeps Jerry doing the work AND steadies her head.
+`probes/PLAY_JERRYFIX.cof` is staged.
+
+## Why two sessions of fixes did nothing
+Every earlier attempt operated downstream of vertices that were already wrong:
+winding, plane culls, sub-pixel guards, palette ramps, shading, vertical
+filtering, face deletion. Two of them (`TINYCULL`, `LPLANES`) measurably made the
+twitch WORSE. **The lesson: the symptom was TEMPORAL and every metric used for
+two sessions was a STILL-FRAME metric.** "Twitching" was the word that cracked it.
