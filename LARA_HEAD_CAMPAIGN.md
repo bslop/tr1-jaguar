@@ -346,3 +346,47 @@ visually it is the difference between "a face" and "highlights". Body pixels
 580 -> 565, i.e. she is otherwise unchanged. Atlas size unchanged (274 KB).
 **Point-sampling (LARA_TEXSCALE) is the WRONG tool and makes it worse — the
 filter must AVERAGE.**
+
+## ★★★★ 2026-07-26 — THE REGRESSION, PROVEN AT THE PALETTE LEVEL
+### The decisive comparison (do this FIRST next time — it took me all session)
+`probes/RAMP_larafix.cof` (2026-07-20) renders her head CORRECTLY. Extract its
+atlas+palette straight out of the ROM and compare the same tile:
+```
+lara blob @ 576552 (scan for vcount=300, framecount=66, atlasW=256)
+mrt_pal   = lara_off - 512        mrt_atlas = pal_off - 256*atlasH   (atlasH 1032)
+```
+**quad 150's tile is PIXEL-IDENTICAL in both** (183 pale / 111 dark / 14 mid).
+Only the COLOUR changed:
+| | atlas byte | pale texel | dark texel |
+|---|---|---|---|
+| 2026-07-20 | **0** | **(222,170,107)** | (57,16,0) |
+| today | **224** | **(247,219,132)** | (41,8,0) |
+Her hair HIGHLIGHT got much brighter and yellower; the darks got darker. The
+contrast blew up, and that is the "face on the back of her head".
+
+### Cause: she is baked FULL BRIGHT and never shaded
+`used_pairs.add((f['tex'],3))` — lvl 3 = `SHADE_FACT[3]` = 256 = full bright.
+RAMP_PAL bakes every tile full-bright ON PURPOSE and moves darkening to the
+runtime shade pass... but **all 375 of Lara's faces carry k=0**, so she is the
+ONE object that never gets darkened. The 07-20 build effectively had her a
+shade step down: 222/247, 170/219, 107/132 = 0.90/0.78/0.81 ~=
+`SHADE_FACT[2]/SHADE_FACT[3]` = 200/256 = **0.78**.
+
+### Tested, with results
+| knob | result |
+|---|---|
+| `LARA_BASES` 8 -> 12 -> 16 (more palette seats) | **worse** (247->255): the quantiser is faithful, the texel really is that bright |
+| `LARA_LVL=2` (bake her tiles a shade darker) | **partial**: bright px on skull 79 -> 64, but shifts other colours (red in her top/backpack) |
+| `LARA_VBLUR=1` (vertical low-pass) | **partial**: blob breaks into specks; user said colouring looked "a little more correct" but head still wrong |
+| `LARA_SHADE=k` (runtime k) | **rejected on silicon** — half-shaded Lara (textured shaded, coloured not) |
+
+### ⇒ THE PROPER FIX (fully specified, not yet built)
+Do what RAMP_PAL's own design intends — **give Lara a real per-face runtime k**:
+1. **Make her swatch band shadeable.** Her COLOURED faces use reserved slots
+   242..253, which are NOT ramp-aligned, so k walks into 254/255 (UI
+   black/white). Those tones need their own ramps (`base*RAMP_M`) like texels.
+2. **Emit per-face k for her.** TR1 stores per-vertex normals/intensity in the
+   mesh and the extractor SKIPS them (`p += vAbs*8 if vCount>0 else vAbs*2`).
+   Decode them, convert to k the same way room faces do, pack into `u[0]` 13-15.
+Then she shades with the world, the highlights stop blazing, and it is correct
+at every light level instead of one hardcoded compromise.

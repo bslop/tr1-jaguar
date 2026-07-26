@@ -641,10 +641,19 @@ def main():
     # RAMP_PAL: every face uses the single full-bright (lvl 3) tile copy; the
     # darkening that lvl used to bake moves to the runtime shade pass, driven
     # by the per-vertex light already emitted in the VERTS records.
+    # LARA_LVL (2026-07-26): which SHADE_FACT copy of her tiles to bake.
+    # SHADE_FACT=(90,141,200,256).  RAMP_PAL bakes every tile FULL BRIGHT (3) and
+    # moves darkening to the runtime shade pass — but Lara's faces never get a
+    # runtime k (all 375 carry k=0), so she is the one object that never gets
+    # darkened.  The known-good 2026-07-20 build baked her at lvl 2: her hair
+    # highlight was (222,170,107) there vs (247,219,132) today, a ratio of
+    # 0.90/0.78/0.81 ~= SHADE_FACT[2]/SHADE_FACT[3] = 200/256 = 0.78.
+    # That blow-out is the pale blob on the back of her skull.
+    LARA_LVL=int(os.environ.get("LARA_LVL","3"))
     for f in lara['quads']:
-        if not f['colored']: quad_tex.add(f['tex']); used_pairs.add((f['tex'],3))
+        if not f['colored']: quad_tex.add(f['tex']); used_pairs.add((f['tex'],LARA_LVL))
     for f in lara['tris']:
-        if not f['colored']: tri_tex.add(f['tex']); used_pairs.add((f['tex'],3))
+        if not f['colored']: tri_tex.add(f['tex']); used_pairs.add((f['tex'],LARA_LVL))
     def corner_count(tex):
         if tex in room_tex: return 4       # preserve existing room atlas exactly
         return 4 if tex in quad_tex else 3 # Lara-only: real face vertex count
@@ -741,7 +750,13 @@ def main():
                 seeds=[(round(b[0]/b[3]),round(b[1]/b[3]),round(b[2]/b[3]))
                        for b in buck if b[3]]
             return seeds
-        LARA_BASES=8 if hist_lara else 0
+        # LARA_BASES (2026-07-26): her guaranteed ramp seats.  With only 8 of
+        # K=30 bases fitted to her colours, her HAIR-HIGHLIGHT cluster is
+        # represented by a base far BRIGHTER than the real texel — (247,219,132)
+        # today vs (222,170,107) in the known-good 2026-07-20 build — so the
+        # back of her skull blows out into a pale blob.  More seats = a closer
+        # centre = correct brightness.
+        LARA_BASES=int(os.environ.get("LARA_BASES","8")) if hist_lara else 0
         _lb=_lloyd(hist_lara,LARA_BASES)
         _wb=_lloyd(hist,RAMP_K-LARA_BASES)
         # force the darkest WORLD base to true black (void/clear renders
@@ -1137,11 +1152,11 @@ def main():
     def lara_quad_uv(f):
         if f['colored']:
             uc,vc=col_cell[f['tex']]; return [(uc,vc)]*4
-        return inset_uv(face_uv(f['tex'], False, 3)) # no swap (mesh, not room)
+        return inset_uv(face_uv(f['tex'], False, LARA_LVL)) # no swap (mesh, not room)
     def lara_tri_uv(f):
         if f['colored']:
             uc,vc=col_cell[f['tex']]; return [(uc,vc)]*3
-        return inset_uv(face_uv(f['tex'], False, 3)[:3])
+        return inset_uv(face_uv(f['tex'], False, LARA_LVL)[:3])
     lb=bytearray()
     vcount=lara['vcount']; nframes=lara['framecount']
     lquads=lara['quads']; ltris=lara['tris']
