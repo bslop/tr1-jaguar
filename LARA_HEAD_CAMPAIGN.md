@@ -563,3 +563,46 @@ Context worth having ready, NOT a diagnosis:
   `RAMP_fullbright.cof` in `probes/` are all shade-pass experiments from 07-20.
 - The user is on `probes/PLAY_NOJERRY.cof` (COLRAMP + SHADE=1, JERRYPOSE OFF,
   no TINYCULL, no LPLANES).
+
+## ★★★★★★★ 2026-07-26 — PROOF: JERRY COMPUTES WRONG VERTICES (not a read race)
+`lara_blob` is a static: `nm build/openlara.elf | grep lara_blob` -> `0017ab50 b
+lara_blob.8`. Head verts (mesh 14 = verts 254..299) start at
+`lara_blob + 16 + 254*8`. With **LFREEZE=1 (pose frozen)** they MUST be identical
+every frame. `jagemu peek <rom> --at 0x17b350 --len 32 --frames N`:
+```
+frame 1400: [  0,  0, 9,189, 0,35,0,255, ...]
+frame 1408: [255,225, 9,190, 0,35,0,255, ...]   <- DIFFERENT
+frame 1416: [  0,  0, 9,189, ...]               <- back to 1400's value
+frame 1424: [255,197, 9,192, 0,15,0,255, ...]   <- different again
+```
+X swings 0 -> -31 -> 0 -> -59 **with identical inputs**. So the DATA Jerry writes
+is wrong — this is NOT Tom reading a half-written buffer, and no amount of
+synchronisation will fix it. Note the pattern is **PERIODIC** (1400 == 1416),
+which points at a periodic event, i.e. **the DSP ISR**.
+
+### Eliminated (measured, do not re-run)
+| suspect | result |
+|---|---|
+| posted-write drain too weak (`JDRAIN`, read back 8 longs) | **WORSE** 1.086 -> 2.048 — reverted. (It DID change the number, which proves the bug is timing-sensitive.) |
+| pipelined single-buffer race (`PIPELINE` off) | still 1.269 |
+| `PIPESTAGE=1` | still 1.086 |
+| matrix-stack underflow | **balanced** — traced all 15 meshes from `mrt_lskin.bin`: depth never goes below 0 (PUSH at 1/8, POP at 7/14, min 0) |
+
+### ⇒ NEXT SUSPECT: the DSP ISR clobbering pose state
+The periodicity is the tell. `dsp_pose.das:996` claims the ISR "stack frame and
+fully RESTORED (last one in the return delay slot), so pose/roomx keep every
+register" — **audit that claim register by register.** This file has a documented
+history of exactly this bug class: "REAL dsp_pose races (AUDIO_PUMP restore,
+indexed-store root)" were found and fixed 2026-07-20. Check especially any
+register the ISR touches that the vertex loop holds live across the AUDIO_PUMP
+site inside `vert_loop` (r10 write cursor, r13 counter, r18/r22/r25 operands).
+**Method that works: `LFREEZE=1` + `peek` the head verts across frames — a fix is
+correct iff those bytes stop changing.**
+
+---
+# ⬜ SEPARATE BUG (user, 2026-07-26) — GREY OUTLINE AROUND LARA'S MODEL
+"There's a grey outline around Lara's model." Logged, not yet investigated.
+Context to check first, NOT a diagnosis: `inset_uv()` pulls every face corner one
+texel toward the UV centroid (anti-bleed), and the atlas cell borders / the 1-px
+inset are the obvious candidates for a uniform edge fringe. Also worth ruling in
+or out: the `SHADEPASS` rect shade over each face's bbox rows.
