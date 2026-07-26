@@ -607,7 +607,11 @@ def main():
     print("union object-textures:", len(used))
     lara_ts=set(f['tex'] for f in lara['tex_faces'])
     for _i,_o in enumerate(objtex):
-        _t = 1 if _i in lara_ts else TEXSCALE
+        # LARA_TEXSCALE=1 (2026-07-26): drop her full-res exemption.  It was
+        # made when the renderer was 320x240; under LOWRES (320x120) her fine
+        # alternating dark/pale HAIR STRANDS alias into a solid pale blob on the
+        # back of her skull -- the "face on the back of her head" artifact.
+        _t = TEXSCALE if int(os.environ.get("LARA_TEXSCALE","0")) else (1 if _i in lara_ts else TEXSCALE)
         _o['ts']=_t
         if _t>1: _o['uv']=[(x//_t,y//_t) for (x,y) in _o['uv']]
     if TEXSCALE>1: print("TEXSCALE %d (lara exempt: %d textures)"%(TEXSCALE,len(lara_ts)))
@@ -646,6 +650,7 @@ def main():
         return 4 if tex in quad_tex else 3 # Lara-only: real face vertex count
 
     # ---- dedup tiles by (tile,clut,bbox), decode once ----
+    _LVBLUR=int(os.environ.get('LARA_VBLUR','0'))
     tiles_out=[]; grp_of_key={}; grp_of_tex={}
     for (ti,lvl) in sorted(used_pairs):
         o=objtex[ti]
@@ -662,6 +667,26 @@ def main():
                 for x in range(umin,umax+1):
                     r5,g5,b5,al=clut_rgb555(o['clut'],tile_nibble(o['tile'],x*o['ts'],y*o['ts']))
                     px.append(((r5*fac)>>8,(g5*fac)>>8,(b5*fac)>>8,al))
+            # LARA_VBLUR=1 (2026-07-26): LOWRES renders at HALF VERTICAL
+            # resolution, so Lara's fine alternating dark/pale HAIR STRANDS
+            # alias -- the sampler lands on the pale strand and the back of her
+            # skull turns into a solid bright blob ("her face is on the back of
+            # her head").  Point-sampling her at half res (LARA_TEXSCALE) makes
+            # it WORSE; the correct treatment for aliasing is a LOW-PASS filter,
+            # and only the VERTICAL axis is being decimated.  Box-filter each
+            # texel with its vertical neighbours, full width preserved.
+            if _LVBLUR and ti in lara_ts and h > 1:
+                src=px[:]
+                for _y in range(h):
+                    for _x in range(w):
+                        acc=[0,0,0,0]; n=0
+                        for _dy in (-1,0,1):
+                            yy=_y+_dy
+                            if 0<=yy<h:
+                                q=src[yy*w+_x]
+                                for _c in range(4): acc[_c]+=q[_c]
+                                n+=1
+                        px[_y*w+_x]=tuple(acc[_c]//n for _c in range(4))
             g=len(tiles_out); grp_of_key[key]=g
             tiles_out.append(dict(w=w,h=h,umin=umin,vmin=vmin,px=px))
         grp_of_tex[(ti,lvl)]=(g,umin,vmin)

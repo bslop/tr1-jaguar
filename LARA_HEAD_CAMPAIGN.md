@@ -312,3 +312,37 @@ of the story — not the whole cause.
 faces to be shadeable too, i.e. the reserved swatch band (242..253) must become
 ramp-aligned like the texel ramps (`bi*RAMP_M`). That is an asset-pipeline
 change to the palette layout, not a face-record tweak. Flag kept DEFAULT 0.
+
+## ★★★ 2026-07-26 — IT IS A REGRESSION, AND THE CAUSE IS **LOWRES ALIASING**
+User: "this happened before and was fixed." Correct, and the proof is in `probes/`.
+
+### The known-good reference ROM
+**`probes/RAMP_larafix.cof` (2026-07-20)** renders her head as dark brown hair
+with a FEW TINY PALE SPECKS. Today's build renders a big solid pale blob in the
+same place. Same 151/224 faces, same textures. **Confirmed regression.**
+Its Lara blob is at file offset 576552 (find it by scanning for the header
+vcount=300, framecount=66, atlasW=256).
+
+### What differs, tested one at a time
+| difference | result |
+|---|---|
+| 7 head faces wound differently (`LARA_WINDSKIP=`) | **null** (15 -> 16) |
+| STATICS textures (atlas 1096 vs 1032) | **null** — blob remains |
+| `LARA_TEXSCALE=1` (drop her full-res exemption) | **WORSE** (15 -> 21): TEXSCALE POINT-SAMPLES, which aliases harder |
+| **full-res render (no LOWRES)** | **much better** — the pale area becomes fine detail instead of a blob |
+
+⇒ **The renderer went to LOWRES (320x120) on 2026-07-25. Her hair is fine
+alternating dark/pale STRANDS, and she is deliberately EXEMPT from TEXSCALE so
+her tiles stay full-res** ("holster/boot 1px details mangled at half-res" — an
+exemption made when the renderer was 320x240). At half vertical resolution the
+sampler lands on the pale strand and the back of her skull turns into a solid
+bright blob. **It is ALIASING, not culling, not shading, not winding.**
+
+### THE FIX THAT WORKS: `LARA_VBLUR=1`
+Box-filter Lara's tiles along the VERTICAL axis only (3-tap, full width kept) —
+the correct low-pass for a 2x vertical decimation. The blob breaks up into
+scattered specks, close to the 07-20 look. Bright px on the skull 79 -> 71, and
+visually it is the difference between "a face" and "highlights". Body pixels
+580 -> 565, i.e. she is otherwise unchanged. Atlas size unchanged (274 KB).
+**Point-sampling (LARA_TEXSCALE) is the WRONG tool and makes it worse — the
+filter must AVERAGE.**
