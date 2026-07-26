@@ -1216,12 +1216,21 @@ def main():
     # lquads+ltris) to prove which faces paint skin on the back of her skull.
     _DROP=set(int(x) for x in os.environ.get("LARA_DROPFACE","").split(",") if x.strip()!="")
     if _DROP: print("LARA_DROPFACE: dropping %d faces %s"%(len(_DROP),sorted(_DROP)))
+    # DIAGNOSTIC (2026-07-25): TINT specific faces to a flat, distinctive texel
+    # instead of dropping them.  Dropping perturbs the blob's face ORDER, which
+    # changes overdraw globally and makes a bisect unreliable; tinting leaves
+    # count and order identical, so whatever turns the tint colour on screen IS
+    # the face you are looking for.
+    _TINT=set(int(x) for x in os.environ.get("LARA_TINTFACE","").split(",") if x.strip()!="")
+    _TU,_TV=int(os.environ.get("LARA_TINTU","0")),int(os.environ.get("LARA_TINTV","0"))
+    if _TINT: print("LARA_TINTFACE: tinting %d faces at uv(%d,%d)"%(len(_TINT),_TU,_TV))
     _fi=[0]
     for f in lquads:
         if _fi[0] in _DROP:
             _fi[0]+=1; nq_drop=1; continue
         _fi[0]+=1
         vv4,uv4=_windfix(list(f['v']), list(lara_quad_uv(f)))
+        if (_fi[0]-1) in _TINT: uv4=[(_TU,_TV)]*4
         lb+=struct.pack(">HHHH", *vv4)
         for (u,vv) in uv4: lb+=struct.pack(">HH",u,vv)
     for f in ltris:
@@ -1229,6 +1238,7 @@ def main():
             _fi[0]+=1; continue
         _fi[0]+=1
         vv3,uv3=_windfix(list(f['v']), list(lara_tri_uv(f)))
+        if (_fi[0]-1) in _TINT: uv3=[(_TU,_TV)]*3
         lb+=struct.pack(">HHH", *vv3)
         for (u,vv) in uv3: lb+=struct.pack(">HH",u,vv)
     if _WINDFIX: print("LARA WINDING FIX: reoriented %d of %d faces (sign %g) per-mesh %s"%(

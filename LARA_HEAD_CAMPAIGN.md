@@ -105,3 +105,53 @@ cannot show.**
 Identify WHICH faces emit the skin texels on the skull: render mesh 14 alone from
 a fixed rear camera and colour-code or disable faces individually. 85 faces, so a
 bisect is ~7 builds. That names the culprit instead of guessing at it.
+
+## ☠️ 2026-07-25 LATER — WHY THE FACE BISECT DID NOT CONVERGE
+Two independent confounds, both discovered the hard way. **Read this before
+attempting a per-face hunt again.**
+
+### 1. DROPPING a face perturbs the whole draw order
+`LARA_DROPFACE` removes the face from the blob, which shifts every LATER face's
+position. Since the kernel has no depth buffer and relies on emit order, that
+changes overdraw globally. Symptom: dropping face 311 alone and face 312 alone
+BOTH scored 5, with the signal jumping to a different frame each time. A bisect
+built on dropping is measuring order changes as much as the culprit.
+
+### 2. TINTING (all four UVs to one texel) makes the face INVISIBLE, not coloured
+`LARA_TINTFACE` was written to be order-preserving — same face count, same
+positions, only the UVs changed to a distinctive olive texel (idx 136 =
+(115,138,0) at atlas u=0,v=128). Result: **ZERO olive pixels anywhere**, while
+frame 0's bright-skin count still fell 114 → 54. A degenerate UV span produces a
+zero-width blit, so the face disappears instead of rendering flat olive.
+Useful as an order-preserving HIDE; useless as a LABEL.
+**To label a face, give it a small but NON-DEGENERATE uv rect on a flat-colour
+atlas cell — never a single repeated texel.**
+
+### Bisect results so far (treat as SOFT — see the confounds above)
+    drop half A (42 faces)  45 -> 1
+    drop A1 (21)            45 -> 8
+    drop A2 (21)            45 -> 0
+    drop A2a (10, #311-320) 45 -> 0
+    drop #311-315 (5)       45 -> 0
+    drop #311 alone         45 -> 5     <- inconsistent with #312 alone = 5
+Suggestive of the #311-320 region, NOT proven.
+
+### THE METRIC THAT IS ACTUALLY CLEAN
+Bright-skin px in the box `y40..56, x144..170` of the 322-px LOWRES tile:
+full head = 45, **head deleted = 0 exactly**. Anything below y=56 is her NECK and
+contaminates the count. Validate any new metric against the head-deleted control
+before trusting it.
+
+## RECOMMENDED FIX — stop hunting faces, fix the cull
+The per-face hunt keeps fighting instrumentation. The root cause is already
+proven: Lara's faces carry a DUMMY plane, so the exact early N·C cull never
+applies to her, and her only hidden-surface test is a screen-space signed area
+whose sign is quantised on sub-pixel triangles. Give her REAL per-face planes:
+1. extractor bakes a MESH-LOCAL normal per Lara face (static — her mesh does not
+   deform, only the per-mesh matrix changes);
+2. `build_lara_part` already computes each mesh's pose matrix — rotate the baked
+   normal by it and emit a real plane prefix instead of the `0xF800` dummy;
+3. the kernel's STAGEDIET N·C test then culls her correctly at every angle, with
+   no dependence on projected area.
+Cost: ~9 muls per face per frame on the 68k (or on Jerry, who has proven
+headroom). That is the principled repair; deleting geometry is not.
