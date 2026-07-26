@@ -1379,8 +1379,38 @@ bc2:
 	jump	MI,(r22)		; ar < 0 -> backface, skip
 	nop				;  *** FLIP CULL SENSE: change MI<->PL here if room0_tex
 	nop				;      winding turns rooms inside-out ***
+.if TINYCULL>0
+	; SUB-PIXEL SIGN GUARD (2026-07-25).  This cull is a signed area built from
+	; INTEGER pixel coords (sx/sy are stored post-divide, vc_sxp/vc_syp), so for
+	; a triangle only a few pixels across the SIGN is decided by rounding, not by
+	; geometry.  Measured on Lara's actual head mesh (85 faces, 82 of them tiny
+	; tris) over a full turn: 9.4 faces PER FRAME get the wrong sign at LOWRES
+	; (5.7 at full res - LOWRES halves sy resolution, so it is 64% worse).  A
+	; back face that wins the coin-flip is drawn, which is her FACE painted over
+	; the back of her HAIR, wandering as she animates (user, 2026-07-25).  Her
+	; faces cannot be caught earlier: runtime blobs carry a DUMMY plane that the
+	; STAGEDIET N.C cull always passes, so this test is her only hidden-surface
+	; mechanism.
+	; |ar| is TWICE the screen area in px^2, so ar <= 2 means area <= 1 px^2 --
+	; a face that can never contribute more than a single pixel.  Culling those
+	; turns "randomly visible" into "consistently absent" and is safe for room
+	; geometry for the same reason (a <=1px sliver cannot open a visible hole).
+	; NB: jas -d symbols are CONDITIONAL-ONLY — they cannot be used as an
+	; instruction operand and cannot be bridged through .equ (both tested
+	; 2026-07-25), so the threshold literal is selected here, not passed in.
+.if TINYCULL=4
+	cmpq	#4,r25			; ar - 4  (area <= 2 px^2)
+.else
+	cmpq	#2,r25			; ar - 2  (area <= 1 px^2, the default)
+.endif
+	jump	MI,(r22)		; ar < N  -> sub-pixel, sign untrustworthy
+	nop
+	jump	EQ,(r22)		; ar == N -> ditto (also covers the old ar==0)
+	nop
+.else
 	jump	EQ,(r22)		; ar == 0 -> degenerate, skip
 	nop
+.endif
 
 	; 16.16 divide mode for the edge-walk slope divides (chain_step + uv_edge)
 	movei	#G_DIVCTRL,r0
