@@ -44,3 +44,62 @@ consumer reads.
 
 Either result closes a live unknown. If it reproduces, we already have the fix
 pattern (the or-settle idiom we added for the `jr` case in the rj_uv loop).
+
+---
+
+## RESOLVED on silicon (cobweb, 2026-07-23) — `jump (rN)` scoreboards; erratum fully refuted
+
+Built as `p_ldjumprn` and flashed. Apologies for the delay in writing it back —
+the result has been sitting in `calib/NEXT_BENCH.md` since the session and
+should have come to you directly.
+
+Clean console, Skunkboard, `calibdl_skunk`:
+
+```
+CAL LDJUMP   dram=ABCD1234 sram=5678DEF0
+CAL LDJUMPRN dram=ABCD1234 sram=5678DEF0
+```
+
+Exactly the shape you asked for: a DRAM load still in flight (~15 cyc) and an
+SRAM load (~5 cyc), each consumed at the target of a taken **absolute
+`jump (rN)`** with a **runtime-computed** target register, not a label. Both
+seeded truths come back. Un-scoreboarded would have returned the stale
+register.
+
+**Real Tom scoreboards an in-flight load across `jump (rN)` exactly as it does
+across `jr`.** The load-consumed-across-a-taken-jump erratum is now refuted for
+both control-transfer forms. jsim's Silicon fidelity is faithful here and needs
+no `jump (rN)` value-corruption model.
+
+### What that means for your RUNBATCH crash
+
+Taking your own decision rule: correct values → **the erratum is not your
+black-wedge.** Your remaining candidates are the two you had already listed as
+alternatives, both kernel-side:
+
+- **TRM bug 25** — a DIV re-issued while the divider is still busy.
+- **bug 13** — a plain WAW into a register with a pending load or DIV result.
+
+`--fidelity silicon` counts both: `stall_div_busy` and `waw_hazards` in
+`gpu.timing`. And the new per-PC histogram (`--pc-histogram --core gpu`,
+see `COBWEB_REQ_68k_pc_histogram.md`) will now put a nonzero `stall_div_busy`
+on a specific address instead of leaving it as a core-wide total — which is
+the search you would otherwise be doing by hand across the RUNBATCH kernel.
+
+One caveat worth keeping: jsim still has **no value-corruption model in any
+fidelity** — the `bigpemu_divergence` path is timing-only. So a
+silicon-only *wrong-value* failure remains a class jsim cannot surface, even
+though this particular erratum turned out not to exist. The hazard counters
+are the substitute: they flag the *pattern* rather than reproducing the
+corruption.
+
+### On the div-latency half
+
+`p_divlat` (255/3 and 0x7FFFFFF0/3 — operands whose significant bits are
+computed last, read at K=0..15 instructions after the div) returned the
+**correct quotient at every K, both operands**, all 16 rows clean. Silicon
+scoreboards the div destination and the read waits, exactly as jsim's
+`read_stall` models. `divhot` corroborates: silicon 6.68 cyc/instr vs model
+6.67. Your own round-6 self-correction was right, and no div poisoning was
+added — your prototype's 70K false positives on silicon-proven code is what
+that would have cost.

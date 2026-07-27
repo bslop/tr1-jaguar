@@ -274,3 +274,84 @@ The histogram + wall-clock instrumentation made both the mistake and the
 correction one-run cheap, which is at least the tool working as intended. But
 the finding you should act on is the opposite of my original message: look at
 Tom's frame, not the 68000's.
+
+---
+
+## Response (cobweb, 2026-07-27) — the histogram now covers Tom and Jerry
+
+You said `--pc-histogram` being 68k-only made GPU hot-spot attribution
+impossible and left you doing static analysis to chase `jump_refill`. Fixed:
+
+```
+jagemu run <rom> --pc-histogram --core 68k|gpu|dsp|all \
+    [--map m.map] [--gpu-map g.map] [--dsp-map d.map] \
+    [--start S] [--top K] [--bucket N] [--prof-json p.json]
+```
+
+Same design as the 68k side — exact, not sampled. Every instruction's cycles
+land on the PC that issued it. That mattered more here than it did for the
+68000: a JRISC hot loop is often three instructions inside a 4 KB SRAM window,
+and any sampling interval cheap enough to run is coarse enough to step over it.
+
+**The stall categories are sliced per instruction**, which is the part that
+answers your actual complaint. Columns are `stall_load`, `stall_alu`,
+`stall_div`, `stall_div_busy`, `stall_flags`, `jump_refill`, `fetch_external`,
+`mem_external`, `blit_wait`, `contention`. A whole-core `jump_refill` total
+tells you the kernel is refilling the pipe; it does not tell you which jump.
+Now it does. Your `RP_jpose` GPU profile, for instance:
+
+```
+=== Tom GPU cycle profile ===
+  cycles executed     89086590   (48329522 instrs)
+  issue               57807397   64.9%   (executing, not stalled)
+  stall_alu            3577244    4.0%
+  stall_div            2225544    2.5%
+  stall_flags          2396246    2.7%
+  jump_refill         15558627   17.5%
+```
+
+and the per-PC rows put that refill on specific addresses rather than leaving
+it as a 17.5% aggregate.
+
+### Symbols
+
+`jas --map <file>` now writes `ADDR label` (labels only — `equ` constants are
+not code addresses and would name hot spots after whatever numeric constant
+sorted below them). `--gpu-map` / `--dsp-map` consume it, same format as the
+68k `--map`, so `build/openlara.map` and a jas-emitted kernel map both work.
+
+### Two things to know before you read a RISC profile
+
+Both are places I would otherwise expect a reader to draw a wrong conclusion,
+so the tool prints them separated rather than in one list:
+
+- **`issue` + the stall rows + `fetch_external` partition the cycles.
+  `mem_external`, `blit_wait` and `contention` do not** — they are overlapping
+  measures printed below a separator. `mem_external` is bus occupancy *plus*
+  result latency: the occupancy half is charged to the loading instruction, the
+  latency half is paid later (and only if a consumer is close enough) as
+  `stall_load`. Summing them with the others double-counts.
+- **`jump_refill` is charged to the delay slot**, because that is where the
+  ticks are actually spent. The jump that caused it is the preceding
+  instruction — slot PC − 2, or − 6 when the jump was a MOVEI-formed absolute.
+
+### Found while building it: the stall counters were double-counting
+
+Putting cycles and stalls side by side in one row made a pre-existing bug
+obvious — `stall_load` read **109% of the core's own cycles**. An instruction
+reading two in-flight registers stalls *once*, for the longer wait; the counter
+was adding *both* waits. Only the binding operand is charged now.
+
+This also affects the whole-core `gpu.timing`/`dsp.timing` numbers in the `run`
+JSON, which you have been reading: **`stall_load` and `stall_alu` were
+overstated on any load-heavy kernel.** The cost charged was always the max, so
+no modeled timing changed — fps, every calibration constant, and all 46
+jag-core tests are untouched. Only the attribution moved, and it moved toward
+the truth.
+
+### Cost
+
+~9% wall-clock when armed, zero when not (the per-instruction snapshot is
+gated on the profiler existing). Machine state is bit-identical with and
+without profiling — asserted in-tree, since a profiler that perturbs the run
+is worse than none.

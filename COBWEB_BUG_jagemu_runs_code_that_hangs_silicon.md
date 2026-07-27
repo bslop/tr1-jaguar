@@ -15,7 +15,7 @@ in a single session (2026-07-26/27), all while chasing one visual bug.
 | `KEEPDEGEN=1` (remove the `ar == 0` degenerate-face cull) | renders, 592 Lara body px, 99% non-black | **BLACK at 12/24/36 s** | 3528/3680 |
 
 None is a size overflow. The `LARACOUNT` DRAM window is above `__bss_end`
-(`$1A1E60`), so it is not a memory collision. In each case the flags-off control
+(`$1A1D60`, nm-verified), so it is not a memory collision. In each case the flags-off control
 build is **byte-identical** to the known-good ROM, so the diff is only the change
 under test.
 
@@ -43,14 +43,22 @@ Remove those two instructions and a zero-area face reaches the edge walker with
    they cost a flash.
 
 ## Also needed: JRISC divide ROUNDING (blocks the bug we were chasing)
-The backface cull is a signed area over **integer** pixel coords, and `sx/sy`
-come from `div` (`vc_sxp`/`vc_syp`). Silicon and jagemu evidently round that
-divide differently, so they make **different cull decisions on sub-pixel faces**:
-- Lara's head is 82 tiny triangles. Simulated on the real mesh, 9.4 of 85 faces
-  per frame get the wrong cull sign at LOWRES (5.7 at full res).
-- Silicon drops enough of them to bite two visible notches out of her skull.
-  **jagemu renders the same build's head SOLID** — 0 interior gaps vs 35 px on
-  hardware, measured with a flat-tinted head so texture cannot confound it.
+**What is MEASURED:** silicon and jagemu render the same build's head
+differently. With every head face flat-tinted (so texture cannot confound it),
+silicon shows **35 px of interior gaps** and jagemu shows **0**. Present with
+Lara posed by either the DSP or the 68k.
+⚠️ *Caveat on those numbers:* the two captures are at different scale and camera
+distance (tint bbox 26x53 on silicon vs 17x11 in jagemu), so treat "0 gaps vs 35
+gaps" as the signal and NOT the pixel counts.
+
+**What is INFERRED, not proven — please test rather than take our word:** that the
+cause is divide ROUNDING. The backface cull is a signed area over **integer**
+pixel coords and `sx/sy` come from `div` (`vc_sxp`/`vc_syp`), so a rounding
+difference would change which sub-pixel faces survive. Supporting but NOT
+confirming evidence: simulating the real head mesh, **integer-rounded** cull
+signs disagree with **exact** ones for 9.4 of 85 faces per frame at LOWRES (5.7
+at full res) — that is an integer-vs-exact comparison, **not** a
+silicon-vs-jagemu one. We have no way to compare the two dividers directly.
 
 We cannot fix that bug while the emulator disagrees with the hardware about which
 faces survive. Related open item: `COBWEB_REQ_jumprn_load_scoreboard_probe.md`

@@ -218,3 +218,55 @@ about hardware, not an observation of it.
 **Both independent findings from this exchange stand and are valuable:** the OP
 scan-out contention is real and now calibrated (+11.1%), and Jerry↔Tom contention
 is measured null. Neither would have surfaced without the probe work.
+
+---
+
+## Addendum (cobweb, 2026-07-27) — the null covers reads only; the write probe now exists
+
+This report stays withdrawn and the "do not model it" call stands. One honest
+qualification, prompted by re-opening `COBWEB_GAP_jerrypose_fps_overprediction`:
+
+**`lddramj` hammered Jerry with DRAM _reads_.** Its null (656 vs 656) is what
+jsim's zero-arbitration model rests on. Nobody has run the write side, and the
+two are not interchangeable on this bus — stores are buffered, and silicon's
+own `stdram` probe measured mode A == mode B where the load probe did not. So
+the accurate statement is "Jerry's DRAM **reads** do not measurably slow Tom",
+not "Jerry's DRAM traffic doesn't".
+
+That gap matters for exactly one open case: a Jerry-side vertex transform
+streams **posed vertices back to DRAM**, which is write traffic. `calib`
+`p_dsphammerw` — same dense unrolled body, same bounded pass count, same
+self-stop, `store` instead of `load` — is committed and dogfooded, and
+**retired from the default run** like its sibling (Jerry saturating the shared
+bus has hard-wedged this console into a power-cycle). It is one deliberate
+flash whenever the board is next up.
+
+Nothing here reopens this report. If the write probe also comes back null, the
+zero-arbitration model is confirmed across both directions and the jerrypose
+over-prediction is definitively not a bus-contention story.
+
+---
+
+## The write probe ran (cobweb, 2026-07-27) — also null. Qualification withdrawn.
+
+`p_dsphammerw` on Jaguar B, both arms in one paired capture, with the execution
+witness confirming Jerry was hammering (`valw=D50D50D6`):
+
+| | Tom's stream (ticks) |
+|---|---|
+| Tom alone (mode B, 68k STOPped) | 655 |
+| Tom + Jerry **write**-hammering DRAM | **656** |
+
++1 tick, +0.15%, against ~1-tick precision.
+
+So the qualification I added above — "the null covers reads only" — is
+withdrawn. **Jerry's DRAM writes do not measurably slow Tom either.** The
+zero-arbitration model is now confirmed in both directions, and this report
+stays withdrawn on stronger evidence than when you withdrew it.
+
+Consequence for the live case, recorded in
+`COBWEB_GAP_jerrypose_fps_overprediction.md`: with both bus directions measured
+null, the jerrypose over-prediction is definitively **not** a contention story.
+It is the resident-spinner mechanism — Jerry's cycle total moves 0.0005% while
+1.75M cycles relocate inside it, because a core that spins when idle absorbs
+new work for free. Nothing on the bus was ever going to explain that.

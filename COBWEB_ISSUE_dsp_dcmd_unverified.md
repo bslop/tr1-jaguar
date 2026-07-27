@@ -86,3 +86,34 @@ closing on inspection, so it stays correct.
 Reporting a null result explicitly because "we looked and it was fine" is
 information — it means if you're still seeing a symptom here, it's somewhere
 else, and you shouldn't spend another experiment on the mailbox.
+
+---
+
+## Re-audit (cobweb, 2026-07-27) — still closed; here is exactly what the tests cover
+
+Re-checked because this was still on your open list. **No change: the mailbox
+is correct, and all three scenarios you asked for are covered by named
+regression tests**, not by inspection. Naming them so you can stop carrying
+this item:
+
+| your request | test |
+|---|---|
+| 68k writes 1 to a Jerry-SRAM address, resident DSP poll observes it, dispatches, clears to 0, 68k reads back 0 | `dsp_cmd_mailbox_jerry_sram` — uses the real `dsp_pose` address `$F1C338`, and first asserts the DSP does *not* dispatch with no command pending |
+| the same handshake through a **DRAM** mailbox (visibility may differ by region) | `dsp_cmd_mailbox_dram` |
+| 68k writes while the DSP is mid-poll; DSP writes back while the 68k sleeps in `stop` | `dsp_mailbox_serviced_while_68k_stopped` — CPU parked in STOP, asserts it *stays* asleep while the DSP services and clears |
+
+All three green in `make test`.
+
+One thing that has changed since the original close, and it is the useful part
+for you: when you reactivate the co-transform, `--pc-histogram --core dsp` will
+show `cmd_pose` / `cmd_roomx` cycles arriving at their own PCs. That is a
+stronger check than the mailbox tests — it confirms the dispatch actually
+happened *in your build*, which is precisely what nobody could see when this
+report was filed ("over 300 frames, DSP breakpoints never fire; Jerry only ever
+runs `main_loop`").
+
+Related, and worth reading before you act on any DSP timing: a resident DSP
+absorbs new work into its poll loop, so its cycle *total* barely moves when you
+give it real work. See the 2026-07-27 response in
+`COBWEB_GAP_jerrypose_fps_overprediction.md`. The mailbox is fine; what the DSP
+costs you once it dispatches is the open question.
