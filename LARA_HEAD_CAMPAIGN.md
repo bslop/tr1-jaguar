@@ -711,3 +711,13 @@ screen-space winding test itself.
 ### Useful measurement for judging it
 Hair pixels per column across the head box, split left/right half — the number
 above. It is objective, works from a single still, and does not depend on pose.
+
+### ☠️ BEXIT=0 BLACK-SCREENS ON SILICON (but renders in jagemu) — arm unusable
+Flashed `probes/HOLE_noBEXIT.cof`: **black at 12 s, 24 s and 36 s** on hardware.
+Same ROM in jagemu renders normally (57% non-black at frame 900), and the kernel
+is 3560/3680 so it is not a size overflow. **`BEXIT` is LOAD-BEARING on silicon**
+— without it the stage keeps behind/far-sentinel vertices and something in that
+path kills the real Blitter/GPU. Yet another silicon-only divergence in this
+kernel, and it means the BEXIT arm of the hole bisect cannot be run this way.
+**Do not ship or test BEXIT=0 on hardware again.**
+Next arm: `probes/HOLE_noXCULL.cof`.
