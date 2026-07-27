@@ -770,3 +770,23 @@ kernel edit is a coin-flip that costs a 195 s flash plus a physical bounce.
    reproduces any of them.
 
 **Board restored to `probes/PLAY_JERRYFIX.cof` (good build: twitch fixed, fps back).**
+
+### ⬜ THE REMAINING BUG, BEST CHARACTERISED (user + capture, 2026-07-26)
+**"Two chunks out of Lara's head missing against the snow."** Confirmed in a
+silicon capture: against a BRIGHT background two rectangular notches are bitten
+out of the TOP of her skull, one upper-left and one upper-right, with background
+showing straight through. **A snowy spot is the right place to judge this** — the
+cave wall hides it; that is why it read as one vague "chunk" earlier.
+⚠️ Automated hole-detection on that frame is CONFOUNDED: a separate dark object
+sits to her right at x≈65-71, so silhouette-span methods measure the gap to THAT,
+not a hole. Judge from the zoomed image.
+
+### STATE AT THE END OF THIS SESSION
+| item | status |
+|---|---|
+| head TWITCH | ✅ **FIXED at the root** — Jerry's `LOOP_COUNT` was allocated on her head's Y rotation angle (commit cee6b08) |
+| frame rate | ✅ back: −4.2% vs −27.8% with JERRYPOSE off |
+| head SEE-THROUGH (2 notches) | ⬜ open, silicon-only, jagemu renders symmetric |
+| floating shaded polys | ⬜ logged, not investigated |
+| grey outline around her model | ⬜ logged, not investigated |
+| board | `probes/PLAY_JERRYFIX.cof` (good build) |
