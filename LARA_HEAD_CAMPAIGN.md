@@ -721,3 +721,25 @@ path kills the real Blitter/GPU. Yet another silicon-only divergence in this
 kernel, and it means the BEXIT arm of the hole bisect cannot be run this way.
 **Do not ship or test BEXIT=0 on hardware again.**
 Next arm: `probes/HOLE_noXCULL.cof`.
+
+### ☠️☠️ BOTH GUARD-DISABLE ARMS BLACK-SCREEN ON SILICON — the method is dead
+| arm | silicon | jagemu | kernel |
+|---|---|---|---|
+| `HOLE_noBEXIT` (XCULL only) | **BLACK** at 12/24/36 s | renders, 57% | 3560/3680 |
+| `HOLE_noXCULL` (BEXIT only) | **BLACK** at 12/24/36 s | renders, 57% | fits |
+| both guards on (`PLAY_JERRYFIX`) | works | works | fits |
+
+**The kernel requires BOTH face guards on real hardware** — each covers a
+different degenerate case (BEXIT: behind/far-sentinel vertices reaching the
+stage; XCULL: off-window faces reaching the y-walk) and both cases occur.
+**Disabling a guard is NOT a usable bisect technique on silicon. Stop trying.**
+⚠️ My arms were also built with the COLRAMP+SHADE bins while `PLAY_JERRYFIX` used
+SHIP bins, so they differed by more than the one intended flag — rebuild arms
+from the SAME bins next time.
+
+### ⇒ BUILD AN INSTRUMENT, DON'T DISABLE THINGS
+Add a per-guard REJECT COUNTER for Lara's faces and paint it on screen (the
+`CULLCOUNT` flag already counts rastered faces at `$001C0004`, and the
+"paint after `gpu_sync`, before the flip" site is the proven-safe place for
+on-screen bars). One flash then tells you WHICH guard eats her head faces and
+HOW MANY — instead of one flash per hypothesis, each of which can black-screen.
