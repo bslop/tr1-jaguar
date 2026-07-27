@@ -818,3 +818,33 @@ notch, or drop candidate faces via `LARA_DROPFACE` (remember: dropping perturbs
 draw order, tinting does not). Alternatively do the culling arithmetic on the
 68k in `lara_finish` (C code, far safer than the kernel) and skip faces there.
 **Do NOT add GPU-side counters — that black-screened.**
+
+### ☠️ KEEPDEGEN=1 ALSO BLACK-SCREENS — every guard is LOAD-BEARING
+Removing the `ar == 0` (degenerate) cull black-screens silicon at 12/24/36 s
+while rendering fine in jagemu (592 body px, 99% non-black). Kernel 3528/3680,
+and the flags-off control is BYTE-IDENTICAL to `PLAY_JERRYFIX`, so the two
+removed instructions are the whole difference.
+
+**Why: it is a GUARD, not a filter.** A zero-area face reaches the edge walker
+with `dy = 0`, so `chain_step`/`gw_div` divides by zero and the GPU hangs. The
+comment says "degenerate, skip" — I read it as an optimisation. It is protection.
+
+**FOUR silicon black-screens now, all from touching the kernel:**
+`BEXIT=0` · `XCULL=0` · `LARACOUNT` (added DRAM counters) · `KEEPDEGEN=1`.
+**⇒ EVERY GUARD IN THIS KERNEL IS LOAD-BEARING. Do not remove one to test a
+hypothesis — the answer is always a black screen and a lost 195 s flash.**
+
+### What is actually left for the notches
+The faces ARE being dropped by a guard, and no guard can be removed. So the fix
+must stop the faces from TRIPPING a guard:
+1. **Sub-pixel projection precision** — the real root: the cull is a signed area
+   over INTEGER pixel coords and silicon's divide rounds differently from
+   jagemu's. Keeping ~4 fractional bits for the CULL TEST ONLY would fix the sign
+   AND the zero-area case. This is an ADDITIVE kernel change (not a guard
+   removal), so it is a different risk class — but jagemu still cannot validate it.
+2. **Accept it at LOWRES.** Measured earlier: at full 320x240 the artifact is far
+   milder (the pale-blob measurement was "much better"), because the faces are no
+   longer sub-pixel. The notches are part of the price of the +25% LOWRES win.
+3. Get cobweb to calibrate the JRISC divide so jagemu can reproduce silicon —
+   this ledger already has an open request about div latency. **Without that
+   there is no oracle, and every kernel fix is a coin flip on the user's board.**

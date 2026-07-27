@@ -1438,8 +1438,19 @@ bc2:
 	jump	EQ,(r22)		; ar == N -> ditto (also covers the old ar==0)
 	nop
 .else
+.if KEEPDEGEN=1
+	; KEEPDEGEN (2026-07-26): DO NOT drop ar == 0 faces.
+	; The cull is a signed area over INTEGER pixel coords, so a face only a few
+	; pixels across can round to EXACTLY ZERO and be discarded even though it
+	; covers real pixels.  Lara's head is 82 tiny tris, silicon's projection
+	; divide rounds differently from jagemu's, and the result is the two notches
+	; bitten out of her skull ON HARDWARE ONLY (jagemu renders her head solid:
+	; 0 interior gaps vs 35 px on silicon).  A genuinely zero-area face rasters
+	; nothing, so keeping it costs a wasted y-walk, not a visual artifact.
+.else
 	jump	EQ,(r22)		; ar == 0 -> degenerate, skip
 	nop
+.endif
 .endif
 
 	; 16.16 divide mode for the edge-walk slope divides (chain_step + uv_edge)
