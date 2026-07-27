@@ -681,3 +681,33 @@ winding, plane culls, sub-pixel guards, palette ramps, shading, vertical
 filtering, face deletion. Two of them (`TINYCULL`, `LPLANES`) measurably made the
 twitch WORSE. **The lesson: the symptom was TEMPORAL and every metric used for
 two sessions was a STILL-FRAME metric.** "Twitching" was the word that cracked it.
+
+# ⬜ REMAINING: the SEE-THROUGH is a SEPARATE, SILICON-ONLY defect
+The twitch is fixed (user: "starting to look better") and the frame rate is back.
+What is left is a hole in the **SCREEN-RIGHT side of her head**.
+
+### Evidence that it is its own bug, not a leftover of the twitch
+| observation | value |
+|---|---|
+| silicon hair coverage, screen-LEFT vs screen-RIGHT, 5 moments over 25 s | **−29%, −29%, −21%, −16%, −26%** — always the same side |
+| **jagemu, same build** | **+4% (symmetric) — the emulator does NOT reproduce it** |
+| present with JERRYPOSE **on** and **off** (user saw the chunk on PLAY_NOJERRY) | ⇒ NOT the pose path |
+| `jas` hazard check, both kernels | **clean** (only benign wasted-delay-slot warnings) |
+
+⇒ **Silicon-only geometry loss** — the category this project has hit three times
+already (div early-read, r22 clobber, load-consumed-across-taken-jump). jagemu
+cannot see it, so **the bisect must run on hardware.**
+
+### Staged bisect — the two guards that can drop geometry on ONE side
+- `probes/HOLE_noBEXIT.cof` — **BEXIT off**. BEXIT aborts face staging at the
+  first behind/far-sentinel vertex; a head vertex misjudged "behind" would drop
+  the rest of that face.
+- `probes/HOLE_noXCULL.cof` — **XCULL off**. XCULL rejects faces wholly left/right
+  of the clip window — a one-sided reject by construction.
+Flash each, look at the same spot; whichever closes the hole names the guard.
+If NEITHER does, the next suspects are `STAGEDIET`'s early N·C plane cull and the
+screen-space winding test itself.
+
+### Useful measurement for judging it
+Hair pixels per column across the head box, split left/right half — the number
+above. It is objective, works from a single still, and does not depend on pose.
