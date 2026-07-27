@@ -790,3 +790,31 @@ not a hole. Judge from the zoomed image.
 | floating shaded polys | ⬜ logged, not investigated |
 | grey outline around her model | ⬜ logged, not investigated |
 | board | `probes/PLAY_JERRYFIX.cof` (good build) |
+
+### ✅ DECISIVE: the notches are MISSING GEOMETRY, not texture (`PLAY_OLIVEHEAD.cof`)
+Data-only diagnostic — **all 85 head faces tinted flat olive (idx 136), kernel
+byte-identical to the shipping build**, so none of the black-screen risk that
+killed the three kernel experiments. It boots and runs.
+
+**Against snow the olive head STILL has the notches** — background cuts into the
+flat green mass on the screen-right. If this were a texture artifact the olive
+head would be solid. ⇒ **faces are being DROPPED. The whole texture/palette line
+is ruled out for this bug.**
+
+| olive head | tinted px | fill | **interior gaps** |
+|---|---|---|---|
+| **silicon** | 836 | 61% | **35 px** |
+| jagemu (AUTOSTART build) | 135 | 72% | **0 px** |
+(bboxes differ — different capture scale/distance — so read the GAPS, not the px.)
+
+**Detection recipe:** match the exact tint RGB (115,138,0) with a tolerance; a
+loose "greenish" test picks up the cave and is useless. Gaps = per-row
+(run-length − covered px) inside the tint bbox.
+
+### NEXT — identify WHICH faces, without touching the kernel
+`LARA_TINTFACE` is order-preserving and data-only, so it is safe to iterate:
+tint HALVES of the head set different-ish and bisect by which half shows the
+notch, or drop candidate faces via `LARA_DROPFACE` (remember: dropping perturbs
+draw order, tinting does not). Alternatively do the culling arithmetic on the
+68k in `lara_finish` (C code, far safer than the kernel) and skip faces there.
+**Do NOT add GPU-side counters — that black-screened.**
