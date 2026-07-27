@@ -251,6 +251,10 @@ LISTMODE	.equ	$F03F68
 VCDEF		.equ	$F03F6C		; params[2] default vertex-cache base
 VCPTR		.equ	$F03F70		; this room's cache (0 = self-transform);
 					; JERRY-filled caches carry a flag at -4
+; LARACOUNT scratch: this face's plane d, stashed so the counters below can tell
+; a RUNTIME BLOB (Lara/props, dummy d = $F8000000) from a room face.
+; DRAM debug window beside CULLCOUNT's $1C0000/$1C0004 — diagnostic builds only.
+LARAF		.equ	$001C0010
 CLIPX0		.equ	$F03F50
 CLIPX1		.equ	$F03F54
 CLIPY0		.equ	$F03F58
@@ -1070,6 +1074,12 @@ fl_go:
 	addq	#4,r20
 	load	(r20),r3		; d
 	addq	#4,r20			; r20 -> vertex indices (BOTH paths)
+.if LARACOUNT=1
+	movei	#LARAF,r4		; (movei + 2 nops = r3's load has landed)
+	nop
+	nop
+	store	r3,(r4)
+.endif
 	load	(r14+3),r0		; ok flag
 	load	(r14),r5		; cx
 	cmpq	#0,r0
@@ -1206,6 +1216,26 @@ face_adv:
 ;   completion / any skip -> pkt_done -> face_loop.
 ;=====================================================================
 render_pkt:
+	.if LARACOUNT=1
+	; HER staged -> $1C0008, RUNTIME BLOBS ONLY (dummy plane d = $F8000000).
+	; (staged - rastered) for her = faces killed by the screen-space guards.
+	movei	#LARAF,r0
+	load	(r0),r1
+	nop
+	nop
+	movei	#$F8000000,r0
+	cmp	r0,r1
+	movei	#lc_s_no,r22
+	jump	NE,(r22)
+	nop
+	movei	#$001C0008,r0
+	load	(r0),r1
+	nop
+	nop
+	addq	#1,r1
+	store	r1,(r0)
+lc_s_no:
+	.endif
 	.if CULLCOUNT=1
 	; n_staged++ : a face reaching here passed the N.C world backface cull
 	; and is being fully transformed+screen-tested (the "staged" cost).
@@ -1500,6 +1530,26 @@ y1_ok:
 	movei	#pkt_done,r22
 	jump	MI,(r22)
 	nop
+	.if LARACOUNT=1
+	; HER rastered -> $1C000C, RUNTIME BLOBS ONLY (dummy plane d = $F8000000).
+	; (staged - rastered) for her = faces killed by the screen-space guards.
+	movei	#LARAF,r0
+	load	(r0),r1
+	nop
+	nop
+	movei	#$F8000000,r0
+	cmp	r0,r1
+	movei	#lc_r_no,r22
+	jump	NE,(r22)
+	nop
+	movei	#$001C000C,r0
+	load	(r0),r1
+	nop
+	nop
+	addq	#1,r1
+	store	r1,(r0)
+lc_r_no:
+	.endif
 	.if CULLCOUNT=1
 	; n_rastered++ : passed N.C + BEXIT + screen-area + XCULL + non-empty
 	; y-range -> this face WILL raster >=1 span. cullable = 1 - rast/staged.

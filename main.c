@@ -3575,6 +3575,32 @@ int main(void)
                 for (xx = 0; xx < jl_a; xx++) jfb[4*RENDER_W+xx] = 255;
                 for (xx = 0; xx < jl_b; xx++) jfb[8*RENDER_W+xx] = 255; } }
 #endif
+#ifdef LARACOUNT
+            /* LARA CULL READOUT (2026-07-26).  Same placement rule as the JLOOPS
+               bars: right after gpu_sync (Tom IDLE) and BEFORE the flip, plain
+               68k stores into the finished frame — no Blitter, no grab.
+                 row 12 = HER faces STAGED    /2 px
+                 row 16 = HER faces RASTERED  /2 px
+                 row 20 = HER faces CULLED    /2 px   (staged - rastered)
+               She has 375 faces => a full bar is ~187 px at /2, so nothing
+               clamps (x2 saturated the 320 px screen and read as 100%).
+               Compare the CULLED bar against jagemu's 63.6%: a LONGER bar on
+               silicon is the see-through hole, measured. */
+            { volatile uint32_t *lc = (volatile uint32_t *)0x001C0008u;
+              uint32_t st = lc[0], ra = lc[1];
+              uint8_t *cfb = (uint8_t *)video_backbuffer(); int xx;
+              int bs = (int)(st>>1), br = (int)(ra>>1);
+              int bc = (int)((st > ra ? st-ra : 0) >> 1);   /* guard underflow */
+              if (bs > RENDER_W-1) bs = RENDER_W-1;
+              if (br > RENDER_W-1) br = RENDER_W-1;
+              if (bc > RENDER_W-1) bc = RENDER_W-1;
+              for (xx = 0; xx < RENDER_W; xx++) {
+                  cfb[12*RENDER_W+xx]=0; cfb[16*RENDER_W+xx]=0; cfb[20*RENDER_W+xx]=0; }
+              for (xx = 0; xx < bs; xx++) cfb[12*RENDER_W+xx] = 255;
+              for (xx = 0; xx < br; xx++) cfb[16*RENDER_W+xx] = 255;
+              for (xx = 0; xx < bc; xx++) cfb[20*RENDER_W+xx] = 255;
+              lc[0] = 0; lc[1] = 0; }     /* per-FRAME counts, not cumulative */
+#endif
             if (g_pipeframe)   { video_flip(); g_pipeframe = 0; }
 #endif
 #ifdef FARDIAL

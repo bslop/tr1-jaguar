@@ -743,3 +743,30 @@ Add a per-guard REJECT COUNTER for Lara's faces and paint it on screen (the
 "paint after `gpu_sync`, before the flip" site is the proven-safe place for
 on-screen bars). One flash then tells you WHICH guard eats her head faces and
 HOW MANY — instead of one flash per hypothesis, each of which can black-screen.
+
+### ☠️☠️☠️ THE INSTRUMENT ALSO BLACK-SCREENED — jagemu CANNOT validate this kernel
+`LARACOUNT=1` (per-face counters + 3 on-screen bars) works perfectly in jagemu —
+reads **374 staged / 140 rastered / 234 culled = 63%**, and 374 of her 375 faces
+are accounted for, so the instrumentation is functionally correct. **On silicon it
+black-screens.** Kernel 3636/3680 (fits), and the DRAM debug window $1C0008..
+$1C0010 is above `__bss_end` = $1A1E60, so it is NOT a memory collision.
+
+**That is THREE silicon black-screens today from kernel changes that jagemu
+renders happily** (BEXIT off, XCULL off, LARACOUNT). Plus the checker caught a
+real TRM bug-13 register race in my first LARACOUNT draft.
+⇒ **jagemu is NOT a valid oracle for gpu_geotex changes on this hardware.** Any
+kernel edit is a coin-flip that costs a 195 s flash plus a physical bounce.
+
+### What to do instead (next session)
+1. **Do not add GPU-side DRAM read-modify-write counters.** All three failures
+   involve the kernel doing something new; the two that only *removed* code also
+   died, so the kernel is at a fragility cliff.
+2. Prefer instruments that need **no kernel change at all**: the 68k already
+   knows Lara's face count, `lara_finish` runs on the 68k, and the safe
+   paint-after-`gpu_sync` site is proven. Count what the 68k can see (faces
+   EMITTED per mesh) and paint that — zero kernel risk.
+3. If the kernel must change, get cobweb to model the divergence first; this
+   ledger now has four silicon-only kernel behaviours and no emulator that
+   reproduces any of them.
+
+**Board restored to `probes/PLAY_JERRYFIX.cof` (good build: twitch fixed, fps back).**
