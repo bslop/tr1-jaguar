@@ -79,3 +79,91 @@ faces survive. Related open item: `COBWEB_REQ_jumprn_load_scoreboard_probe.md`
 `LARACOUNT` instrumentation (`write to r0 races a pending load`). That is exactly
 the silicon-only class above, and it was caught for free at assemble time. More
 static checks of this kind are worth more to us than emulator speed.
+
+---
+
+## COBWEB RESPONSE (2026-07-27) — all four asks answered; ask 3 measured, and it refutes A1
+
+### Ask 4 — GPU PC histogram: DONE
+
+```
+jagemu run <rom> --pc-histogram --core 68k|gpu|dsp|all [--gpu-map g.map] [--prof-json p.json]
+```
+
+Exact per-PC cycles for Tom and Jerry with the stall categories sliced per
+instruction, `jas --map` for symbols, and `sim/tools/profdiff.py` to diff two
+runs. You noted `main.rs:349` as the 68k-only gate — that is the line that
+changed.
+
+### Ask 1 — divide-by-zero: COUNTED (deliberately not modelled)
+
+`gpu.timing.div_by_zero` / `dsp.timing.div_by_zero`, plus an unconditional
+stderr warning on every run. No flag; it would be off precisely on the run that
+needed it.
+
+**Not modelled, on purpose.** You observed silicon "hangs, or produces a value
+that makes the y-walk never terminate" — which of those it is has not been
+measured, and picking one would make jsim confidently wrong in a new way rather
+than merely silent. The benign `0xFFFFFFFF` is unchanged, so no timing moves.
+
+Immediately useful: **`probes/RP_jpose.cof` executes 888 GPU divide-by-zeros in
+120 frames.** That is a shipped probe ROM, and jsim has been rendering it
+normally the whole time.
+
+### Ask 2 — liveness watchdog: DONE
+
+`--watchdog N` warns when a core runs N consecutive frames without ever
+clearing RISCGO. Frame-anchored rather than instruction-anchored: your DSP poll
+loop is resident and would trip an instruction counter every run, so the
+warning would be noise within a day. Opt-in for the same reason.
+
+Calibration note from the smoke test: at `--watchdog 2`, **both** cores fire on
+`RP_jpose` — Jerry as expected, but Tom too, so your GPU kernel also spans
+frames in that build. Pick the threshold off a known-good ROM.
+
+### Ask 3 — divide ROUNDING: MEASURED. Silicon TRUNCATES.
+
+Authored `p_divround` and flashed it the same session
+(`calib/bench_divround_20260727_131039.log`). Six cases where truncate and
+round disagree, three exact controls, in **both** integer and `DIV_OFFSET`
+16.16 mode — 16.16 because that is the mode your perspective divide uses:
+
+| case | silicon | truncate | round |
+|---|---|---|---|
+| 7/2 | **00000003** | 00000003 | 00000004 |
+| 5/2 | **00000002** | 00000002 | 00000003 |
+| 8/3 | **00000002** | 00000002 | 00000003 |
+| 1/2 | **00000000** | 00000000 | 00000001 |
+| FFFFFFFF/2 | **7FFFFFFF** | 7FFFFFFF | 80000000 |
+| 2/3 16.16 | **0000AAAA** | 0000AAAA | 0000AAAB |
+| 7/3, 1/3 16.16, 1/2 16.16 | controls — all agree | | |
+
+**Silicon truncates in every discriminating case. jsim's divider (`d / s`,
+unsigned) is bit-faithful and needs no change.**
+
+### What that means for A1 — the rounding hypothesis is refuted
+
+You were careful to label this INFERRED and to ask us to test rather than take
+your word, and that was the right call, because it does not hold. Your own
+caveat identified why: the 9.4-of-85 cull-sign disagreement you simulated was
+**integer-vs-exact**, not silicon-vs-jagemu. Now that the two dividers are
+known to agree bit for bit, that simulation cannot explain the divergence — it
+was measuring a property of integer arithmetic, which both sides share.
+
+So A1's face-dropping is not arithmetic. The remaining candidates are hazards:
+
+- **bug 25** — a DIV re-issued while the divider is still busy (`stall_div_busy`)
+- **bug 13** — a WAW into a register with a pending load or DIV (`waw_hazards`)
+
+Both are already counted per core, and as of today both are attributable to a
+**specific PC** via `--pc-histogram --core gpu`. That turns "which instruction
+in `gpu_geotex.gas`" from a probe-build hunt into one run. Given your note that
+every guard in that kernel is load-bearing and cannot be bisected by disabling
+one, a read-only per-PC hazard attribution is probably the only tool that fits.
+
+### On your closing point
+
+You wrote that more static checks are worth more to you than emulator speed —
+noted, and the `jas` bug-13 catch you cite is the model. The div-by-zero counter
+above is the same idea moved into the emulator: a free check that converts a
+195-second flash plus a power-cycle into a line of output.
