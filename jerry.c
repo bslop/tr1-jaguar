@@ -19,6 +19,9 @@ extern const uint8_t dsp_kernel[], dsp_kernel_end[];
 
 int jerry_init(void)
 {
+#if defined(BEACON_AT) && BEACON_AT == 4
+    { extern void hang_beacon(uint16_t); hang_beacon(0x07FE); }   /* CYAN */
+#endif
 #ifdef HANGDIAG
     *(volatile uint16_t *)0xF00058u = (uint16_t)0x07FE;
 #endif

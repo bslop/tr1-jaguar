@@ -29,6 +29,9 @@ extern const uint8_t gpu_kernel[], gpu_kernel_end[];
 
 int gpu_init(void)
 {
+#if defined(BEACON_AT) && BEACON_AT == 3
+    { extern void hang_beacon(uint16_t); hang_beacon(0xFFC0); }   /* MAGENTA */
+#endif
 #ifdef HANGDIAG
     *(volatile uint16_t *)0xF00058u = (uint16_t)0xFFC0;
 #endif
@@ -122,10 +125,19 @@ int gpu_sync(void)
            the next kick VBL-aligned, so a near-constant render time lands
            the finish in the same window every frame (the M68DIET cadence
            lock: maxvbl pinned, frame time insensitive to kernel speed). */
+#ifdef IRQREARM
+        /* Do NOT bet the frame on an interrupt that may never come: poll with
+           a bound, and re-arm the vertical interrupt each round. */
+        { uint32_t s_ = 0;
+          while (mailbox[0] != MAGIC_DONE && s_ < 100000u) s_++;
+          if (mailbox[0] == MAGIC_DONE) { G_CTRL = 0; return 1; }
+          { extern void video_rearm_irq(void); video_rearm_irq(); } }
+#else
         if (cpu_stop_unless(&mailbox[0], MAGIC_DONE)) {
             G_CTRL = 0;
             return 1;
         }
+#endif
         g_syncspins++;                   /* how many interrupt-wakes per sync */
 #endif
     }
@@ -139,6 +151,9 @@ int gpu_sync(void)
         dbg_kv("wedgecmd", (long)*(volatile uint32_t *)0xF02238u);
         dbg_kv("wedgectl", (long)*(volatile uint32_t *)0xF02114u);
     }
+#endif
+#if defined(BEACON_AT) && BEACON_AT == 10
+    { extern void hang_beacon(uint16_t); hang_beacon(0xFFC0); }   /* MAGENTA: gpu_sync TIMED OUT - Tom wedged */
 #endif
     G_CTRL = 0;
     return 0;
@@ -294,8 +309,29 @@ void gpu_geotex_dispatch(const uint32_t *list, void *fb, const void *camblk,
 int gpu_geotex(const void *room, void *fb, const void *camblk,
                const void *atlas, uint32_t atlas_width)
 {
+#if defined(BEACON_AT) && BEACON_AT == 6
+    { extern void hang_beacon(uint16_t); hang_beacon(0xF83E); }   /* YELLOW: reached the Tom kick */
+#endif
     gpu_geotex_kick(room, fb, camblk, atlas, atlas_width);
-    return gpu_sync();
+#if defined(BEACON_AT) && BEACON_AT == 12
+    /* THE DISCRIMINATOR. Wait for Tom WITHOUT the STOP - a pure spin cannot be
+       lost the way an interrupt wake can - then report what Tom actually did:
+         GREEN = Tom FINISHED (mailbox is MAGIC_DONE). The render was fine and
+                 the fault is the WAKE path: the 68k slept through a completed
+                 job, i.e. the interrupt never came.
+         RED   = Tom NEVER finished. The GPU is wedged and the STOP is an
+                 innocent bystander.
+       BLUE = we never even got here. */
+    { extern void hang_beacon(uint16_t);
+      uint32_t spins = 0;
+      while (mailbox[0] != MAGIC_DONE && spins < 40000000u) spins++;
+      hang_beacon(mailbox[0] == MAGIC_DONE ? 0x003E : 0xF800); }
+#endif
+    { int r_ = gpu_sync();
+#if defined(BEACON_AT) && BEACON_AT == 9
+      { extern void hang_beacon(uint16_t); hang_beacon(0x07FE); } /* CYAN: the first sync RETURNED */
+#endif
+      return r_; }
 }
 
 int gpu_geomdirect(const uint32_t *roomlist, uint32_t roomcount, uint16_t *fb,

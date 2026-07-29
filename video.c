@@ -309,6 +309,13 @@ static void point_op_at_list(void)
  * which fires just before the display field starts. */
 void vblank_handler(void)
 {
+#if defined(BEACON_AT) && BEACON_AT == 11
+    /* Fires on the FIRST vblank interrupt ever taken. The beacon is validated
+       (it goes solid on a booting build), so BLACK here means the interrupt
+       genuinely never arrives - which is the documented VI failure mode:
+       "dead-black screen, ISR dead, flip spins forever". */
+    { extern void hang_beacon(uint16_t); hang_beacon(0x003E); }   /* GREEN */
+#endif
     uint32_t pf = pending_fb;
 #ifdef HANGDIAG
     /* GREEN border on the FIRST vblank: proves interrupts are alive at all.
@@ -362,6 +369,9 @@ void vblank_handler(void)
 
 void video_init(void)
 {
+#if defined(BEACON_AT) && BEACON_AT == 1
+    { extern void hang_beacon(uint16_t); hang_beacon(0x07C0); }   /* BLUE */
+#endif
 #ifdef HANGDIAG
     *(volatile uint16_t *)0xF00058u = (uint16_t)0x07C0;
 #endif
@@ -429,6 +439,24 @@ void video_init(void)
 
     /* RGB16, CSYNC, BGEN, VIDEN, PWIDTH=4 -> the standard 320-wide mode */
     VMODE = 0x06C7;
+#if defined(BEACON_AT) && BEACON_AT == 2
+    { extern void hang_beacon(uint16_t); hang_beacon(0x003E); }   /* GREEN */
+#endif
+}
+
+/* Re-arm the vertical interrupt from its stored window.  A10 (2026-07-29):
+   on a failing build the video interrupt NEVER FIRES - proven with a validated
+   beacon - so every interrupt-dependent wait sleeps forever (gpu_sync's STOP
+   first, then the flip's pending_fb wait). video.o is byte-identical between a
+   booting and a failing build, so nothing here is being overwritten; the arming
+   is simply not taking. This re-asserts it. */
+void video_rearm_irq(void);
+void video_rearm_irq(void)
+{
+    VI   = (uint16_t)(a_vdb_g - 4);
+    INT1 = 0x0003;
+    VMODE = 0x06C7;
+    cpu_irq_on();
 }
 
 void *video_backbuffer(void)
@@ -439,6 +467,9 @@ void *video_backbuffer(void)
 /* Load a 256-entry RGB16 palette into the OP CLUT (for FB8 8bpp mode). */
 void video_set_clut(const uint16_t *pal)
 {
+#if defined(BEACON_AT) && BEACON_AT == 5
+    { extern void hang_beacon(uint16_t); hang_beacon(0xF800); }   /* RED */
+#endif
     volatile uint16_t *clut = (volatile uint16_t *)0xF00400u;
     int i;
     for (i = 0; i < 256; i++)
@@ -451,6 +482,9 @@ void video_flip(void) { video_flip_asm(); }
 #else
 void video_flip(void)
 {
+#if defined(BEACON_AT) && BEACON_AT == 7
+    { extern void hang_beacon(uint16_t); hang_beacon(0xFFFE); }   /* WHITE */
+#endif
     uint32_t shown;
 
     /* Was a tight DRAM poll on a volatile global — the anti-pattern gpu_sync's
@@ -589,6 +623,9 @@ void video_wait_safe_vc(void)
 
 void video_wait_vblank(void)
 {
+#if defined(BEACON_AT) && BEACON_AT == 8
+    { extern void hang_beacon(uint16_t); hang_beacon(0x07C0); }   /* BLUE */
+#endif
     uint32_t f = frame_count;
 #ifdef HANGDIAG
     uint32_t g = 0;

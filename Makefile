@@ -328,6 +328,11 @@ endif
 # make GDSTUB=1: gd_install reports failure immediately instead of probing the
 # cart.  Diagnostic for the boot hang: it changes ONLY gdbios.o, so main.o stays
 # byte-identical to the build under test.
+ifdef IRQREARM
+CFLAGS   += -DIRQREARM
+CXXFLAGS += -DIRQREARM
+endif
+
 ifdef GDSTUB
 ASFLAGS  += -DGDSTUB
 endif
@@ -419,11 +424,17 @@ NOFILL_DEF := -dNOFILL=0 -dHALFSPAN=$(if $(HALFSPAN),1,0)
 endif
 
 # M2 object set: room renderer + video + Blitter + input + room data.
+ifdef BEACON_AT
+OBJS_BEACON := $(BUILD)/hangbeacon.o
+CFLAGS   += -DBEACON_AT=$(BEACON_AT)
+CXXFLAGS += -DBEACON_AT=$(BEACON_AT)
+ASFLAGS  += -DBEACON_AT=$(BEACON_AT)
+endif
 OBJS := $(BUILD)/startup.o $(BUILD)/cpu68k.o $(BUILD)/main.o $(BUILD)/video.o \
         $(BUILD)/blit.o $(BUILD)/joypad.o \
         $(BUILD)/gd_input.o $(BUILD)/gdbios.o \
         $(BUILD)/gpu.o $(BUILD)/gpu_blob.o \
-        $(BUILD)/jerry.o $(BUILD)/dsp_blob.o
+        $(BUILD)/jerry.o $(BUILD)/dsp_blob.o $(OBJS_BEACON)
 ifdef NOGD
 OBJS += $(BUILD)/skunk.o $(BUILD)/skunkglue.o $(BUILD)/skunkdbg.o
 endif
@@ -476,6 +487,8 @@ $(BUILD)/main.o: main.c | $(BUILD)
 # them on jcc68k (user 2026-07-20; jagemu's injected input can't see the
 # real strobe-scan timing). Suspect MMIO access width/ordering in the pad
 # strobe or GD BIOS calls — narrow with single-TU A/B flashes, then report.
+$(BUILD)/hangbeacon.o: hangbeacon.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
 $(BUILD)/joypad.o: joypad.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 $(BUILD)/gd_input.o: gd_input.c | $(BUILD)
