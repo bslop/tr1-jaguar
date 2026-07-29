@@ -673,6 +673,23 @@ void video_wait_vblank(void)
             for (;;) ;
         }
     }
+#elif defined(IRQREARM)
+    /* A10, the LAST unbounded ISR-dependent wait in the title loop: with
+       gpu_sync and the flip both bounded, this is where a dead vblank ISR
+       parks the machine - frame_count is ONLY ever incremented by the ISR, so
+       "wait for the next field" becomes "wait forever" and nothing is ever
+       drawn. Bound it, re-arm the interrupt a few times, then stop waiting: a
+       frame that runs unpaced beats a console that never draws at all. */
+    { uint32_t g = 0, tries = 0;
+      while (frame_count == f) {
+          g++;
+          if (g > 200000u) {
+              g = 0;
+              tries++;
+              if (tries > 3) return;
+              video_rearm_irq();
+          }
+      } }
 #else
     while (frame_count == f)
         ;
