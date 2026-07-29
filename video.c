@@ -284,6 +284,7 @@ static void build_object_list(uint32_t fb_addr)
 
 #ifdef SKUNK_CONSOLE
 #include "skunkdbg.h"
+
 void video_dump_oplist(void)
 {
     int i;
@@ -309,6 +310,14 @@ static void point_op_at_list(void)
 void vblank_handler(void)
 {
     uint32_t pf = pending_fb;
+#ifdef HANGDIAG
+    /* GREEN border on the FIRST vblank: proves interrupts are alive at all.
+       Any later HANGDIAG halt overwrites it, so the final colour is the most
+       specific fact available - and a border still BLACK after 45 s means the
+       ISR never ran even once. */
+    { static int hd_first = 0;
+      if (!hd_first) { hd_first = 1; *(volatile uint16_t *)0xF00058u = 0x03E0; } }
+#endif
 #if !(defined(LOWRES) && !defined(HALFRES))
     /* fast path: restore ONLY the OP-destroyed phrase — 2 stores, no calls.
        Flip values were precomputed in video_flip, outside the ISR. */
@@ -353,6 +362,9 @@ void vblank_handler(void)
 
 void video_init(void)
 {
+#ifdef HANGDIAG
+    *(volatile uint16_t *)0xF00058u = (uint16_t)0x07C0;
+#endif
     uint32_t i;
     int ntsc = (CONFIG & 0x10) != 0;
     uint16_t width  = ntsc ? NTSC_WIDTH  : PAL_WIDTH;
@@ -448,6 +460,19 @@ void video_flip(void)
        pending_fb and vblank bounds the wake. Supervisor mode throughout.
        Safe at init: if the ISR were not running, pending_fb would never clear
        and the old spin would have hung here too. */
+#ifdef HANGDIAG
+    /* POLL, never STOP: a STOP that is never woken cannot time itself out -
+       the counter below would never advance - and "asleep forever" is exactly
+       the failure mode still on the table. */
+    { uint32_t g = 0;
+      while (pending_fb) {
+          g++;
+          if (g > 8000000u) {
+              *(volatile uint16_t *)0xF00058u = 0x07FF;  /* CYAN: flip wait */
+              for (;;) ;
+          }
+      } }
+#else
     while (pending_fb)
 #ifdef FLIPSPIN
         ;
@@ -457,6 +482,7 @@ void video_flip(void)
            the closed window costs nothing and one lost field is exactly
            what this campaign hunts. */
         cpu_stop_unless(&pending_fb, 0);
+#endif
 #endif
     shown = front_fb;
 #ifdef HALFRES
@@ -564,6 +590,17 @@ void video_wait_safe_vc(void)
 void video_wait_vblank(void)
 {
     uint32_t f = frame_count;
+#ifdef HANGDIAG
+    uint32_t g = 0;
+    while (frame_count == f) {
+        g++;
+        if (g > 8000000u) {               /* the VBL ISR is not running */
+            *(volatile uint16_t *)0xF00058u = 0xF81F;   /* MAGENTA: no vblank */
+            for (;;) ;
+        }
+    }
+#else
     while (frame_count == f)
         ;
+#endif
 }

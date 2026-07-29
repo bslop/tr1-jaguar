@@ -2,6 +2,7 @@
  * Mirrors gpu.c's proven protocol on the DSP register set. */
 #include "jaguar.h"
 
+
 #define D_FLAGS  REG32(0xF1A100)
 #define D_PC     REG32(0xF1A110)
 #define D_CTRL   REG32(0xF1A114)
@@ -18,6 +19,9 @@ extern const uint8_t dsp_kernel[], dsp_kernel_end[];
 
 int jerry_init(void)
 {
+#ifdef HANGDIAG
+    *(volatile uint16_t *)0xF00058u = (uint16_t)0x07FE;
+#endif
     const uint32_t *src = (const uint32_t *)dsp_kernel;
     uint32_t n = (uint32_t)(dsp_kernel_end - dsp_kernel) / 4;
     volatile uint32_t *dst = (volatile uint32_t *)D_SRAM;

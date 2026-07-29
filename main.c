@@ -334,6 +334,15 @@ static int g_flr_wy;      /* caller's current Y for Y-AWARE floor selection:
    with vertically STACKED rooms (10-room sets), "lowest floor wins" grabbed
    floors in rooms BELOW; instead prefer the nearest floor at/below wy that's
    reachable (within step-up), falling back to the old rule if none. */
+#ifdef MV_SIDE
+/* SIDESTEP, deliberately OUT OF LINE.  Inlined into main() this costs a local
+   that stays live across the whole tank-control block, and the extra pressure
+   re-allocates registers throughout a 6,000-instruction function - 522 changed
+   instruction hunks against the control, and a build that dies on silicon
+   before it ever draws a frame.  Its own frame keeps main()'s codegen alone. */
+static void lara_sidestep(int side, const uint8_t **rsect, int roomCount)
+    __attribute__((noinline));
+#endif
 static int room_floor_mr(const uint8_t **rsect, int n, int wx, int wz, int *floorY)
 {
     int r, found = 0, best = 0, best_w = 0;
@@ -398,6 +407,7 @@ static int room_floor_mr(const uint8_t **rsect, int n, int wx, int wz, int *floo
     g_floorwater = best_w;
     return 1;
 }
+
 #endif
 
 #define EYE_HEIGHT 640          /* camera height above the sector floor */
@@ -468,7 +478,30 @@ static int g_pickupt;                 /* pickup animation countdown (ticks) */
 /* NB: SINTAB is 256 ENTRIES PER TURN (SIN(a)=SINTAB[a&255]), so a quarter
    turn is 64 and 180 deg is 128 — NOT 1024-based like the title ring. */
 #define ROLL_TICKS        8    /* 8 x (128/8=16) = exactly 128 = 180 deg */
+/* MV_ROLL / MV_SIDE gate the two features SEPARATELY so the silicon bisect
+   is a build flag, not an edit (2026-07-29: the combined build black-screens
+   the console from t=0 while rendering identically to the control in jagemu). */
+#ifdef MV_ROLL
 static int g_rollt;                   /* >0 = mid-roll, controls locked     */
+#endif
+#ifdef PADTEXT
+/* Dead weight in .TEXT, deliberately.  PADBYTES (below) grows .rodata, which
+   sits AFTER .text and therefore moves nothing the code is linked against —
+   it only proves the image SIZE is harmless.  This one grows .text by the
+   same 1016 bytes the moveset does, so .rodata, .data and .bss all land at
+   exactly the addresses the failing build puts them at, with not one new
+   instruction executed.  Boots => the fault is the moveset code running.
+   Black => the fault is positional and the moveset code is innocent. */
+__attribute__((used, section(".text")))
+static const uint8_t g_padtext[PADTEXT] = { 1 };
+#endif
+#ifdef PADBYTES
+/* Dead weight, deliberately: PADBYTES bytes of .rodata nothing ever reads.
+   It moves every later address and grows the image without adding a single
+   executed instruction, which is exactly what separates "the build got
+   bigger" from "the new code runs" as a cause of a silicon black screen. */
+static const uint8_t g_padding[PADBYTES] __attribute__((used)) = { 1 };
+#endif
 static int g_curroom;                 /* room Lara is standing in (visibility) */
 static int g_curroom_fwd(void) { return g_curroom; }
 #define LARA_CLIMB    768             /* max standing VAULT = 3 clicks (TR1-authentic;
@@ -1880,6 +1913,25 @@ static void blitprobe_run(void)
 }
 #endif
 
+#ifdef MV_SIDE
+static void lara_sidestep(int side, const uint8_t **rsect, int roomCount)
+{
+    /* step perpendicular to facing: yaw +/- a quarter turn.  SINTAB is 256
+       entries per full turn, so a quarter turn is 64 - not 256. */
+    int sy   = (g_layaw + (side < 0 ? -64 : 64)) & 255;
+    int sspd = WALK_SPEED / 2;
+    int sx   = g_lax + (int)(((int32_t)SIN(sy)*sspd)>>16);
+    int sz   = g_laz + (int)(((int32_t)COS(sy)*sspd)>>16);
+    int sf;
+    if (!room_wall_at(rsect[g_curroom], sx, g_laz) &&
+        room_floor_mr(rsect, roomCount, sx, g_laz, &sf) &&
+        g_lafloor - sf <= LARA_STEPUP) g_lax = sx;
+    if (!room_wall_at(rsect[g_curroom], g_lax, sz) &&
+        room_floor_mr(rsect, roomCount, g_lax, sz, &sf) &&
+        g_lafloor - sf <= LARA_STEPUP) g_laz = sz;
+}
+#endif
+
 int main(void)
 {
     const MRHdr *mh = (const MRHdr *)rooms_data;
@@ -2424,6 +2476,29 @@ int main(void)
                          individual parking spots + yaws. phase 0 = passport
                          selected, 256 = photo selected; positions/yaws lerp.
                          {selx,sely,selz,selyaw, unx,uny,unz,unyaw} */
+                      /* Overridable from the Makefile so the placement can be
+                         swept offline in jagemu (the title is a valid oracle:
+                         emulator vs silicon measured 61.3%% vs 63.8%% on the
+                         old model).  Measure the model's footprint by DIFFING
+                         a render against one with PASS_Z pushed to 9000 —
+                         a white-pixel bbox reads the background art's bright
+                         patch instead and says "z does nothing". */
+/* Tuned 2026-07-29 against the original's title screen, measured by DIFF
+   against a render with the passport hidden (z=9000) and taking the largest
+   connected component - a plain bbox picks up the ring's highlights and the
+   photo, and reads ~44%% for a booklet that is really 18%%.
+   reference : 24.6%% of frame height, centre (46.4%%, 79.4%%)
+   these     : 24.4%%,                 centre (46.6%%, 79.8%%)
+   Previous values (-39, 319, 700) put it a third too far away. */
+#ifndef PASS_X
+#define PASS_X (-34)
+#endif
+#ifndef PASS_Y
+#define PASS_Y 270
+#endif
+#ifndef PASS_Z
+#define PASS_Z 530
+#endif
                       static const int16_t mp2[2][8] = {
                         /* PASSPORT (model 81 INV_PASSPORT_CLOSED since 2026-07-28 —
                            71 was the OPENED passport and drew a big white book over
@@ -2433,7 +2508,7 @@ int main(void)
                            = +31 screen px, +100 world y = +14 (half — the 119-line
                            LOWRES fb represents 240). NOTE: only the SELECTED entry is
                            live on the default page; the unselected one never shows. */
-                        { -39, 319, 700, 120,  -230, -80, 470, 24  },
+                        { PASS_X, PASS_Y, PASS_Z, 120,  -230, -80, 470, 24  },
                         { 0,   0, 240, 0,     230, -80, 470, 96  },
                       };
                       int it2, ord2, zi[2], px[2], py[2], pz[2], yw[2];
@@ -3135,7 +3210,20 @@ int main(void)
             int camx, camy, camz, k;
             fbpix *fb;
             /* Lara tank controls + multi-room floor-follow / wall collision */
-            { int mv=0, fy, side=0;
+            { int mv=0, fy;
+#ifdef MV_SIDE
+              /* NOT a local.  As a local, `side` is live across the whole
+                 tank-control block and the extra pressure re-allocates
+                 registers throughout main() — 522 changed hunks against the
+                 control, and the resulting build BLACK-SCREENS silicon from
+                 t=0 even though nothing it added ever runs before the title
+                 (2026-07-29 bisect: sidestep-only dies, roll-only boots, and
+                 a byte- and address-matched padding build boots).  In .bss it
+                 costs one word and perturbs nothing. */
+              static int side; side = 0;
+#else
+              enum { side = 0 };
+#endif
               g_flr_wy = g_lay;      /* Y context for stacked-room floor picks */
               /* walking: current room + neighbours only. AIRBORNE: search
                  ALL rooms — a long drop (the Caves descent) crosses several
@@ -3152,6 +3240,7 @@ int main(void)
                   g_pickupt--;
                   goto lara_done;
               }
+#ifdef MV_ROLL
               /* ROLL: new press, grounded, not already busy. Yaw sweeps a
                  full 180 deg across the move so she ends facing back the
                  way she came, as in the original. */
@@ -3175,6 +3264,7 @@ int main(void)
                   g_rollt--;
                   goto lara_done;
               }
+#endif /* MV_ROLL */
               if (g_vault) {
                   /* PULL-UP: controls locked. Play the chosen climb anim
                      (g_climbanim) across CLIMB_TICKS ticks (fps is low, so run
@@ -3269,11 +3359,13 @@ int main(void)
               if (pad & PAD_RIGHT) g_layaw += 3;
               if (pad & PAD_UP)   mv = 1;
               if (pad & PAD_DOWN) mv = -1;
+#ifdef MV_SIDE
               /* SIDESTEP owns LEFT/RIGHT while WALK is held (undo the turn
                  the two lines above already applied). */
               side = ((pad & PAD_C) && (pad & (PAD_LEFT|PAD_RIGHT)) && !mv)
                      ? ((pad & PAD_LEFT) ? -1 : 1) : 0;
               if (side) g_layaw = (g_layaw + (side < 0 ? 3 : -3)) & 255;
+#endif
               if (mv) {
                   int spd = (pad & PAD_C) ? (WALK_SPEED/2) : WALK_SPEED;  /* PAD_C = walk */
                   if (mv < 0) spd = (spd*3)>>2;            /* backing up is slower */
@@ -3289,20 +3381,9 @@ int main(void)
                       room_floor_mr(rsect, roomCount, g_lax, nz, &nf) &&
                       g_lafloor - nf <= LARA_STEPUP) g_laz = nz;
               }
-              if (side) {
-                  /* step perpendicular to facing: yaw +/- a quarter turn */
-                  int sy  = (g_layaw + (side < 0 ? -64 : 64)) & 255;
-                  int sspd = WALK_SPEED / 2;
-                  int sx  = g_lax + (int)(((int32_t)SIN(sy)*sspd)>>16);
-                  int sz  = g_laz + (int)(((int32_t)COS(sy)*sspd)>>16);
-                  int sf;
-                  if (!room_wall_at(rsect[g_curroom], sx, g_laz) &&
-                      room_floor_mr(rsect, roomCount, sx, g_laz, &sf) &&
-                      g_lafloor - sf <= LARA_STEPUP) g_lax = sx;
-                  if (!room_wall_at(rsect[g_curroom], g_lax, sz) &&
-                      room_floor_mr(rsect, roomCount, g_lax, sz, &sf) &&
-                      g_lafloor - sf <= LARA_STEPUP) g_laz = sz;
-              }
+#ifdef MV_SIDE
+              if (side) lara_sidestep(side, rsect, roomCount);
+#endif
 #ifdef DEMO_PROPS
               /* the shut door blocks the corridor until it has slid up */
               if (g_dooryoff > -1200 && g_laz > g_doorz - 300 &&

@@ -13,10 +13,30 @@
 
 #define SPAN_CPU_LIMIT 12
 
+/* HANGDIAG: every wait in the 68k boot path is unbounded, so a hang anywhere
+   looks identical from the outside - a black screen.  Under HANGDIAG each one
+   gets a budget and, on timeout, paints a DISTINCT border colour and halts, so
+   a single photograph names which wait never completed.  Deliberately touches
+   no file that main.c compiles into: main.o stays byte-identical to the build
+   under test, which is essential because this fault is codegen-sensitive. */
+#ifdef HANGDIAG
+#define HANGDIAG_HALT(col) do { \
+    *(volatile uint16_t *)0xF00058u = (uint16_t)(col); \
+    for (;;) ; } while (0)
+#endif
+
 static void blit_wait(void)
 {
+#ifdef HANGDIAG
+    uint32_t g = 0;
+    while (!(B_CMD & BLIT_IDLE)) {
+        g++;
+        if (g > 8000000u) HANGDIAG_HALT(0xFFE0);   /* YELLOW: blit_wait */
+    }
+#else
     while (!(B_CMD & BLIT_IDLE))
         ;
+#endif
 }
 
 void blit_span(uint16_t *fb, int y, int x0, int x1, uint16_t c)

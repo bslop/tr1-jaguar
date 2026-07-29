@@ -15,6 +15,7 @@ int  cpu_stop_unless(volatile uint32_t *addr, uint32_t val);
 
 #include "gpu.h"
 
+
 #define G_CTRL   REG32(0xF02114)
 #define G_PC     REG32(0xF02110)
 #define G_SRAM   0xF03000u
@@ -28,6 +29,9 @@ extern const uint8_t gpu_kernel[], gpu_kernel_end[];
 
 int gpu_init(void)
 {
+#ifdef HANGDIAG
+    *(volatile uint16_t *)0xF00058u = (uint16_t)0xFFC0;
+#endif
     const uint32_t *src = (const uint32_t *)gpu_kernel;
     uint32_t n = (uint32_t)(gpu_kernel_end - gpu_kernel) / 4;
     volatile uint32_t *dst = (volatile uint32_t *)G_SRAM;

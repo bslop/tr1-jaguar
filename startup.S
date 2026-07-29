@@ -40,6 +40,12 @@ _start:
 	clr.l	(%a0)+
 	bra.s	1b
 2:
+#if defined(HANGDIAG) || defined(BOOTMARK)
+| ONE instruction, the earliest possible place, the smallest perturbation this
+| fault can be probed with: RED border means _start completed and main() was
+| entered.  Border still BLACK => the image never began executing at all.
+	move.w	#0xF800,0xF00058	| RED: startup done, entering main()
+#endif
 	jsr	main
 3:	bra.s	3b			| main should never return
 

@@ -13,12 +13,16 @@
 #include "gdbios.h"
 #include "gd_input.h"
 
+
 static uint32_t gd_workbuf[1024];               /* 4KB, long-aligned */
 static uint16_t inbuf[2] __attribute__((aligned(4)));
 static int gd_ready;
 
 int gd_input_init(void)
 {
+#ifdef HANGDIAG
+    *(volatile uint16_t *)0xF00058u = (uint16_t)0x003E;
+#endif
     gd_ready = (gd_install(gd_workbuf) == 0);
     return gd_ready;
 }

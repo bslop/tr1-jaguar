@@ -112,6 +112,16 @@ video_flip_asm:
 	movem.l	%d2,-(%sp)
 
 |	(1) wait for the previous flip to retire
+#ifdef HANGDIAG
+| POLL, never STOP - a STOP nothing wakes cannot report its own timeout.
+	suba.l	%a0,%a0
+0:	tst.l	pending_fb
+	beq.s	1f
+	addq.l	#1,%a0
+	cmpa.l	#8000000,%a0
+	bhs.s	hangdiag_pend
+	bra.s	0b
+#else
 0:	tst.l	pending_fb
 	beq.s	1f
 	move.l	#0,-(%sp)		| val = 0
@@ -119,6 +129,7 @@ video_flip_asm:
 	jsr	cpu_stop_unless		| atomic check + STOP (no lost wakeup)
 	addq.l	#8,%sp
 	bra.s	0b
+#endif
 
 1:	move.l	draw_buf,%d0		| done  = the frame just rendered
 	move.l	front_fb,%d1		| shown = what the OP is displaying
@@ -146,15 +157,38 @@ video_flip_asm:
 	move.l	%d2,pend_fix0
 
 |	(4) COMPLETION BARRIER — I/O poll, not a DRAM poll; ~nil when idle
+#ifdef HANGDIAG
+| HANGDIAG: this barrier is UNBOUNDED.  If the Blitter never reports idle the
+| 68k spins here forever and the screen stays black with no other symptom —
+| indistinguishable from every other hang in the boot path.  Bound it, and on
+| timeout paint the border RED and halt, so a photograph names the culprit.
+	suba.l	%a0,%a0			| a0 = iteration counter
+5:	addq.l	#1,%a0
+	cmpa.l	#8000000,%a0
+	bhs.s	hangdiag_blit
+	move.l	0xF02238,%d1		| B_CMD (read = status)
+	btst	#0,%d1			| BLIT_IDLE
+	beq.s	5b
+#else
 5:	move.l	0xF02238,%d1		| B_CMD (read = status)
 	btst	#0,%d1			| BLIT_IDLE
 	beq.s	5b
+#endif
 
 |	(5) publish LAST
 	move.l	%d0,pending_fb
 
 	movem.l	(%sp)+,%d2
 	rts
+
+#ifdef HANGDIAG
+hangdiag_blit:
+	move.w	#0xF800,0xF00058	| RED border: the Blitter never went idle
+9:	bra.s	9b
+hangdiag_pend:
+	move.w	#0x001F,0xF00058	| BLUE border: pending_fb never retired
+8:	bra.s	8b
+#endif
 #endif /* FLIPASM */
 
 	.section .note.GNU-stack,"",%progbits

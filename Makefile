@@ -292,6 +292,76 @@ CXXFLAGS += -DFLIPASM
 ASFLAGS  += -DFLIPASM
 endif
 
+# make MOVESET=1 (or MV_ROLL=1 / MV_SIDE=1 individually): Lara's roll
+# (Y/PAUSE) and sidestep (C+LEFT/RIGHT).  Split into two flags on 2026-07-29
+# because the combined build BLACK-SCREENS silicon from t=0 while rendering
+# identically to the control in jagemu — the bisect has to be a build flag,
+# not an edit, or the arms are not reproducible.
+ifdef MOVESET
+MV_ROLL := 1
+MV_SIDE := 1
+endif
+ifdef MV_ROLL
+CFLAGS   += -DMV_ROLL
+CXXFLAGS += -DMV_ROLL
+endif
+ifdef MV_SIDE
+CFLAGS   += -DMV_SIDE
+CXXFLAGS += -DMV_SIDE
+endif
+
+# make PADBYTES=N: link N bytes of dead, never-referenced .rodata into the
+# image.  Pure LAYOUT/SIZE control — it changes nothing the 68k executes, so
+# if a build that boots starts black-screening when padded, the fault is the
+# image size or the addresses everything lands at, NOT the added logic.
+ifdef PADBYTES
+CFLAGS   += -DPADBYTES=$(PADBYTES)
+CXXFLAGS += -DPADBYTES=$(PADBYTES)
+endif
+
+# make BOOTMARK=1: a single store in startup.S that reddens the border just
+# before jsr main.  The minimum-perturbation probe for the boot hang.
+ifdef BOOTMARK
+ASFLAGS  += -DBOOTMARK
+endif
+
+# make GDSTUB=1: gd_install reports failure immediately instead of probing the
+# cart.  Diagnostic for the boot hang: it changes ONLY gdbios.o, so main.o stays
+# byte-identical to the build under test.
+ifdef GDSTUB
+ASFLAGS  += -DGDSTUB
+endif
+
+# make HANGDIAG=1: bound every unbounded 68k wait and, on timeout, paint a
+# distinct border colour and halt.  RED = the FLIPASM Blitter barrier,
+# YELLOW = blit_wait, CYAN = the flip's pending_fb wait, MAGENTA = no vblank
+# ISR.  Touches only cpu68k.S / blit.c / video.c, never main.c, so main.o stays
+# byte-identical to the build being diagnosed.
+ifdef HANGDIAG
+CFLAGS   += -DHANGDIAG
+CXXFLAGS += -DHANGDIAG
+ASFLAGS  += -DHANGDIAG
+endif
+
+# make PASS_X=/PASS_Y=/PASS_Z=: title-screen passport placement (world units).
+# Swept offline against jagemu; see the note by mp2 in main.c for the metric.
+ifdef PASS_X
+CFLAGS   += -DPASS_X=$(PASS_X)
+endif
+ifdef PASS_Y
+CFLAGS   += -DPASS_Y=$(PASS_Y)
+endif
+ifdef PASS_Z
+CFLAGS   += -DPASS_Z=$(PASS_Z)
+endif
+
+# make PADTEXT=N: the same idea one section earlier -- N dead bytes in .TEXT,
+# which shifts .rodata/.data/.bss exactly the way real added code does.
+ifdef PADTEXT
+CFLAGS   += -DPADTEXT=$(PADTEXT)
+CXXFLAGS += -DPADTEXT=$(PADTEXT)
+endif
+
 # make ... LOWRES=1: render a HALF-HEIGHT (320x120) framebuffer and let the
 # Object Processor's hardware VERTICAL scaler (2.0x) display it as 320x240 -
 # halves the Blitter fill (the bottleneck) with no per-frame cost.  The C side
@@ -401,7 +471,7 @@ $(BUILD)/%.o: %.c | $(BUILD)
 # per-frame tax there. Flips when cobweb's register-allocator follow-up
 # lands. (Their own end-to-end verification was also 7-of-8-except-main.)
 $(BUILD)/main.o: main.c | $(BUILD)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(MAINCFLAGS) -c $< -o $@
 # joypad.c/gd_input.c pinned to gcc: controls went DEAD on hardware with
 # them on jcc68k (user 2026-07-20; jagemu's injected input can't see the
 # real strobe-scan timing). Suspect MMIO access width/ordering in the pad
