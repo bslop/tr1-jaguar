@@ -52,8 +52,19 @@ typedef uint16_t fbpix;
 
 /* Display buffers are DISPLAY_H tall (240). In HALFRES they hold the line-
  * doubled image; otherwise they are the render buffers directly. */
-static fbpix fb0[RENDER_W * DISPLAY_H] __attribute__((aligned(16)));
-static fbpix fb1[RENDER_W * DISPLAY_H] __attribute__((aligned(16)));
+/* FLIPASM (2026-07-27): the publish half of the flip protocol moves to
+ * cpu68k.S so its ORDER is fixed in the instruction stream rather than left
+ * to a compiler.  The ISR half is already assembler (startup.S) for the same
+ * reason.  These few symbols must be visible to it; every other build keeps
+ * them file-local exactly as before. */
+#ifdef FLIPASM
+#define FLIPSTATIC
+#else
+#define FLIPSTATIC static
+#endif
+
+FLIPSTATIC fbpix fb0[RENDER_W * DISPLAY_H] __attribute__((aligned(16)));
+FLIPSTATIC fbpix fb1[RENDER_W * DISPLAY_H] __attribute__((aligned(16)));
 #ifdef HALFRES
 /* HALFRES never triple-buffers the display (render target is rbuf; the
    flip ping-pongs fb0/fb1 — the fb2 fallback in video_flip is unreachable
@@ -62,7 +73,7 @@ static fbpix fb1[RENDER_W * DISPLAY_H] __attribute__((aligned(16)));
    cold-boot smash 2026-07-12). */
 #define fb2 fb0
 #else
-static fbpix fb2[RENDER_W * DISPLAY_H] __attribute__((aligned(16)));
+FLIPSTATIC fbpix fb2[RENDER_W * DISPLAY_H] __attribute__((aligned(16)));
 #endif
 #ifdef HALFRES
 /* HALFRES renders here (320x120); video_flip line-doubles it into a display buf. */
@@ -84,12 +95,13 @@ fbpix *const crash_fbs[3] = { fb0, fb1, fb2 };
 #define OPSTATIC static
 #endif
 
+
 OPSTATIC uint32_t op_list[16] __attribute__((aligned(16)));
 static uint16_t a_vdb_g, a_vde_g;   /* active vertical window (VC half-lines) */
 
 volatile uint32_t frame_count;
 
-static fbpix *draw_buf;               /* CPU renders here                    */
+FLIPSTATIC fbpix *draw_buf;               /* CPU renders here                    */
 OPSTATIC uint32_t front_fb;           /* what the OP displays                */
 OPSTATIC volatile uint32_t pending_fb;/* buffer the ISR should show, 0=none  */
 
@@ -103,7 +115,7 @@ OPSTATIC volatile uint32_t op_fix0;            /* phrase 0 for front_fb  */
 static volatile uint32_t op_fix1;
 OPSTATIC volatile uint32_t pend_fix0;          /* phrase 0 for pending_fb */
 static volatile uint32_t pend_fix1;
-static uint32_t op_link;                       /* link field, set at build */
+FLIPSTATIC uint32_t op_link;                       /* link field, set at build */
 
 #if defined(LOWRES) && !defined(HALFRES)
 /* LOWRES: the 320x120 framebuffer is displayed at 320x240 by the OP hardware
@@ -421,6 +433,10 @@ void video_set_clut(const uint16_t *pal)
         clut[i] = pal[i];
 }
 
+#ifdef FLIPASM
+extern void video_flip_asm(void);
+void video_flip(void) { video_flip_asm(); }
+#else
 void video_flip(void)
 {
     uint32_t shown;
@@ -495,6 +511,8 @@ void video_flip(void)
     }
 #endif
 }
+
+#endif /* FLIPASM */
 
 /* HI-RES path (title screens): paint 320x240 directly into a display
    buffer, bypassing rbuf + the doubling blit. Same ISR flip protocol. */

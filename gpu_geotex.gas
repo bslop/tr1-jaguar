@@ -133,7 +133,26 @@ B_COUNT		.equ	$F0223C
 
 ; A1/A2 flag pieces (gpu_bltex verbatim)
 A1_FIXED	.equ	$00030018	; PIXEL8 | XADDINC (WID OR'd in at startup)
+.if PHRASEDST=1
+; PHRASE-MODE DEST PROBE (2026-07-28).  jagemu's blit model prices a transfer at
+; (dst_accesses + src_accesses) x 5.6 ticks, and `ppp` is 1 whenever xadd != 0 --
+; i.e. PIXEL mode costs ONE ACCESS PER PIXEL per stream.  Our textured span runs
+; XADDPIX with SRCEN, so it pays 2 accesses/pixel = 11.2 ticks/px; a 9-px span is
+; 16 (launch) + 101 = ~117 ticks.  Phrase mode is 8 px per access, so a phrase
+; DEST would cost (npix/8 + npix) x 5.6 = 6.3 ticks/px -- about 44% less Blitter
+; time.  Launch is only 16 of 117 ticks (14%), which is independently why
+; batching (RUNBATCH/TRAPEZOID) measured null: it only removes launches.
+;   *** TWO THINGS COULD SINK THIS, AND ONLY SILICON DECIDES THE SECOND ***
+;   1. ALIGNMENT: a phrase dest steps 8 px at a time, so it can only write
+;      aligned 8-px groups.  Our spans start at arbitrary x and average 9 px.
+;   2. Whether the Blitter can assemble 8 GATHERED source pixels (XADDINC
+;      sampler) into one dest phrase at all.  jagemu will happily apply its
+;      formula either way -- in-kernel silicon testing is the only real probe.
+; Check (1) in the emulator first; it is free and it can kill this outright.
+A2_FLAGS_VAL	.equ	$00004218	; PITCH1|PIXEL8|WID320|XADDPHR (probe)
+.else
 A2_FLAGS_VAL	.equ	$00014218	; PITCH1|PIXEL8|WID320|XADDPIX
+.endif
 BCMD_TEX	.equ	$01800801	; SRCEN|LFU_REPLACE|DSTA2
 BLIT_GUARD	.equ	200000		; bounded wait-for-idle spins
 
@@ -1406,6 +1425,29 @@ bc2:
 	jump	T,(r22)			; LADDER PROBE: cull EVERY face after
 	nop				; the stage+project+cull-test cost
 	.endif
+.if TINYKEEP>0
+	; SUB-PIXEL SIGN GUARD -- KEEP DIRECTION (2026-07-27).  Same premise as
+	; TINYCULL below: this cull is a signed area over INTEGER pixel coords, so
+	; for a face a few pixels across the SIGN is decided by rounding, not by
+	; geometry.  But the opposite remedy.  TINYCULL DROPS the coin-flip faces,
+	; which fixes back faces wrongly DRAWN.  The two notches bitten out of her
+	; CROWN are the other failure: front faces wrongly DROPPED (measured
+	; silicon-only; jagemu renders the same ROM's head solid).  So keep them:
+	; when |ar| is inside the rounding noise, prefer to DRAW.
+	;   cull iff  ar == 0  or  ar < -N        draw everything else
+	; ar == 0 is STILL culled, so the dy == 0 edge-walk that never advances --
+	; the liveness hang that black-screened KEEPDEGEN -- cannot recur.
+	; Replaces the 5 instructions it sits in front of with 5: costs 0 bytes.
+	jump	EQ,(r22)		; ar == 0 -> degenerate, skip
+	nop
+	.if TINYKEEP=4
+	addq	#4,r25			; keep back faces of area <= 2 px^2
+	.else
+	addq	#2,r25			; keep back faces of area <= 1 px^2
+	.endif
+	jump	MI,(r22)		; ar < -N -> genuinely back-facing, skip
+	nop
+.else
 	jump	MI,(r22)		; ar < 0 -> backface, skip
 	nop				;  *** FLIP CULL SENSE: change MI<->PL here if room0_tex
 	nop				;      winding turns rooms inside-out ***
@@ -1450,6 +1492,7 @@ bc2:
 .else
 	jump	EQ,(r22)		; ar == 0 -> degenerate, skip
 	nop
+.endif
 .endif
 .endif
 
@@ -1926,6 +1969,21 @@ sp_have:
 	; denom = xr_raw - xl_raw  (>= 0)
 	move	r3,r7
 	sub	r2,r7			; r7 = denom
+	.if DIVZGUARD=1
+	; denom==0 (single-column span) DIVIDES BY ZERO below, on purpose --
+	; see the note further down. jsim returns $FFFFFFFF and renders fine;
+	; silicon's result is UNMEASURED. Measured 2026-07-27: the shipping
+	; kernel does ~45 GPU divide-by-zeros per frame and every one of them
+	; is this site (the other four divides are all guarded). Force denom
+	; to 1 so the quotient is defined; a 1-px span never consumes it, so
+	; the value itself does not matter -- only that silicon computes
+	; something rather than something undefined.
+	; Placed IMMEDIATELY after the sub so its Z flag is still live.
+	jr	NE,sp_dnz
+	nop
+	moveq	#1,r7
+sp_dnz:
+	.endif
 	; integer divide mode for the per-span du/dv divide
 	.if ROWDIET=0
 	movei	#G_DIVCTRL,r0
@@ -2177,6 +2235,55 @@ bwait:
 bwait_done:
 	or	r5,r5			; settle the in-flight slot load
 	.else
+.if BWOVER=1
+	; ---- BLITTER-WAIT OVERLAP (2026-07-27) -----------------------------
+	; MEASURED on a matched in-game scene: 12.66 bwait polls per span, and
+	; 92.1% of them find the Blitter BUSY -- so Tom is genuinely waiting,
+	; not paying loop-entry overhead. The poll loop costs 18.31% of Tom's
+	; cycles (the `blit_wait` counter's 4.75% counts only the modelled
+	; stall, NOT the cost of executing the loop -- do not judge Blitter
+	; pressure by that counter).
+	; None of the four register VALUES below depend on the Blitter being
+	; idle; only the STORES do, because writing a Blitter register while a
+	; transfer is live corrupts it. So compute them HERE and leave only the
+	; stores after the wait: the Blitter gets ~20 more instructions of
+	; runway per span, which is time Tom was spending on nothing.
+	; r24-r27 are DEAD here -- uL/vL/uR/vR were consumed by the du/dv
+	; divides in sp_dvp and by u0/v0 in sp_clamp -- so they carry the
+	; results across the wait. r0-r3 stay scratch and are re-armed below.
+	; A1_INC = (dv & $FFFF0000) | (du >> 16)
+	move	r9,r24
+	.if BANKDIET=1
+	movefa	r1,r1			; $FFFF0000 (bank-1 resident)
+	.else
+	movei	#$FFFF0000,r1
+	.endif
+	and	r1,r24
+	move	r8,r2
+	shrq	#16,r2
+	or	r2,r24
+	; A1_FINC = (dv << 16) | (du & $FFFF)
+	move	r9,r25
+	shlq	#16,r25
+	move	r8,r2
+	.if BANKDIET=1
+	movefa	r2,r3			; $0000FFFF (bank-1 resident)
+	.else
+	movei	#$0000FFFF,r3
+	.endif
+	and	r3,r2
+	or	r2,r25
+	; A2_PIXEL = (y<<16) | xl
+	move	r10,r26
+	shlq	#16,r26
+	or	r29,r26
+	; B_COUNT = (1<<16) | (xr - xl + 1)
+	move	r23,r27
+	sub	r29,r27
+	addq	#1,r27
+	movei	#$00010000,r1
+	or	r1,r27
+.endif
 	.if BANKDIET=1
 	movefa	r3,r2			; BLIT_GUARD (bank-1 resident)
 	.else
@@ -2345,6 +2452,15 @@ uc_dv_lo:
 	move	r1,r9
 uc_dv_ok:
 	.endif
+.if BWOVER=1
+	; BWOVER: the four values were computed BEFORE the wait (see the block
+	; at sp_fill). Only the stores remain here -- they must follow the wait
+	; because the Blitter was still transferring until bwait_done.
+	store	r24,(r15+7)		; A1_INC
+	store	r25,(r15+8)		; A1_FINC
+	store	r26,(r15+12)		; A2_PIXEL
+	store	r27,(r15+15)		; B_COUNT
+.else
 	; A1_INC = (dv & $FFFF0000) | (du >> 16)     integer per-pixel U:V step
 	move	r9,r0
 	.if BANKDIET=1
@@ -2390,6 +2506,24 @@ uc_dv_ok:
 	.endif
 	or	r1,r0
 	store	r0,(r15+15)
+.endif
+.if ODRAW=1
+	; OVERDRAW PROBE (2026-07-28) -- EMULATOR ONLY, NEVER FLASH THIS.
+	; Accumulate every span's npix into $1C0020 so the total pixels the
+	; Blitter actually transfers can be divided by (frames x 320 x 120).
+	; blit_transfer is 32.9% of Tom and batching cannot touch it (measured
+	; null), so the only remaining lever on it is drawing FEWER PIXELS --
+	; and nobody has ever measured how many are redundant.
+	; A DRAM read-modify-write in the kernel is exactly the shape that
+	; black-screened silicon as LARACOUNT, hence emulator-only.
+	movei	#$001C0020,r1
+	load	(r1),r2
+	move	r23,r3
+	sub	r29,r3
+	addq	#1,r3			; npix = xr-xl+1 (recomputed; r0 is live)
+	add	r3,r2
+	store	r2,(r1)
+.endif
 	; B_CMD = SRCEN|LFU_REPLACE|DSTA2 -> LAUNCH
 	.if NOFILL=0
 	; EXPERIMENT HALFSPAN: launch only even scanlines (timing probe)
@@ -2685,6 +2819,89 @@ rb_single:
 	movei	#BCMD_TEX,r0
 tz_store:
 	store	r0,(r15+14)
+.if SPANSHADE>0
+	; ---- PER-SPAN SHADE (2026-07-28) ---------------------------------
+	; The pkt_done pass shades ONE RECT over the face's BOUNDING BOX. For a
+	; triangle that is ~2x the face's area, and the overshoot is exactly
+	; what paints the floating shaded chunks (A2) and the grey outline
+	; (A3): hard axis-aligned rectangles that ignore the geometry, plainly
+	; visible in a shade-difference map of the frame. Shade the span's
+	; ACTUAL extent instead, immediately after its texture blit.
+	; TRADE: +1 wait and +1 launch per span, but ~half the shade transfer
+	; (exact extent instead of bbox). Which dominates is MEASURED.
+	; k == 0 means full bright -> no shade blit at all (the common case
+	; for Lara, who never gets a runtime k).
+	; A2_STEP is safe to clobber: the rect version already does, and the
+	; texture path re-arms everything it needs per span.
+	movei	#SHADEK,r1
+	load	(r1),r2			; k byte pattern
+	nop
+	nop
+	cmpq	#0,r2
+	movei	#ss_none,r22
+	jump	EQ,(r22)		; full bright -> skip
+	nop
+	; The texture blit must RETIRE before we read-modify-write its pixels.
+	; SETTLE FIRST: the Blitter takes several cycles after the B_CMD store
+	; to assert BUSY, so polling immediately reads the STALE idle bit,
+	; sails straight through, and the register writes below corrupt the
+	; in-flight texture blit (black wedges, measured). The existing bwait
+	; never hits this because a whole span's setup sits between its launch
+	; and its poll. Two dummy status reads are a bus round-trip each --
+	; far longer than the busy-assert delay.
+	load	(r15+14),r1
+	nop
+	nop
+	or	r1,r1			; settle read 1
+	load	(r15+14),r1
+	nop
+	nop
+	or	r1,r1			; settle read 2
+ss_bw:
+	load	(r15+14),r1		; blit status
+	nop
+	nop
+	btst	#0,r1			; idle?
+	jr	EQ,ss_bw
+	nop
+	; SCRATCH: r0/r1/r2 ONLY. **r4 IS CLIPX0 AND IS RUN-RESIDENT** (see the
+	; `cmp r4,r29` left-clip test in the span setup) -- clobbering it wrecks
+	; the left clip for every remaining span of the run, which is exactly
+	; the black wedges on the LEFT of the frame this cost me. sp_tail treats
+	; r0/r1/r2 as scratch, so those are the safe ones.
+	move	r10,r1
+	shlq	#16,r1
+	or	r29,r1
+	store	r1,(r15+12)		; A2_PIXEL = (y<<16)|xl
+	move	r23,r0
+	sub	r29,r0
+	addq	#1,r0			; width = xr - xl + 1
+	moveq	#0,r1
+	bset	#17,r1
+	sub	r0,r1			; (1<<16)|((-width)&$FFFF)
+	store	r1,(r15+13)		; A2_STEP
+	movei	#$00010000,r1
+	or	r0,r1
+	store	r1,(r15+15)		; B_COUNT = (1 row<<16)|width
+	store	r2,(r15+16)		; B_SRCD = k pattern
+	store	r2,(r15+17)
+	; NOTE: the rect version's B_CMD carries UPDA1, which advances the A1
+	; pointer -- A1 is the TEXTURE SOURCE. That is harmless at pkt_done
+	; (the next face re-arms A1 completely) but NOT mid-face: it would
+	; corrupt the very next span's texture fetch. Drop it here.
+	movei	#$01C00E00,r1		; as the rect blit, minus UPDA1
+.if SPANSHADE=2
+	; BISECT ARM: run ALL of the setup above (the wait, and the writes to
+	; A2_PIXEL / A2_STEP / B_COUNT / B_SRCD) but DO NOT LAUNCH. If the
+	; frame renders clean, my register writes are harmless and the fault
+	; is in the shade blit itself; if it is still broken, the setup is
+	; corrupting state the texture path depends on.
+	or	r1,r1			; consume r1; no launch
+.else
+	store	r1,(r15+14)		; LAUNCH (next span's bwait covers it)
+.endif
+ss_none:
+.endif
 sp_nolaunch:
 	.endif
 
@@ -2822,6 +3039,13 @@ pkt_done:
 					; load into r14 (jas-caught TRM bug 13)
 	movei	#SHADEK,r14
 	load	(r14),r2		; k pattern
+	.if SPANSHADE>0
+	; SPANSHADE owns the shading now: each span shaded its own exact
+	; extent at launch, so the bounding-box rect must NOT also run.
+	movei	#shx_none,r22
+	jump	T,(r22)
+	nop
+	.endif
 	load	(r14+6),r0		; SH_Y0: clipped y0, -1 = never rastered
 	movei	#shx_none,r22
 	cmpq	#0,r2
@@ -3315,6 +3539,34 @@ gw_flat:
 ;   clobbers r2,r3,r26,r27.  return: jump (r28).  Preserves r1,r4-r25,r29.
 ;=====================================================================
 imul32:
+.if IMULPROBE=1
+	; IMUL FAST-PATH HIT-RATE PROBE (2026-07-28) -- EMULATOR ONLY.
+	; imul32 is 7.44% of Tom (~2.3M calls, 16 instructions each) doing a
+	; 32x32 product as three 16x16 mults. If BOTH operands fit in 16 bits the
+	; two cross terms are zero and ONE `mult` is exact -- but the test that
+	; detects it costs ~5 instructions and the saving is ~5, so a fast path
+	; is a WASH at a 50% hit rate and only pays well above that.
+	; Count total calls at $1C0030 and 16-bit-eligible calls at $1C0034 so
+	; the hit rate decides whether the optimisation is worth writing at all.
+	movei	#$001C0030,r2
+	load	(r2),r3
+	nop
+	nop
+	addq	#1,r3
+	store	r3,(r2)
+	move	r0,r3
+	or	r1,r3
+	shrq	#16,r3			; (a|b)>>16 == 0  <=> both fit in 16 bits
+	jr	NE,ip_wide
+	nop
+	movei	#$001C0034,r2
+	load	(r2),r3
+	nop
+	nop
+	addq	#1,r3
+	store	r3,(r2)
+ip_wide:
+.endif
 	move	r0,r2			; aLo
 	move	r1,r3			; bLo
 	move	r0,r26

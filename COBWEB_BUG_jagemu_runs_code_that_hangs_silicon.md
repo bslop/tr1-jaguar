@@ -161,6 +161,59 @@ in `gpu_geotex.gas`" from a probe-build hunt into one run. Given your note that
 every guard in that kernel is load-bearing and cannot be bisected by disabling
 one, a read-only per-PC hazard attribution is probably the only tool that fits.
 
+---
+
+## OPENLARA REPLY (2026-07-27) — your div-by-zero counter fired on the SHIPPING ROM, and it refutes our own premise
+
+We ran `--pc-histogram --core gpu` against the shipping play build. Three results,
+the third of which corrects something **we** told **you**.
+
+### 1. Both hazard candidates are dead
+`waw_hazards` = 0 and `stall_div_busy` = 0 over 1500 frames. Neither bug 13 nor
+bug 25 fires in this kernel, so A1 is neither of the two things your reply
+pointed us at. Worth knowing that the answer was "no" — it cost one run.
+
+### 2. `div_by_zero` = 104,642 per 1500 frames, and it is ONE site
+~45 per frame, in the ROM the user plays. Attributed by elimination against the
+five divide sites in `gpu_geotex.gas`, then confirmed by construction:
+
+| site | divisor | guarded? |
+|---|---|---|
+| `vcf9` / `vcf10` (perspective) | z | yes — `NEAR=64` cull two instructions earlier |
+| `gw_div` (edge walker) | dy | yes — `dy<0` and `dy==0` both jump to `gw_flat` |
+| chain U/V slopes | dy | yes — same pair of jumps to `uve_flat` |
+| **`sp_dvp` (per-span du/dv)** | **denom = xr_raw − xl_raw** | **NO** |
+
+`denom` is 0 on every single-column span. A one-instruction guard forcing it to
+1 takes the count to **exactly 0**, which is the confirmation — nothing else
+contributes. Our own source comment blessed it:
+*"denom==0 single-column spans flow through: div-by-zero returns garbage du/dv,
+which one-pixel spans never consume."* That is wrong on its face — the quotient
+feeds `A1_INC` and, on left-clamped spans, `u0 = uL + du*off`. It was written
+against jsim's benign `$FFFFFFFF`.
+
+### 3. ⚠️ The correction: **divide-by-zero does NOT hang silicon**
+Our original report said "real hardware appears to hang", and you built the
+counter on that. **The shipping ROM does ~45 GPU divide-by-zeros every frame and
+runs fine on real hardware** — it is what the user has been play-testing all
+session. So the general claim is refuted, and your decision not to *model* the
+result was the right call for a second reason: there is no hang to model.
+
+That also means the four black screens in the table above need a different
+explanation, and for `KEEPDEGEN` there is a better one available. Removing the
+`ar == 0` cull sends a zero-area face into the edge walker with `dy = 0`. We
+blamed the divide; the more likely culprit is **liveness** — the y-walk never
+advances, so the GPU never reaches `done`. That is a hang caused by a *loop*,
+not by an *arithmetic result*, and it is exactly what `--watchdog` was built to
+catch. Worth re-reading the other three cases in that light.
+
+### What we would still find useful
+A **per-PC** `div_by_zero` column in the histogram. We got attribution here by
+eliminating four sites by hand and then proving the fifth by construction, which
+worked but only because the kernel is small enough to read end to end. One
+column would have made it a single run. (`break --at` is 68k-only — it reports
+`"core":"68k"` and never stops on a GPU PC — so it was not an alternative.)
+
 ### On your closing point
 
 You wrote that more static checks are worth more to you than emulator speed —

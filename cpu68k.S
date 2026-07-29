@@ -78,4 +78,83 @@ lemit_tcopy:				| (dst, src, n>=1, stride): 18B payloads
 	rts
 #endif /* LEMITDIET */
 
+#ifdef FLIPASM
+| ---------------------------------------------------------------------------
+| video_flip_asm — the LOWRES publish path, hand-written (2026-07-27).
+|
+| WHY ASSEMBLER.  The other half of this protocol is already assembler: the
+| LOWRES vblank OP-list repair lives in startup.S because video.c is built by
+| jcc68k (~10 instructions per store) and could not beat the OP's object fetch
+| at VC 32.  This is the publish half, and its ORDER is load-bearing:
+|
+|   (1) wait out the previous flip           (pending_fb must be retired)
+|   (2) pick a buffer that is neither being drawn into nor on screen
+|   (3) precompute the ISR's phrase 0        (ISR only does stores)
+|   (4) BLITTER COMPLETION BARRIER
+|   (5) publish pending_fb  L A S T
+|
+| Step 4 before step 5 is the fix this project already paid for once: gpu_sync
+| waits for Tom's GPU PROGRAM, not for the Blitter, so the last span can still
+| be transferring into `done` when it is published.  HALFRES got that barrier
+| free from blit_double's trailing blit_wait; the direct-to-display path did
+| not.  Writing it here fixes the order in the instruction stream instead of
+| relying on a compiler to keep two volatile stores on either side of a
+| non-volatile poll.
+|
+| front_fb is read EXACTLY ONCE, here, from memory.  It is written by the
+| vblank ISR (video.c:308/328) and is NOT declared volatile — so a compiler is
+| entitled to cache it.  Nothing does today only because video.c is jcc68k and
+| jcc68k keeps everything in memory; that is luck, not a guarantee.
+|
+| gcc m68k ABI: d0/d1/a0/a1 scratch, d2+/a2+ preserved.
+	.globl	video_flip_asm
+video_flip_asm:
+	movem.l	%d2,-(%sp)
+
+|	(1) wait for the previous flip to retire
+0:	tst.l	pending_fb
+	beq.s	1f
+	move.l	#0,-(%sp)		| val = 0
+	pea	pending_fb		| addr
+	jsr	cpu_stop_unless		| atomic check + STOP (no lost wakeup)
+	addq.l	#8,%sp
+	bra.s	0b
+
+1:	move.l	draw_buf,%d0		| done  = the frame just rendered
+	move.l	front_fb,%d1		| shown = what the OP is displaying
+
+|	(2) rotate to the buffer that is neither `done` nor `shown`
+	lea	fb0,%a1
+	cmp.l	%a1,%d0
+	beq.s	2f			| fb0 is being drawn -> try fb1
+	cmp.l	%a1,%d1
+	bne.s	4f			| fb0 is free -> take it
+2:	lea	fb1,%a1
+	cmp.l	%a1,%d0
+	beq.s	3f
+	cmp.l	%a1,%d1
+	bne.s	4f
+3:	lea	fb2,%a1			| both busy -> the third buffer
+4:	move.l	%a1,draw_buf
+
+|	(3) pend_fix0 = (done << 8) | (op_link >> 8)
+	move.l	%d0,%d2
+	lsl.l	#8,%d2
+	move.l	op_link,%d1
+	lsr.l	#8,%d1
+	or.l	%d1,%d2
+	move.l	%d2,pend_fix0
+
+|	(4) COMPLETION BARRIER — I/O poll, not a DRAM poll; ~nil when idle
+5:	move.l	0xF02238,%d1		| B_CMD (read = status)
+	btst	#0,%d1			| BLIT_IDLE
+	beq.s	5b
+
+|	(5) publish LAST
+	move.l	%d0,pending_fb
+
+	movem.l	(%sp)+,%d2
+	rts
+#endif /* FLIPASM */
+
 	.section .note.GNU-stack,"",%progbits
