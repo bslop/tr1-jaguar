@@ -121,6 +121,30 @@ video_flip_asm:
 	cmpa.l	#8000000,%a0
 	bhs.s	hangdiag_pend
 	bra.s	0b
+#elif defined(IRQREARM)
+| A10: do NOT sleep here waiting for an ISR that may never run.  Poll; every
+| ~200k spins re-arm the vertical interrupt; and after three failed re-arms
+| give up on the ISR and RETIRE THE FLIP HERE (video_flip_force does the ISR's
+| work inline).  Fixing only gpu_sync just moves the hang to this wait.
+	movem.l	%d0/%d1/%a0,-(%sp)
+	moveq	#0,%d0			| d0 = spin counter
+	moveq	#0,%d1			| d1 = re-arm attempts
+0:	tst.l	pending_fb
+	beq.s	7f
+	addq.l	#1,%d0
+	cmp.l	#200000,%d0
+	blt.s	0b
+	moveq	#0,%d0
+	addq.l	#1,%d1
+	cmp.l	#3,%d1
+	blt.s	6f
+	moveq	#0,%d1
+	jsr	video_flip_force	| the ISR is not coming - do its work here
+	bra.s	0b
+6:	jsr	video_rearm_irq
+	bra.s	0b
+7:	movem.l	(%sp)+,%d0/%d1/%a0
+	bra.s	1f
 #else
 0:	tst.l	pending_fb
 	beq.s	1f

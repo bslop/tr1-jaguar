@@ -29,6 +29,7 @@
 static uint32_t bcn_list[8] __attribute__((aligned(16)));
 
 void hang_beacon(uint16_t colour);
+void hang_beacon_irqstate(void);
 
 void hang_beacon(uint16_t colour)
 {
@@ -52,4 +53,33 @@ void hang_beacon(uint16_t colour)
 
     for (;;)
         ;
+}
+
+/* Report WHY no interrupt is arriving, as a colour, at the moment of the hang.
+   Reads the 68k SR (are interrupts masked?) and INT1 (is a video interrupt
+   PENDING but not being taken?). Those two bits split the remaining causes:
+
+     GREEN   enabled, nothing pending -> the interrupt genuinely never fires
+     YELLOW  enabled, VIDEO PENDING   -> it fires but is NOT TAKEN (vector/ack)
+     RED     MASKED,  nothing pending -> something left SR at IPL7
+     MAGENTA MASKED,  video pending   -> masked, and one is waiting
+
+   hangbeacon.c is pinned to gcc precisely so this can use inline asm; the
+   other C here is built by jcc68k, which cannot express __asm__. */
+void hang_beacon_irqstate(void)
+{
+    uint16_t sr;
+    uint16_t int1;
+    int masked, pending;
+
+    __asm__ volatile ("move.w %%sr,%0" : "=d"(sr));
+    int1 = *(volatile uint16_t *)0xF000E0u;
+
+    masked  = ((sr & 0x0700) != 0);
+    pending = ((int1 & 0x0001) != 0);
+
+    if (!masked && !pending) hang_beacon(0x003E);   /* GREEN   */
+    else if (!masked)        hang_beacon(0xF83E);   /* YELLOW  */
+    else if (!pending)       hang_beacon(0xF800);   /* RED     */
+    else                     hang_beacon(0xFFC0);   /* MAGENTA */
 }

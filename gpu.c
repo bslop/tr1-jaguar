@@ -133,6 +133,10 @@ int gpu_sync(void)
           if (mailbox[0] == MAGIC_DONE) { G_CTRL = 0; return 1; }
           { extern void video_rearm_irq(void); video_rearm_irq(); } }
 #else
+#if defined(BEACON_AT) && BEACON_AT == 13
+        /* Sample the interrupt state right before the FIRST sleep. */
+        if (i == 0) { extern void hang_beacon_irqstate(void); hang_beacon_irqstate(); }
+#endif
         if (cpu_stop_unless(&mailbox[0], MAGIC_DONE)) {
             G_CTRL = 0;
             return 1;

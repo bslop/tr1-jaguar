@@ -433,6 +433,10 @@ void video_init(void)
      * works, so the deadline cannot be moved. Bus-storm collisions with
      * this window are instead dodged at the SOURCE (video_wait_safe_vc()
      * before the Jerry room-transform kick in main.c). */
+    /* ☠️ REFUTED 2026-07-29: writing VMODE (VIDEN) BEFORE arming VI - so the
+       comparator is armed while the counter is running - does NOT fix A10.
+       Tried with IRQREARM off so the reorder was the only change, main.o
+       byte-identical to the failing build: still black. Do not re-run it. */
     VI = (uint16_t)(a_vdb - 4);
     INT1 = 0x0003;              /* enable VIDEO + GPU interrupts (STOP-sync) */
     cpu_irq_on();
@@ -457,6 +461,39 @@ void video_rearm_irq(void)
     INT1 = 0x0003;
     VMODE = 0x06C7;
     cpu_irq_on();
+}
+
+/* Do the vblank ISR's work FROM THE MAIN LOOP.
+   A10: when the vertical interrupt stops firing, the ISR never runs, and both
+   waits that depend on it hang forever - gpu_sync's STOP and the flip's
+   pending_fb wait. Re-arming the interrupt (video_rearm_irq) recovers many
+   builds but not all. This is the belt to that pair of braces: it retires the
+   pending flip and rebuilds the phrases the OP consumes, so the picture keeps
+   advancing even with a dead ISR. Called only from the flip wait after it has
+   already spun for a long time, so it costs nothing when the ISR is healthy.
+   It can tear - it runs at an arbitrary raster position rather than in the
+   pre-display window - but a torn frame beats a dead console. */
+void video_flip_force(void);
+void video_flip_force(void)
+{
+    uint32_t pf = pending_fb;
+    if (pf) {
+        op_fix0 = pend_fix0;
+        front_fb = pf;
+        pending_fb = 0;
+    }
+#if defined(LOWRES) && !defined(HALFRES)
+    op_list[0] = op_fix0;
+    op_list[1] = fs_ph1;
+    op_list[2] = fs_ph2;
+    op_list[3] = fs_ph3;
+    op_list[4] = 0;
+    op_list[5] = 0x4020;        /* VSCALE 2.0x | HSCALE 1.0x */
+#else
+    op_list[0] = op_fix0;
+    op_list[1] = op_fix1;
+#endif
+    OBF = 0;
 }
 
 void *video_backbuffer(void)
