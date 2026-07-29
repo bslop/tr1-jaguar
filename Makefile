@@ -328,6 +328,11 @@ endif
 # make GDSTUB=1: gd_install reports failure immediately instead of probing the
 # cart.  Diagnostic for the boot hang: it changes ONLY gdbios.o, so main.o stays
 # byte-identical to the build under test.
+# IRQREARM is ON BY DEFAULT: it is the A10 fix (see the commit that added it).
+# Build with IRQREARM_OFF=1 to get the old interrupt-only wait back for A/B.
+ifndef IRQREARM_OFF
+IRQREARM := 1
+endif
 ifdef IRQREARM
 CFLAGS   += -DIRQREARM
 CXXFLAGS += -DIRQREARM
