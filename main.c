@@ -2406,7 +2406,15 @@ int main(void)
                          selected, 256 = photo selected; positions/yaws lerp.
                          {selx,sely,selz,selyaw, unx,uny,unz,unyaw} */
                       static const int16_t mp2[2][8] = {
-                        { 0, -10, 260, 120,  -230, -80, 470, 24  },
+                        /* PASSPORT (model 81 INV_PASSPORT_CLOSED since 2026-07-28 —
+                           71 was the OPENED passport and drew a big white book over
+                           the logo). Selected spot tuned against the original's title
+                           screen: reference booklet is 24.3%% of frame height, centred
+                           at (46.4%%, 78.7%%). Measured gradients at z=520: +100 world x
+                           = +31 screen px, +100 world y = +14 (half — the 119-line
+                           LOWRES fb represents 240). NOTE: only the SELECTED entry is
+                           live on the default page; the unselected one never shows. */
+                        { -39, 319, 700, 120,  -230, -80, 470, 24  },
                         { 0,   0, 240, 0,     230, -80, 470, 96  },
                       };
                       int it2, ord2, zi[2], px[2], py[2], pz[2], yw[2];

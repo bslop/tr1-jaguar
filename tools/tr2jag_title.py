@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# tr2jag_title.py — extract the TR1 TITLE.PSX PASSPORT (model type 71) as a
+# tr2jag_title.py — extract the TR1 TITLE.PSX PASSPORT (see PASS_TYPE below) as a
 # set of STATIC POSED geotex blobs (room0_tex format) + an 8bpp mini-atlas
 # whose pixels are indexed into the EXISTING title_pal (nearest-colour map),
 # so the title screen CLUT never changes.
@@ -20,7 +20,13 @@ LEVEL = os.environ.get("TRTITLE",
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets/extracted/PSXDATA/TITLE.PSX"))
 OUT   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # jaguar/
 NPOSE = int(os.environ.get("PASS_POSES", "5"))
-PASS_TYPE = int(os.environ.get("PASS_TYPE", "71"))
+# 81 = INV_PASSPORT_CLOSED, the small closed booklet that sits ON THE RING.
+# 71 = INV_PASSPORT is the OPENED passport (anim 0 spreads its pages) and was
+# the default until 2026-07-28 — it rendered as a big white open book over the
+# TOMB RAIDER logo, nothing like the original (see the reference screencast).
+# The open model is still what you want for the passport PAGE view; the ring
+# item is the closed one.
+PASS_TYPE = int(os.environ.get("PASS_TYPE", "81"))
 PREFIXP   = os.environ.get("PASS_PREFIX", "pass")
 
 def main():
