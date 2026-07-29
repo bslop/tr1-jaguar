@@ -450,6 +450,25 @@ static int g_climbx0, g_climbz0;      /* x/z at grab: eased onto the ledge  */
 static int g_climbanim = LANIM_STOP;  /* which climb/vault anim to play    */
 static int g_pickupt;                 /* pickup animation countdown (ticks) */
 #define PICKUP_TICKS 8                 /* ticks the pickup pose plays        */
+/* ---- ROLL + SIDESTEP (2026-07-28) ------------------------------------
+   TR1 Control Method 1 puts roll on Circle and step-left/right on L2/R2.
+   The Jaguar 3-button pad has neither, so:
+     Y (Pro 6-button pad) or PAUSE = roll
+     C + LEFT/RIGHT                = sidestep   (C alone still = walk)
+   C+turn (slow turn) is traded for sidestep — it does the same
+   ledge-positioning job, and the original binds the two separately.
+   Anim ids are TR1's own (OpenLara lara.h): ANIM_STAND_ROLL_BEGIN/END and
+   ANIM_STAND_LEFT/RIGHT; all 160 anims are already baked into mrt_lara. */
+/* Roll has no entry in mrt_lara.h, so add it (TR1 ANIM_STAND_ROLL_BEGIN/END).
+   SIDESTEP DOES: mrt_lara.h already defines LANIM_STEPL=65 / LANIM_STEPR=67.
+   An earlier draft redefined them to OpenLara's ANIM_STAND_LEFT/RIGHT (2/3),
+   which both fought the generated header and played the wrong animation. */
+#define LANIM_ROLL      146
+#define LANIM_ROLLEND   147
+/* NB: SINTAB is 256 ENTRIES PER TURN (SIN(a)=SINTAB[a&255]), so a quarter
+   turn is 64 and 180 deg is 128 — NOT 1024-based like the title ring. */
+#define ROLL_TICKS        8    /* 8 x (128/8=16) = exactly 128 = 180 deg */
+static int g_rollt;                   /* >0 = mid-roll, controls locked     */
 static int g_curroom;                 /* room Lara is standing in (visibility) */
 static int g_curroom_fwd(void) { return g_curroom; }
 #define LARA_CLIMB    768             /* max standing VAULT = 3 clicks (TR1-authentic;
@@ -3116,7 +3135,7 @@ int main(void)
             int camx, camy, camz, k;
             fbpix *fb;
             /* Lara tank controls + multi-room floor-follow / wall collision */
-            { int mv=0, fy;
+            { int mv=0, fy, side=0;
               g_flr_wy = g_lay;      /* Y context for stacked-room floor picks */
               /* walking: current room + neighbours only. AIRBORNE: search
                  ALL rooms — a long drop (the Caves descent) crosses several
@@ -3131,6 +3150,29 @@ int main(void)
                   if (af > cnt - 1) af = cnt - 1;
                   g_lframe = st + af; g_anim_start = st;
                   g_pickupt--;
+                  goto lara_done;
+              }
+              /* ROLL: new press, grounded, not already busy. Yaw sweeps a
+                 full 180 deg across the move so she ends facing back the
+                 way she came, as in the original. */
+              { static uint32_t rprev;
+                uint32_t redge = pad & ~rprev; rprev = pad;
+                if ((redge & (PAD_Y|PAD_PAUSE)) && !g_rollt && !g_vault
+                    && !g_swim && g_lay >= g_lafloor - 4)
+                    g_rollt = ROLL_TICKS; }
+              if (g_rollt > 0) {
+                  int half = ROLL_TICKS >> 1;
+                  int rid  = (g_rollt > half) ? LANIM_ROLL : LANIM_ROLLEND;
+                  int seg  = (g_rollt > half) ? (ROLL_TICKS - g_rollt)
+                                              : (half - g_rollt);
+                  int rst  = rd16(g_sk_anims + rid*6);
+                  int rcnt = rd16(g_sk_anims + rid*6 + 2);
+                  int raf  = (half > 1) ? (seg * (rcnt - 1)) / (half - 1) : 0;
+                  if (raf > rcnt - 1) raf = rcnt - 1;
+                  if (raf < 0) raf = 0;
+                  g_lframe = rst + raf; g_anim_start = rst;
+                  g_layaw = (g_layaw + (128 / ROLL_TICKS)) & 255;
+                  g_rollt--;
                   goto lara_done;
               }
               if (g_vault) {
@@ -3227,6 +3269,11 @@ int main(void)
               if (pad & PAD_RIGHT) g_layaw += 3;
               if (pad & PAD_UP)   mv = 1;
               if (pad & PAD_DOWN) mv = -1;
+              /* SIDESTEP owns LEFT/RIGHT while WALK is held (undo the turn
+                 the two lines above already applied). */
+              side = ((pad & PAD_C) && (pad & (PAD_LEFT|PAD_RIGHT)) && !mv)
+                     ? ((pad & PAD_LEFT) ? -1 : 1) : 0;
+              if (side) g_layaw = (g_layaw + (side < 0 ? 3 : -3)) & 255;
               if (mv) {
                   int spd = (pad & PAD_C) ? (WALK_SPEED/2) : WALK_SPEED;  /* PAD_C = walk */
                   if (mv < 0) spd = (spd*3)>>2;            /* backing up is slower */
@@ -3241,6 +3288,20 @@ int main(void)
                   if (!room_wall_at(rsect[g_curroom], g_lax, nz) &&
                       room_floor_mr(rsect, roomCount, g_lax, nz, &nf) &&
                       g_lafloor - nf <= LARA_STEPUP) g_laz = nz;
+              }
+              if (side) {
+                  /* step perpendicular to facing: yaw +/- a quarter turn */
+                  int sy  = (g_layaw + (side < 0 ? -64 : 64)) & 255;
+                  int sspd = WALK_SPEED / 2;
+                  int sx  = g_lax + (int)(((int32_t)SIN(sy)*sspd)>>16);
+                  int sz  = g_laz + (int)(((int32_t)COS(sy)*sspd)>>16);
+                  int sf;
+                  if (!room_wall_at(rsect[g_curroom], sx, g_laz) &&
+                      room_floor_mr(rsect, roomCount, sx, g_laz, &sf) &&
+                      g_lafloor - sf <= LARA_STEPUP) g_lax = sx;
+                  if (!room_wall_at(rsect[g_curroom], g_lax, sz) &&
+                      room_floor_mr(rsect, roomCount, g_lax, sz, &sf) &&
+                      g_lafloor - sf <= LARA_STEPUP) g_laz = sz;
               }
 #ifdef DEMO_PROPS
               /* the shut door blocks the corridor until it has slid up */
@@ -3377,6 +3438,9 @@ int main(void)
                 } else if (mv < 0) {
                     lanim_set(LANIM_BACK);
                     lanim_step(1, 2);
+                } else if (side) {
+                    lanim_set(side < 0 ? LANIM_STEPL : LANIM_STEPR);
+                    lanim_step(1, 1);
                 } else if (pad & (PAD_LEFT|PAD_RIGHT)) {
                     lanim_set((pad & PAD_LEFT) ? LANIM_TURNL : LANIM_TURNR);
                     lanim_step(1, 1);
