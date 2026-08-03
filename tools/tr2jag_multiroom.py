@@ -424,6 +424,7 @@ def main():
     # entity = type u16, room u16, x/y/z s32, rotation s16, intensity u16,
     # flags u16 = 22 bytes.)
     spawn=None
+    entities=[]
     sp=r.p
     try:
         r.seek(r.u32()*16)             # spriteTextures (PSX 16B)
@@ -437,12 +438,34 @@ def main():
         nent=r.u32()
         for i in range(nent):
             et=r.u16(); erm=r.u16(); ex=r.s32(); ey=r.s32(); ez=r.s32()
-            erot=r.s16(); r.u16(); r.u16()
-            if et==0:                  # ITEM_LARA
+            erot=r.s16(); eint=r.u16(); eflg=r.u16()
+            entities.append(dict(type=et, room=erm, x=ex, y=ey, z=ez,
+                                 rot=erot, intensity=eint, flags=eflg))
+            if et==0 and spawn is None:            # ITEM_LARA
                 spawn=dict(room=erm, x=ex, y=ey, z=ez, rot=erot)
-                break
     finally:
         r.setpos(sp)
+
+    # ---- MRT_ENTAUDIT=1: dump the entity table and STOP -------------------
+    # ☠️ Exits BEFORE anything is written, so this can never wipe the level
+    # (a bare extractor run replaces every mrt_* file and the .bin are
+    # gitignored).  Same pattern as LARA_MOVEAUDIT / LARA_TONEAUDIT: answer
+    # the question offline instead of guessing at the runtime.
+    if int(os.environ.get("MRT_ENTAUDIT","0")):
+        import collections as _c
+        _n=_c.Counter(e['type'] for e in entities)
+        print("\n=== ENTITY TABLE: %d entities, %d distinct types ==="
+              % (len(entities), len(_n)))
+        for _t,_k in sorted(_n.items()):
+            _rs=sorted(set(e['room'] for e in entities if e['type']==_t))
+            print("  type %3d  x%-3d  rooms %s"
+                  % (_t,_k,_rs if len(_rs)<=10 else str(_rs[:10])+"..."))
+        print("\n  # type room        x       y       z    rot  flags")
+        for _i,_e in enumerate(entities):
+            print("  %3d %4d %4d %8d %7d %7d %6d  %04X"
+                  % (_i,_e['type'],_e['room'],_e['x'],_e['y'],_e['z'],
+                     _e['rot'],_e['flags']))
+        sys.exit(0)
     if spawn is None:
         raise SystemExit("!! Lara entity (type 0) not found in entity table")
     print("LARA SPAWN (entity table): room %d  x=%d y=%d z=%d rot=%d" %
