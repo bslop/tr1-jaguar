@@ -22,4 +22,13 @@ gpu_kernel:
 #endif
 gpu_kernel_end:
 
+/* GPU-driven Blitter probe kernel (BLITPROBE builds use it; embedding it
+ * unconditionally keeps this file free of extra flag plumbing). */
+	.balign	4
+	.globl	gpu_probe_kernel
+	.globl	gpu_probe_kernel_end
+gpu_probe_kernel:
+	.incbin	"build/gpu_blitprobe.bin"
+gpu_probe_kernel_end:
+
 	.section .note.GNU-stack,"",%progbits

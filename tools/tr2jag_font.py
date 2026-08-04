@@ -5,7 +5,7 @@
 #
 # font_load.bin (big-endian):
 #   u16 count, u16 palOff
-#   count * { u8 ch, u8 w, u8 h, u8 pad, u32 pixOff }
+#   count * { u8 ch, u8 w, u8 h, u8 yoff, u32 pixOff }   yoff = top vs baseline
 #   pixels... (w*h bytes each)
 #   at palOff: 16 * u16 RGB16 (Jaguar '(r<<11)|(b<<6)|(g<<1)' format)
 import struct, sys, os
@@ -14,7 +14,15 @@ import tr2jag_multiroom as T
 
 LEVEL=os.environ.get("TRLEVEL", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets/extracted/PSXDATA/LEVEL1.PSX"))
 OUT  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WANT = os.environ.get("FONT_CHARS", "LOADING...")
+# DEFAULT IS THE FULL SET (2026-08-01). font_load.bin is a generated artifact
+# and is NOT tracked, so whatever this default produces is what a fresh checkout
+# ends up shipping. It used to be "LOADING...", which is why the game had a
+# 10-glyph font and the menu work looked font-blocked for weeks. Anything that
+# needs a narrower blob should pass FONT_CHARS explicitly.
+FULLSET = ("ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+           "abcdefghijklmnopqrstuvwxyz"
+           "0123456789.,!?'-")
+WANT = os.environ.get("FONT_CHARS", FULLSET)
 
 raw=open(LEVEL,'rb').read()
 r=T.R(raw); r.u32(); r.u32(); r.seek(8)
@@ -31,12 +39,22 @@ sprCount=r.u32(); pSpr=r.p
 # The glyph run: 'A' is the sprite right after the three gold sparkles.
 # Empirically (contact sheet): A..Z start at index 37, then a..z, 0..9, punct.
 BASE_A = int(os.environ.get("FONT_BASE_A", "37"))
+# PUNCTUATION (2026-08-01): identified by rendering sprites 96..119 and reading
+# the contact sheet, not by guessing at TR's table order. Indices 99..108 are:
+#     99 .    100 ,    101 !    102 ?    103 [
+#    104 "    105 /    106 ^    107 '    108 -
+# The APOSTROPHE is 107 - needed for "Lara's Home" on the title ring. 99 and 100
+# are both small 8x8 marks and are easy to confuse; the period sits low, the
+# comma carries a tail.
+PUNCT={'.':99, ',':100, '!':101, '?':102, '[':103,
+       '"':104, '/':105, '^':106, "'":107, '-':108}
 def chidx(c):
     if 'A'<=c<='Z': return BASE_A + (ord(c)-65)
     if 'a'<=c<='z': return BASE_A + 26 + (ord(c)-97)
     if '0'<=c<='9': return BASE_A + 52 + (ord(c)-48)
-    if c=='.': return BASE_A + 62          # idx 99: 8x8 period (contact sheet)
-    raise SystemExit("unmapped char "+c)
+    if c in PUNCT:  return PUNCT[c]
+    raise SystemExit("unmapped char %r (add it to PUNCT after identifying its "
+                     "sprite index from a contact sheet)" % c)
 
 def tile_nibble(ti,x,y):
     b=raw[tiles_off+ti*T.TILE_PAGE_BYTES+(y*256+x)//2]
@@ -48,9 +66,18 @@ for c in WANT:
     l,t2,rr,b2,clut,tile,u0,v0,u1,v1 = struct.unpack_from("<hhhhHHBBBB",raw,o)
     w=u1-u0+1; h=v1-v0+1
     px=bytes(tile_nibble(tile&0x3FFF,u0+x,v0+y) for y in range(h) for x in range(w))
-    glyphs.append((c,w,h,px))
+    # VERTICAL PLACEMENT (2026-08-01). The sprite record's `t2` is the glyph's
+    # top relative to the text baseline, and it is -16 for EVERY glyph (-15 for
+    # 'y'). Descenders are not shifted down, they are simply TALLER: p, g and y
+    # measure 16x24 where a, e, o measure 16x16, hanging 8 px below the
+    # baseline. So glyphs must be TOP-aligned. Bottom-aligning them - which is
+    # what `yoff = 16 - h` does - lifts every descender 8 px, and "Step Left"
+    # renders with a superscript p. Store the real offset instead of recomputing
+    # a wrong one at draw time; it fits the record's spare pad byte.
+    yoff=t2+16
+    glyphs.append((c,w,h,yoff,px))
     if palclut is None: palclut=clut
-    print("glyph %r idx=%d %dx%d clut=%d" % (c,i,w,h,clut))
+    print("glyph %r idx=%d %dx%d yoff=%d clut=%d" % (c,i,w,h,yoff,clut))
 
 # palette: PSX 16-colour clut -> Jaguar RGB16
 pal=[]
@@ -61,8 +88,8 @@ for k in range(16):
 
 hdr=bytearray(); pix=bytearray()
 body_off=4+len(glyphs)*8
-for (c,w,h,px) in glyphs:
-    hdr+=struct.pack(">BBBBI", ord(c), w, h, 0, body_off+len(pix))
+for (c,w,h,yoff,px) in glyphs:
+    hdr+=struct.pack(">BBBBI", ord(c), w, h, yoff & 0xFF, body_off+len(pix))
     pix+=px
 palOff=body_off+len(pix)
 blob=struct.pack(">HH", len(glyphs), palOff)+bytes(hdr)+bytes(pix)

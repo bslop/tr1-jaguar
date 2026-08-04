@@ -43,3 +43,14 @@ __pycache__/
 GameDrive_SD/
 TombRaider-Jaguar/
 music_variants/
+
+# ── Kernel working snapshots & scratch (kept locally, not in git) ──────
+# pre-campaign backups: gpu_geotex.gas.prejopt/.prerect/.reloc/.working/... etc
+gpu_geotex.gas.*
+*.working
+# scratch jsim probe output
+jsim_*.json
+jsim_*.err
+# transient diagnostic screenshots
+probes/*.png
+probes/**/*.png

@@ -45,6 +45,38 @@ pass_geom:
 	.globl pass_atlas
 pass_atlas:
 	.incbin "pass_atlas.bin"
+
+#ifdef PASS2ALIAS
+| DIAGNOSTIC: alias the opened passport onto the closed one's data instead of
+| linking its own 81 KB.  Every line of the new title code still builds and
+| runs; only the ROM size goes back to what the last BOOTING build had.  It
+| renders wrong on purpose - it exists to split "the image got 81 KB bigger"
+| from "the new code runs" as the cause of a silicon boot hang.
+	.globl pass2_geom
+	.globl pass2_atlas
+	.set pass2_geom, pass_geom
+	.set pass2_atlas, pass_atlas
+#else
+	.balign 8
+	.globl pass2_geom
+pass2_geom:
+	.incbin "pass2_geom.bin"
+
+	.balign 8
+	.globl pass2_atlas
+pass2_atlas:
+	.incbin "pass2_atlas.bin"
+#endif
+	.balign 8
+	.globl ctrl_geom
+ctrl_geom:
+	.incbin "ctrl_geom.bin"
+
+	.balign 8
+	.globl ctrl_atlas
+ctrl_atlas:
+	.incbin "ctrl_atlas.bin"
+
 	.balign 8
 	.globl photo_geom
 photo_geom:
@@ -102,3 +134,13 @@ gym_lara:
 gym_lskin:
 	.incbin "gym_lskin.bin"
 	.section .note.GNU-stack,"",%progbits
+
+/* jcc68k keeps the statically-dead single-room data references that
+ * gcc -O2 eliminates under MULTIROOM (see Makefile OBJS comment); the
+ * paths are unreachable at runtime, so empty stubs satisfy the link. */
+	.section .rodata
+	.globl	rooms_data
+	.globl	lara_data
+rooms_data:
+lara_data:
+	.long	0

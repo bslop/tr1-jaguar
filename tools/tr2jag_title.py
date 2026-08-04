@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# tr2jag_title.py — extract the TR1 TITLE.PSX PASSPORT (model type 71) as a
+# tr2jag_title.py — extract the TR1 TITLE.PSX PASSPORT (see PASS_TYPE below) as a
 # set of STATIC POSED geotex blobs (room0_tex format) + an 8bpp mini-atlas
 # whose pixels are indexed into the EXISTING title_pal (nearest-colour map),
 # so the title screen CLUT never changes.
@@ -20,8 +20,20 @@ LEVEL = os.environ.get("TRTITLE",
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets/extracted/PSXDATA/TITLE.PSX"))
 OUT   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # jaguar/
 NPOSE = int(os.environ.get("PASS_POSES", "5"))
-PASS_TYPE = int(os.environ.get("PASS_TYPE", "71"))
+# 81 = INV_PASSPORT_CLOSED, the small closed booklet that sits ON THE RING.
+# 71 = INV_PASSPORT is the OPENED passport (anim 0 spreads its pages) and was
+# the default until 2026-07-28 — it rendered as a big white open book over the
+# TOMB RAIDER logo, nothing like the original (see the reference screencast).
+# The open model is still what you want for the passport PAGE view; the ring
+# item is the closed one.
+PASS_TYPE = int(os.environ.get("PASS_TYPE", "81"))
 PREFIXP   = os.environ.get("PASS_PREFIX", "pass")
+# PASS_TEXDIV: decimate the mini-atlas texels by this factor (UVs scale with
+# it). Ring items are ~10%% of screen width, so full-resolution texels are
+# wasted on them - the controller (INV_CONTROLS, 20 tiles) packs to 256x2630 =
+# 657 KB at 1:1, which alone would not fit alongside the level in 2 MB of DRAM.
+# 4 takes it to ~41 KB and is invisible at that size.
+TEXDIV    = max(1, int(os.environ.get("PASS_TEXDIV", "1")))
 
 def main():
     data = open(LEVEL, 'rb').read()
@@ -150,11 +162,14 @@ def main():
         us=[p[0] for p in o['uv']]; vs=[p[1] for p in o['uv']]
         # passport textures are quads in the title file; keep 4-corner bbox
         umin,umax,vmin,vmax=min(us),max(us),min(vs),max(vs)
-        w=umax-umin+1; h=vmax-vmin+1
+        w=(umax-umin)//TEXDIV+1; h=(vmax-vmin)//TEXDIV+1
         px=[]
-        for y in range(vmin,vmax+1):
-            for x in range(umin,umax+1):
-                px.append(clut_rgb555(o['clut'],tile_nibble(o['tile'],x,y)))
+        for y in range(h):
+            for x in range(w):
+                px.append(clut_rgb555(o['clut'],
+                          tile_nibble(o['tile'],
+                                      min(umin+x*TEXDIV,umax),
+                                      min(vmin+y*TEXDIV,vmax))))
         grp[ti]=(len(tiles),umin,vmin)
         tiles.append(dict(w=w,h=h,px=px))
     # shelf pack
@@ -208,7 +223,8 @@ def main():
             cx,cy=sw_of[f['tex']]
             return [(cx+1,cy+1),(cx+SW-2,cy+1),(cx+SW-2,cy+SW-2),(cx+1,cy+SW-2)]
         g,umin,vmin=grp[f['tex']]; ax,ay=pos[g]
-        return [(ax+(u-umin),ay+(v-vmin)) for (u,v) in objtex[f['tex']]['uv']]
+        return [(ax+(u-umin)//TEXDIV,ay+(v-vmin)//TEXDIV)
+                for (u,v) in objtex[f['tex']]['uv']]
     blob=bytearray(); offs=[]
     for pi in range(NPOSE):
         fidx=(pi*(nframes-1))//max(1,NPOSE-1)

@@ -1,0 +1,759 @@
+; ============================================================================
+; gpu_sflats.gas — SECTOR FLATS (floor + ceiling) by visplane spans.   P2b.
+; ============================================================================
+; Draws every horizontal surface of a room WITHOUT transforming a single
+; vertex.  This is the half of the sector renderer that the measurements say
+; carries the win.
+;
+; ☠️☠️ DO NOT EDIT THE ARITHMETIC HERE FIRST.  tools/p2_flats_fixed.py runs the
+; SAME integer operations offline — 16x16 imult, unsigned div with manual sign,
+; arithmetic shifts — asserts every intermediate fits the register width the
+; instruction actually provides, and diffs the result against the float oracle
+; in tools/p2_flats_ref.py (99.75% pixel agreement, room 26, 8 yaws).  The
+; emulator loop is down, so a silicon check costs a flash + a physical reset.
+; Change the model, prove it there, then transliterate.
+;
+; WHY THIS EXISTS (all measured, 2026-08-02, this project):
+;   remove the WORLD  : 7.50 -> 12.00 fps  => the world is 37.5% of frame time
+;   flats are 47.8% of world faces         => flats ~= 17.9% of frame time
+;   Tom's busy splits 82% per-face SETUP / 18% rasterisation
+;   sector grouping   : 296 flat surfaces in room 26 collapse to 19 VISPLANES
+; ☠️☠️ THE SETUP SAVING IS 7x THE RASTER SAVING.  A kernel that merges spans but
+; still does per-face setup captures 2% and measures as NOTHING.  The whole
+; design below exists to avoid ever touching a vertex.
+;
+; SPANS PER FRAME, room 26, 8 yaws (lower is better; this IS the setup count):
+;   polygon path today                       420      1.00x
+;   naive visplane                           232      1.81x
+;   + axis-matched run lists                 202      2.08x
+;   + greedy row merge                       170      2.47x   <- this kernel
+;   exact visplane oracle                    163      2.58x
+; and 84.6 px/span against the polygon path's 33.9.
+;
+; THE STRUCTURAL FACT THAT MAKES IT CHEAP
+;   For a HORIZONTAL plane at world height h, the screen ROW alone fixes the
+;   distance:            Z = FOCAL_Y * (h - cam_y) / (y - CY)
+;   Z does not depend on the column.  So every row of a flat is a CONSTANT-Z
+;   segment: the texture step across it is constant (affine, no perspective
+;   divide per pixel) and the nearest surface at a column is just the smallest
+;   positive Z.  No z-buffer.
+;
+; ★★★★★ IDEA 1 — CLIP IN SCREEN SPACE, NOT WORLD SPACE.  The reference solves
+;   for a WORLD lateral offset t and then projects:
+;        t = (x0 - ox)/ca ;   sx = CX + FOCAL*t/Z
+;   Compose them and the two divides collapse into one:
+;        sx - CX = (x0 - ox) * FOCAL / (Z*ca)
+;   Z is constant for the ROW and ca for the FRAME, so ONE reciprocal per
+;   (row, plane) does the job of the projection divide AND both x-slab divides
+;   AND both z-slab divides.  Per RUN: zero divides, four imults, compares.
+;   ⇒ the "no divides in the run loop" rule is satisfied STRUCTURALLY, not by
+;   hoisting five separate reciprocals.
+;
+; ★★★★★ IDEA 2 — PAINTER ORDER IS FREE.  Two floors at different heights can
+;   both be visible on one row, at different columns, so a single nearest-plane
+;   pick per row is WRONG (the version of this file before P2b did exactly
+;   that).  But Z = FOCAL_Y*dh/yr, so at any row the depth ORDER of the planes
+;   depends only on |h - cam_y| — and that order is THE SAME FOR EVERY ROW.
+;   ⇒ the 68k sorts the visplane list ONCE PER FRAME by |h - cam_y| descending
+;   and this kernel just draws in list order, far to near.  Correct occlusion,
+;   no z-buffer, no per-row sort, no per-column state.  Costs ~15% overdraw in
+;   PIXELS, which is the cheap axis (raster is 18% of Tom, setup is 82%).
+;
+; ★★★★ IDEA 3 — AXIS-MATCHED RUN LISTS.  A row's world line runs along
+;   (ca, -sa).  If a plane's cells are merged into rects elongated ACROSS that
+;   direction, one row crosses many rects and emits many adjacent spans (280 at
+;   yaw 90).  Merged the other way it is one rect (134).  Both merges are STATIC
+;   per room, so the extractor emits BOTH and the 68k points at one per frame:
+;   |ca| >= |sa| -> x-major, else z-major.  Runtime cost: zero.
+;
+; ★★★★ IDEA 4 — GREEDY ROW MERGE, NO SORT.  Within one (row, plane) hold a
+;   single PENDING interval; extend it when the next run touches or overlaps,
+;   else flush and start again.  Runs arrive in near-screen order so this
+;   catches almost everything a full sort would, for ~8 instructions per run and
+;   no memory.  Out-of-order arrivals cost an extra flush, never correctness.
+;   This is what fixes the diagonal yaws (309 -> 204 at yaw 135).
+;
+; ☠️☠️ SRAM BUDGET — READ BEFORE EDITING
+;   GPU SRAM is 4 KB ($F03000..$F03FFF); usable code space ends at $F03E60
+;   (SRAM vars) => 3680 bytes.  gpu_geotex.bin is ALREADY 3572 of those 3680,
+;   so this kernel and gpu_geotex CANNOT BOTH BE RESIDENT.
+;   ✅ RESOLVED 2026-08-02 — AND NOT THE WAY THIS FILE ORIGINALLY SAID.  The old
+;   plan was to STRIP gpu_geotex and merge the two.  That route is DEAD ON
+;   ARITHMETIC: stripping reclaims at most 202 B (measured, NOJCACHE) and
+;   co-residency needs >=218 B and grows with every line written here.
+;   ⇒ USE AN OVERLAY: keep BOTH kernels in DRAM and copy the needed one into
+;   SRAM per pass.  Measured free — `KSWAP=2` (two 3572-byte reloads per frame,
+;   exactly what an overlay pays) came out at +0.02% against a +-4% noise floor.
+;   ⇒ So this kernel does NOT have to fit beside gpu_geotex, and the polygon
+;   path survives intact as a fallback — every phase from here can be diffed
+;   against a known-good picture instead of being all-or-nothing.
+;
+; PARAMETER BLOCK (params, r0 on entry) — 68k-built, one per frame:
+;   [0] framebuffer base (8bpp)
+;   [1] visplane list base       [2] visplane count
+;   [3] camera y (world s32)     [4] camera x        [5] camera z
+;       ☠️ x/z are ROOM-LOCAL and must satisfy 0 <= x,z < 32768 (see FARZ).
+;   [6] sin(yaw)<<14             [7] cos(yaw)<<14
+;   [8] atlas base               [9] atlas width      (P2c; unread today)
+;  [10] run-list selector: 0 = x-major, 1 = z-major  (68k: |sa| > |ca|)
+;
+; VISPLANE RECORD (24 bytes), sorted FAR->NEAR by |height - cam_y| by the 68k:
+;   +0  height (world s32)
+;   +4  texture id  (P2b: used as an 8-bit palette index for the flat fill)
+;   +8  x-major run count        +12 x-major run pointer
+;   +16 z-major run count        +20 z-major run pointer
+;   +24 row0 (inclusive)         +28 row1 (exclusive)
+;       the ONLY rows this plane can reach — see the plane_loop header.  The
+;       68k derives them per frame from the bbox depth range; they must be
+;       CONSERVATIVE (too wide is free, too tight silently drops spans).
+; RUN (8 bytes, 2 longs): [0] = (x0<<16)|x1 , [1] = (z0<<16)|z1, world units,
+; room-local, x1/z1 EXCLUSIVE.  Both lists are stored in (x,z) order, so the
+; kernel reads them identically whichever one it is pointed at.
+;
+; ⛔ STATUS: PARKED AT P2b BY USER DECISION (2026-08-02).  The geometry is
+; COMPLETE and offline-verified (8/8 yaws span-exact).  The fill is a flat
+; PATDSEL colour.  P2c — the affine textured span — is BLOCKED:
+;
+; ☠️☠️ THE BLITTER CANNOT WRAP A TEXTURE MID-SPAN.  Its A1 address generator
+; walks LINEARLY (A1_CLIP clips, it does not modulo; the WID field wraps to the
+; next ROW, which is not the same thing).  TR1 floors tile once per 1024-unit
+; SECTOR, and a merged visplane span crosses several sectors, so the texture
+; must repeat along it.  Measured, room 26, 8 yaws — blits/frame:
+;     flat fill (this file)          170    2.47x vs the 420-blit polygon path
+;     no tiling, split at boundaries 492    0.85x  <- WORSE than what it replaces
+;     2x2 pre-tiled atlas            278    1.51x  (+49% atlas)
+;     4x4 pre-tiled atlas            200    2.10x  (16x flat texels)
+; Only 11.9% of merged spans stay inside ONE tile (5.0% of pixels).
+; ⇒ UNTEXTURED the merge is a 2.47x setup win; TEXTURED it gives most of it
+; back.  The atlas is already 280 KB and a SMALLER growth than 2x2 was already
+; measured at −12.4% fps.
+;
+; ★★★★★ THE PROCESS LESSON: this gate belonged BEFORE the geometry, not after.
+; When a plan says "merge N things into one", the FIRST question is whether the
+; HARDWARE can draw the merged thing in ONE operation — not whether the merge
+; is geometrically sound.  The overlay/KSWAP gate was built early and correctly;
+; this one was never built, because "fewer, longer spans" was assumed drawable.
+;
+; ⬜ If resumed: cheapest route is tiling only the DOMINANT floor textures
+; (room 26's top two cover 83% of its surfaces) with a split fallback for the
+; rest.  Do the atlas-growth A/B FIRST.  P4 (dispatch/overlay) is also still
+; unwritten, so no on-silicon number is reachable without both.
+; ============================================================================
+
+		.gpu
+		.org	$F03000
+
+; ---- register map ----------------------------------------------------------
+;  r0  params        r1  scratch C     r2  plane list    r3  plane count
+;  r4  row y         r5  yr = y-CY     r6  Z             r7  scratch A
+;  r8  cam y         r9  plane ptr     r10 planes left   r11 scratch B / retaddr
+;  r12 run ptr       r13 runs left     r14 lo            r15 BLITTER BASE
+;  r16 ox            r17 oz            r18 RA (0=degen)  r19 RB (0=degen)
+;  r20 run-list byte offset (8|16)     r21 pending flag  r22 flush retaddr
+;  r23 far-branch scratch              r24 sin<<14       r25 cos<<14
+;  r26 cam x         r27 cam z         r28 hi            r29 pend0
+;  r30 scratch D     r31 pend1
+; ☠️ Only r14/r15 support `load (Rn+imm)`, which is why r15 is nailed to the
+; Blitter register file and every other pointer is bumped by hand.
+
+FOCAL_Y		.equ	80
+CXV		.equ	160
+CYV		.equ	60
+RENDER_W	.equ	320
+RENDER_H	.equ	120
+NEARZ		.equ	64
+FARZ		.equ	32000		; Z is an imult operand: it must fit s16
+DMIN		.equ	32		; |Z*cos| below this: axis is degenerate
+RNUM		.equ	655360		; FOCAL*16*256 — see the reciprocal note
+PLSTRIDE	.equ	32		; visplane record size
+
+A1_BASE		.equ	$F02200		; Blitter register file base
+A2_BASE		.equ	$F02224
+A2_FLAGS	.equ	$F02228
+A2_FLAGS_VAL	.equ	$00014218	; PITCH1|PIXEL8|WID320|XADDPIX
+G_DIVCTRL	.equ	$F0211C
+G_CTRL		.equ	$F02114
+BLIT_CMD	.equ	$00010800	; PATDSEL | DSTA2
+
+start:
+		; integer divide mode: this kernel never divides in 16.16
+		movei	#G_DIVCTRL,r7
+		moveq	#0,r11
+		store	r11,(r7)
+
+		; ---- parameter block (hand-bumped; see the r14/r15 note) ---
+		move	r0,r7
+		load	(r7),r1			; [0] framebuffer base
+		addq	#4,r7
+		nop
+		nop
+		movei	#A2_BASE,r11
+		store	r1,(r11)		; A2_BASE = framebuffer (dest)
+		movei	#A2_FLAGS,r11
+		movei	#A2_FLAGS_VAL,r1
+		store	r1,(r11)
+		load	(r7),r2			; [1] visplane list
+		addq	#4,r7
+		nop
+		nop
+		load	(r7),r3			; [2] visplane count
+		addq	#4,r7
+		nop
+		nop
+		load	(r7),r8			; [3] camera y
+		addq	#4,r7
+		nop
+		nop
+		load	(r7),r26		; [4] camera x
+		addq	#4,r7
+		nop
+		nop
+		load	(r7),r27		; [5] camera z
+		addq	#4,r7
+		nop
+		nop
+		load	(r7),r24		; [6] sin(yaw)<<14
+		addq	#4,r7
+		nop
+		nop
+		load	(r7),r25		; [7] cos(yaw)<<14
+		addq	#4,r7
+		nop
+		nop
+		addq	#8,r7			; skip [8] atlas, [9] atlas width
+		load	(r7),r20		; [10] run-list selector
+		nop
+		nop
+		nop
+		shlq	#3,r20			; 0 -> +8, 1 -> +16
+		addq	#8,r20
+		movei	#A1_BASE,r15
+		move	r2,r9			; plane cursor
+		move	r3,r10			; planes remaining
+
+; ============================================================================
+; PLANE-MAJOR.  Outer loop planes (pre-sorted FAR -> NEAR, so this walk IS the
+; painter), inner loop only THE ROWS THAT PLANE CAN REACH.
+;
+; ★★★★★ WHY THIS WAY ROUND — MEASURED, room 26.  Row-major visited 120 rows x
+; 19 planes = 2280 (row,plane) pairs and paid a sign test, a divide and two
+; reciprocals on each; only 971 survived the sign test and only ~270 could
+; produce a span.  The waste was the whole cost: 413k instructions retired for
+; 182 spans, and the pass came to 776k cycles — MORE than the polygon flats it
+; was meant to replace.
+;
+; The cull that fixes it is free.  A row's world line is the locus of camera
+; depth == Z, so a plane can only appear on rows whose Z lies inside the
+; camera-space depth range of the plane's bounding box.  That range depends on
+; the bbox, the camera and the yaw — NOT on the row — so it is constant for the
+; frame, and the 68k converts it straight into a ROW RANGE (+24/+28) via
+; Z = FOCAL_Y*dh/yr.  The kernel then does no sign test, no near/far test and
+; no reject work at all: it just loops the rows that matter.
+; ⇒ 2280 plane-visits -> ~270.  See tools/p2_flats_fixed.py plane_rows().
+; ☠️ The bound must be CONSERVATIVE (widen, never narrow).  Extra rows cost a
+; little work and emit nothing, because the per-run clip still rejects them —
+; so the span list is identical either way.  A bound that is too TIGHT silently
+; drops spans, and nothing downstream would notice.
+; ============================================================================
+plane_loop:
+		movei	#done,r23
+		cmpq	#0,r10
+		jump	EQ,(r23)
+		nop
+		; ---- per-PLANE, not per-row: dh and FOCAL_Y*|dh| ----------
+		load	(r9),r7			; plane height (world)
+		nop
+		nop
+		nop
+		sub	r8,r7			; dh = height - cam_y
+		move	r7,r2
+		jr	PL,pl_dh
+		nop
+		neg	r2
+pl_dh:
+		movei	#FOCAL_Y,r1
+		imult	r1,r2			; r2 = 80*|dh|, fixed for the plane
+		move	r9,r30
+		movei	#24,r7
+		add	r7,r30
+		load	(r30),r4		; row0 (inclusive)
+		addq	#4,r30
+		nop
+		nop
+		load	(r30),r3		; row1 (exclusive)
+		nop
+		nop
+		nop
+
+row_loop:
+		movei	#plane_next,r23
+		cmp	r3,r4
+		jump	PL,(r23)		; row >= row1 -> plane done
+		nop
+		movei	#CYV,r5
+		sub	r4,r5
+		neg	r5			; r5 = y - CY
+		move	r5,r11
+		jr	PL,rl_yr
+		nop
+		neg	r11			; |yr|
+rl_yr:
+		movei	#row_next,r23
+		cmpq	#0,r11
+		jump	EQ,(r23)		; the horizon draws nothing
+		nop
+
+		; ---- THE ROW DIVIDE:  Z = FOCAL_Y*|dh| / |yr| --------------
+		; The multiply is gone: r2 was computed once for the plane.
+		move	r2,r30
+		div	r11,r30			; Z, positive
+		move	r30,r6
+		; The row range already implies both of these; they are kept as
+		; cheap insurance (only ~270 visits now) because a Z outside
+		; s16 would silently corrupt every imult below.
+		movei	#NEARZ,r1
+		movei	#row_next,r23
+		cmp	r1,r6
+		jump	MI,(r23)		; inside the near plane
+		nop
+		movei	#FARZ,r1
+		movei	#row_next,r23
+		cmp	r1,r6
+		jump	PL,(r23)		; beyond s16: would break the imults
+		nop
+
+		; ---- the row's world line ----------------------------------
+		;   P(u) = (ox + u*k*cos,  oz - u*k*sin),  u = column - CX
+		move	r6,r30
+		imult	r24,r30
+		sharq	#14,r30			; zs = Z*sin(yaw)
+		move	r6,r31
+		imult	r25,r31
+		sharq	#14,r31			; zc = Z*cos(yaw)
+		move	r26,r16
+		add	r30,r16			; ox = cam_x + zs
+		move	r27,r17
+		add	r31,r17			; oz = cam_z + zc
+
+		; ---- the two reciprocals: ONE divide each, per (row,plane).
+		; These replace the projection divide and all four slab
+		; divides.  0 means "this axis is degenerate".  Both can never
+		; be degenerate at once: max(|zs|,|zc|) >= 0.707*Z >= 45 > DMIN
+		; because Z >= NEARZ.
+		moveq	#0,r18
+		move	r17,r30
+		sub	r27,r30			; zc  (recomputed: recip clobbers)
+		move	r30,r1
+		movei	#ra_abs,r23
+		cmpq	#0,r1
+		jump	PL,(r23)
+		nop
+		neg	r1
+ra_abs:
+		movei	#DMIN,r11
+		movei	#sk_ra,r23
+		cmp	r11,r1
+		jump	MI,(r23)		; |zc| < DMIN -> degenerate
+		nop
+		movei	#ra_ret,r11
+		movei	#recip,r23
+		jump	(r23)
+		nop
+ra_ret:
+		move	r30,r18			; RA
+sk_ra:
+		moveq	#0,r19
+		move	r16,r30
+		sub	r26,r30			; zs
+		move	r30,r1
+		movei	#rb_abs,r23
+		cmpq	#0,r1
+		jump	PL,(r23)
+		nop
+		neg	r1
+rb_abs:
+		movei	#DMIN,r11
+		movei	#sk_rb,r23
+		cmp	r11,r1
+		jump	MI,(r23)		; |zs| < DMIN -> degenerate
+		nop
+		movei	#rb_ret,r11
+		movei	#recip,r23
+		jump	(r23)
+		nop
+rb_ret:
+		move	r30,r19			; RB
+sk_rb:
+
+		; ---- this plane's run list (x-major or z-major) ------------
+		move	r9,r30
+		add	r20,r30
+		load	(r30),r13		; run count
+		addq	#4,r30
+		nop
+		nop
+		load	(r30),r12		; run pointer
+		moveq	#0,r21			; no pending span
+		nop
+		nop
+
+; ---- THE RUN LOOP.  No divides here, by construction. ----------------------
+run_loop:
+		movei	#run_done,r23
+		cmpq	#0,r13
+		jump	EQ,(r23)
+		nop
+		subq	#1,r13
+		; Both loads are issued back to back and the two moveis cover
+		; the load-use distance, so neither costs a nop.  r12 is
+		; advanced BY THE FULL RUN here, before any skip path can be
+		; taken — a skip that left it half-advanced would desynchronise
+		; the whole run list.
+		load	(r12),r7		; (x0<<16)|x1
+		addq	#4,r12
+		load	(r12),r1		; (z0<<16)|z1
+		addq	#4,r12
+		movei	#$FFFF8000,r14		; lo = -inf
+		movei	#$00007FFF,r28		; hi = +inf
+
+		; ---- x slab ------------------------------------------------
+		cmpq	#0,r18
+		movei	#xs_degen,r23
+		jump	EQ,(r23)
+		nop
+		move	r7,r11
+		shrq	#16,r11			; x0
+		sub	r16,r11
+		sharq	#4,r11			; (x0 - ox) / 16
+		imult	r18,r11
+		sharq	#8,r11			; u0 = screen offset
+		move	r7,r30
+		shlq	#16,r30
+		shrq	#16,r30			; x1
+		sub	r16,r30
+		sharq	#4,r30
+		imult	r18,r30
+		sharq	#8,r30			; u1
+		movei	#xs_ord,r23
+		cmp	r30,r11
+		jump	MI,(r23)		; u0 < u1: already ordered
+		nop
+		move	r11,r7			; RA < 0 flips the pair
+		move	r30,r11
+		move	r7,r30
+xs_ord:
+		movei	#xs_lo,r23
+		cmp	r14,r11
+		jump	MI,(r23)
+		nop
+		move	r11,r14			; lo = max(lo, u0)
+xs_lo:
+		movei	#xs_done,r23
+		cmp	r28,r30
+		jump	PL,(r23)
+		nop
+		move	r30,r28			; hi = min(hi, u1)
+		movei	#xs_done,r23
+		jump	(r23)
+		nop
+xs_degen:
+		; world x barely moves across the whole row, so the slab
+		; collapses to a containment test at x = ox
+		move	r7,r11
+		shrq	#16,r11			; x0
+		movei	#run_loop,r23
+		cmp	r11,r16
+		jump	MI,(r23)		; ox < x0 -> run not on this row
+		nop
+		move	r7,r30
+		shlq	#16,r30
+		shrq	#16,r30			; x1
+		movei	#run_loop,r23
+		cmp	r16,r30
+		jump	MI,(r23)		; x1 < ox
+		nop
+xs_done:
+		; ☠️ MEASURED DEAD (2026-08-02): an early "hi <= lo" exit here,
+		; to skip the z slab on runs the x slab already killed, changed
+		; instret by ZERO and cost ~2% cycles.  ~89% of run-visits emit
+		; nothing, but the x slab alone almost never settles it — the
+		; rejection is nearly always the two slabs COMBINED.  Do not
+		; re-add it without a measurement.
+
+		; ---- z slab.  world z = oz - u*k*sin, so z1 gives the LOW
+		;      bound and z0 the high one — the sign flip is why this
+		;      reads (oz - z1) first.
+		cmpq	#0,r19
+		movei	#zs_degen,r23
+		jump	EQ,(r23)
+		nop
+		move	r1,r11
+		shlq	#16,r11
+		shrq	#16,r11			; z1
+		neg	r11
+		add	r17,r11			; oz - z1
+		sharq	#4,r11
+		imult	r19,r11
+		sharq	#8,r11			; v0
+		move	r1,r30
+		shrq	#16,r30			; z0
+		neg	r30
+		add	r17,r30			; oz - z0
+		sharq	#4,r30
+		imult	r19,r30
+		sharq	#8,r30			; v1
+		movei	#zs_ord,r23
+		cmp	r30,r11
+		jump	MI,(r23)
+		nop
+		move	r11,r7
+		move	r30,r11
+		move	r7,r30
+zs_ord:
+		movei	#zs_lo,r23
+		cmp	r14,r11
+		jump	MI,(r23)
+		nop
+		move	r11,r14			; lo = max(lo, v0)
+zs_lo:
+		movei	#zs_done,r23
+		cmp	r28,r30
+		jump	PL,(r23)
+		nop
+		move	r30,r28			; hi = min(hi, v1)
+		movei	#zs_done,r23
+		jump	(r23)
+		nop
+zs_degen:
+		move	r1,r11
+		shrq	#16,r11			; z0
+		movei	#run_loop,r23
+		cmp	r11,r17
+		jump	MI,(r23)		; oz < z0
+		nop
+		move	r1,r30
+		shlq	#16,r30
+		shrq	#16,r30			; z1
+		movei	#run_loop,r23
+		cmp	r17,r30
+		jump	MI,(r23)		; z1 < oz
+		nop
+zs_done:
+		movei	#run_loop,r23
+		cmp	r28,r14
+		jump	PL,(r23)		; hi <= lo -> empty
+
+		; ---- to screen columns.  The projection is ALREADY folded
+		;      into RA/RB, so this is just the centre offset.
+		nop
+		movei	#CXV,r7
+		add	r7,r14			; i0
+		add	r7,r28			; i1
+		movei	#i0_ok,r23
+		cmpq	#0,r14
+		jump	PL,(r23)
+		nop
+		moveq	#0,r14
+i0_ok:
+		movei	#RENDER_W,r7
+		movei	#i1_ok,r23
+		cmp	r7,r28
+		jump	MI,(r23)
+		nop
+		move	r7,r28
+i1_ok:
+		movei	#run_loop,r23
+		cmp	r28,r14
+		jump	PL,(r23)		; empty after screen clipping
+		nop
+
+		; ---- GREEDY MERGE: extend the pending span, or flush it ----
+		cmpq	#0,r21
+		movei	#gm_new,r23
+		jump	EQ,(r23)
+		nop
+		move	r14,r1
+		subq	#1,r1
+		movei	#gm_flush,r23
+		cmp	r31,r1
+		jump	PL,(r23)		; i0 > pend1 -> disjoint
+		nop
+		movei	#gm_flush,r23
+		cmp	r29,r28
+		jump	MI,(r23)		; i1 < pend0 -> disjoint
+		nop
+		movei	#gm_hi,r23
+		cmp	r29,r14
+		jump	PL,(r23)
+		nop
+		move	r14,r29			; pend0 = min(pend0, i0)
+gm_hi:
+		movei	#run_loop,r23
+		cmp	r31,r28
+		jump	MI,(r23)
+		nop
+		move	r28,r31			; pend1 = max(pend1, i1)
+		movei	#run_loop,r23
+		jump	(r23)
+		nop
+gm_flush:
+		movei	#gm_new,r22
+		movei	#span_flush,r23
+		jump	(r23)
+		nop
+gm_new:
+		move	r14,r29
+		move	r28,r31
+		moveq	#1,r21
+		movei	#run_loop,r23
+		jump	(r23)
+		nop
+
+run_done:
+		; flush whatever this row still has pending, then tail-call
+		; straight into row_next via r22
+		cmpq	#0,r21
+		movei	#row_next,r23
+		jump	EQ,(r23)
+		nop
+		movei	#row_next,r22
+		movei	#span_flush,r23
+		jump	(r23)
+		nop
+row_next:
+		addq	#1,r4
+		movei	#row_loop,r23
+		jump	(r23)			; the row1 test at the top exits
+		nop
+plane_next:
+		movei	#PLSTRIDE,r7
+		add	r7,r9
+		subq	#1,r10
+		movei	#plane_loop,r23
+		jump	(r23)
+		nop
+
+; ----------------------------------------------------------------------------
+; recip — r30 = RNUM / d, signed.  Enter with d in r30, |d| >= DMIN.
+; Returns via r11.  Clobbers r1, r7, r23.
+; |d| >= DMIN=32 is what guarantees |RNUM/d| <= 20480, i.e. that the result
+; still fits s16 and can be an imult operand in the run loop.
+; ----------------------------------------------------------------------------
+recip:
+		moveq	#0,r7			; sign
+		movei	#rc_pos,r23
+		cmpq	#0,r30
+		jump	PL,(r23)
+		nop
+		neg	r30
+		moveq	#1,r7
+rc_pos:
+		movei	#RNUM,r1
+		div	r30,r1			; unsigned: signs re-applied below
+		move	r1,r30
+		movei	#rc_done,r23
+		cmpq	#0,r7
+		jump	EQ,(r23)
+		nop
+		neg	r30
+rc_done:
+		jump	(r11)
+		nop
+
+; ----------------------------------------------------------------------------
+; span_flush — blit the pending span [r29, r31) on row r4.  Returns via r22.
+; Clobbers r1, r7, r30.  r29/r31 survive (gm_new overwrites them afterwards).
+; ⬜ P2c REPLACES ONLY THE FILL BLOCK below with the affine textured span; the
+; geometry above and the merge state are untouched by that change.
+; ----------------------------------------------------------------------------
+span_flush:
+	.if SFTEST=1
+		; ---- OFFLINE VERIFICATION HOOK (tools/p2_flats_sim.py) ------
+		; Log (row, x0, x1, texid) to DRAM instead of blitting.  The
+		; SPAN LIST is the thing worth checking: it is what the geometry
+		; produces and what the setup cost is counted in, and diffing it
+		; needs no Blitter model at all.  jtest runs this kernel bare,
+		; which is why it works while jagemu still freezes on the title.
+		movei	#$00100000,r1
+		load	(r1),r7			; span count so far
+		nop
+		nop
+		move	r7,r30
+		shlq	#3,r30
+		addq	#4,r30
+		add	r1,r30			; &log[count]
+		addq	#1,r7
+		store	r7,(r1)
+		move	r4,r1
+		shlq	#16,r1
+		or	r29,r1
+		store	r1,(r30)		; (y<<16) | x0
+		addq	#4,r30
+		move	r9,r1
+		addq	#4,r1
+		load	(r1),r1			; plane texture id
+		nop
+		nop
+		shlq	#16,r1
+		or	r31,r1
+		store	r1,(r30)		; (tex<<16) | x1
+		jump	(r22)
+		nop
+	.else
+		movei	#4096,r11		; spin guard: never hang the frame
+		load	(r15+14),r30		; B_CMD status (bit0 = idle)
+		nop
+		nop
+bw:
+		btst	#0,r30
+		jr	NE,bw_done		; idle -> proceed
+		subq	#1,r11			; slot: guard-- (benign on exit)
+		cmpq	#0,r11
+		jr	NE,bw			; guard remaining -> spin again
+		load	(r15+14),r30		; slot: next status read
+bw_done:
+		; ☠️ TRM bug 13: the loop's delay-slot load into r30 is still in
+		; flight on the EXIT path, and writes are not scoreboarded — so
+		; overwriting r30 below would lose the race and the slow value
+		; would land last.  One READ settles it.
+		or	r30,r30
+		; ---- P2b FILL: flat colour from the plane's texture id -----
+		move	r9,r30
+		addq	#4,r30
+		load	(r30),r30		; texture id
+		nop
+		nop
+		movei	#$000000FF,r1
+		and	r1,r30
+		move	r30,r1
+		shlq	#8,r1
+		or	r1,r30
+		move	r30,r1
+		shlq	#16,r1
+		or	r1,r30			; byte replicated x4
+		store	r30,(r15+26)		; B_PATD
+		store	r30,(r15+27)		; B_PATD+4  (8 pixels of pattern)
+		; ---- destination span --------------------------------------
+		move	r4,r30
+		shlq	#16,r30
+		or	r29,r30
+		store	r30,(r15+12)		; A2_PIXEL = (y<<16) | pend0
+		move	r31,r30
+		sub	r29,r30			; npix, right-EXCLUSIVE (the
+						; project-wide fill convention).
+						; > 0 is guaranteed by i1 > i0;
+						; npix == 0 would blit 65536 px.
+		movei	#$00010000,r1
+		or	r1,r30
+		store	r30,(r15+15)		; B_COUNT = (1 row << 16) | npix
+		movei	#BLIT_CMD,r30
+		store	r30,(r15+14)		; LAUNCH: PATDSEL | DSTA2
+		jump	(r22)
+		nop
+	.endif
+
+done:
+		movei	#G_CTRL,r1
+		moveq	#0,r30
+		store	r30,(r1)		; clear GPUGO -> stop
+		nop

@@ -12,7 +12,16 @@
  * OP scaling starves the Jaguar bus ~15-20x and blacks the display, so ONLY the
  * vertical axis is scaled (see video.c build_object_list). */
 #define RENDER_W 320
-#ifdef LOWRES
+/* VRES60 (2026-07-29): render 60 lines and let the OP scaler stretch 4.0x to
+   the 240-line window, exactly as LOWRES does at 2.0x.  Spans are emitted PER
+   SCANLINE, so halving the scanlines halves the span count - and every
+   measurement this project has (Blitter busy on 92% of polls, ~19.5 cyc per
+   launch, launch count unchanged by every per-pixel trick tried) says the
+   launch count IS the frame time.  LOWRES 240->120 bought 6.00->7.50 fps;
+   120->60 targets 7.50 -> 15.00 (8 vsync fields -> 4). */
+#ifdef VRES60
+#define RENDER_H 60
+#elif defined(LOWRES)
 #define RENDER_H 120
 #else
 #define RENDER_H 240

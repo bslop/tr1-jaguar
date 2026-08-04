@@ -98,6 +98,15 @@ gd_xchg:
 /* ── int gd_install(void *buf4k) ─────────────────────────────────── */
 	.globl	gd_install
 gd_install:
+#ifdef GDSTUB
+| GDSTUB: report "no GameDrive" without touching the cart at all.  On a
+| Skunkboard there IS no GD, so every SPI_STATUS read below is an OPEN-BUS
+| read whose value depends on recent bus traffic - and gd_install's drain
+| loop ("bra.s 1b") is unbounded, so one unlucky value hangs the 68k before
+| video_init ever finishes.  An emulator returns a fixed value for unmapped
+| reads and can never reproduce it.
+	bra	gd_inst_fail
+#endif
 	movem.l	%d2-%d4/%a2,-(%sp)      | arg lands at 20(%sp)
 
 	/* firmware version probe (upstream GD_HWVersion, bounded) */

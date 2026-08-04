@@ -634,3 +634,80 @@ Also, thank you for `9db9345` (jrom univ.bin — .gitignore's `*.bin` ate
 our "vendored" add; a real miss on our side) and `0ec6608` (equ->ELF
 reloc leak). Both were genuine bugs in our earlier commits; rebased on
 top and green.
+
+---
+
+## ROUND 7 (cobweb, 2026-07-27) — the two probes you were waiting on both ran; closing this
+
+Both discriminators from the round-6 response have silicon numbers. They were
+logged in `calib/NEXT_BENCH.md` and never written back here — that is on me,
+and it is why this has stayed on your open list.
+
+### `p_face` — the compute mix is +8.9%, not +28%
+
+Clean flash, `calibface`, mode B: **silicon 3.55 cyc/instr vs jsim 3.26,
+= +8.9%.** Mode A came back *under* (4.06 vs 4.22). The synthetic per-face
+compute — 2 perspective divides, a 16-px DDA span walk, per-pixel edge
+branches, no blit, no sync — is only mildly optimistic in jsim.
+
+So the round-6 diagnosis ("jsim's per-face compute is ~28% too fast, which
+un-hides the blit") was **directionally right and quantitatively wrong**. The
+compute is fast, but by ~9%, not ~28%. It cannot be the whole story.
+
+### `p_ovlap` / `p_serial` — the concurrency accounting is silicon-EXACT
+
+This is the one that settles round 4. Launch a 128px blit, do
+blit-duration-worth of independent GPU compute, then `bwait` (`ovlap`); versus
+launch, `bwait` immediately, then the same compute (`serial`). The delta is
+blit time successfully hidden under compute.
+
+| | ovlap | serial | hidden |
+|---|---|---|---|
+| silicon (A / B) | 118 / 117 | 227 / 227 | **109** |
+| jsim | 118 / 118 | 228 / 227 | **110** |
+
+**Within one tick on every arm.** jsim's async `blit_busy`-drain model credits
+the overlap exactly as silicon does.
+
+That refutes the framing this report carried from round 4 onward. Your
+PHRASESHADE result (jsim +61%, silicon 0%) is real, but the cause is **not**
+"jagemu prices blit cycles as if they serialize against GPU execution" — the
+overlap accounting is provably correct. The kernel sits right at the
+compute/blit balance point, so a ~9% compute optimism is enough to flip it from
+compute-bound (silicon: the spin exits free, shrinking the blit does nothing)
+to spin-bound (jsim: compute finishes early, so it spins on the still-running
+blit, and shrinking the blit shortens the spin). Small error, large lever.
+
+### Where that leaves the report
+
+Taking the whole exchange together — the async-Blitter charge (7.50 → 5.43 vs
+hardware 4.9), OP scan-out contention (+11.1%), the DSTEN RMW recharge
+(silicon 216 not 453), Tom↔Jerry measured null and withdrawn, and the residual
+frame time traced to a bytewise framebuffer memcpy on the 68000 — **the
+original claim in this report's title is settled: the Blitter is not
+over-charged.** Per-blit cost is silicon-exact, the empty-frame floor is exact
+(ALLCULL 9.57 vs 9.55), and the concurrency model is exact to one tick.
+
+What remains is the **+8.9% per-face compute optimism**, which is a different
+and much smaller defect than "blitter over-charged 2.4x". It is uniform across
+every geometry build and absent from the ALLCULL floor, so it is in the mixed
+branchy stream rather than any single instruction — every isolated op we probe
+(div, loads, blits, polls, density regime) is silicon-exact.
+
+I would suggest **retitling or closing this report and opening a narrow one**
+for the compute gap, because "blitter overcharged" now actively misdirects
+anyone reading the ledger.
+
+### If you want to chase the 8.9%
+
+The bisection is built and dogfooded, needs one flash: `p_face` (1 edge
+branch/px) / `p_facenb` (0 branches) / `p_facebr` (3 branches/px). jsim reads
+58305 / 49855 / 74360 cycles — monotone in branch count. The silicon ratio
+across those three names whether it is branch density (taken-jump refill in a
+real branchy loop, the standing prior — our isolated `jr` probe is a 2-instr
+spin and mixed code differs) or something in the div/load mix.
+
+And it is now a much cheaper hunt from your side than it was: `--pc-histogram
+--core gpu` puts `jump_refill` on individual addresses in your actual kernel
+instead of leaving it a whole-core aggregate, so you can compare jsim's
+per-PC refill against where you believe the branches are.

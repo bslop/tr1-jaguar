@@ -16,6 +16,12 @@
  * Display: 320x240 16bpp Jaguar RGB (VMODE $6C7), triple buffered.
  */
 #include "jaguar.h"
+/* privileged-instruction wrappers (cpu68k.S) — inline asm is outside
+   jcc68k's language subset */
+void cpu_irq_on(void);
+void cpu_stop_sleep(void);
+int  cpu_stop_unless(volatile uint32_t *addr, uint32_t val);
+
 #include "video.h"
 #include "blit.h"
 
@@ -46,8 +52,19 @@ typedef uint16_t fbpix;
 
 /* Display buffers are DISPLAY_H tall (240). In HALFRES they hold the line-
  * doubled image; otherwise they are the render buffers directly. */
-static fbpix fb0[RENDER_W * DISPLAY_H] __attribute__((aligned(16)));
-static fbpix fb1[RENDER_W * DISPLAY_H] __attribute__((aligned(16)));
+/* FLIPASM (2026-07-27): the publish half of the flip protocol moves to
+ * cpu68k.S so its ORDER is fixed in the instruction stream rather than left
+ * to a compiler.  The ISR half is already assembler (startup.S) for the same
+ * reason.  These few symbols must be visible to it; every other build keeps
+ * them file-local exactly as before. */
+#ifdef FLIPASM
+#define FLIPSTATIC
+#else
+#define FLIPSTATIC static
+#endif
+
+FLIPSTATIC fbpix fb0[RENDER_W * DISPLAY_H] __attribute__((aligned(16)));
+FLIPSTATIC fbpix fb1[RENDER_W * DISPLAY_H] __attribute__((aligned(16)));
 #ifdef HALFRES
 /* HALFRES never triple-buffers the display (render target is rbuf; the
    flip ping-pongs fb0/fb1 — the fb2 fallback in video_flip is unreachable
@@ -56,7 +73,7 @@ static fbpix fb1[RENDER_W * DISPLAY_H] __attribute__((aligned(16)));
    cold-boot smash 2026-07-12). */
 #define fb2 fb0
 #else
-static fbpix fb2[RENDER_W * DISPLAY_H] __attribute__((aligned(16)));
+FLIPSTATIC fbpix fb2[RENDER_W * DISPLAY_H] __attribute__((aligned(16)));
 #endif
 #ifdef HALFRES
 /* HALFRES renders here (320x120); video_flip line-doubles it into a display buf. */
@@ -67,14 +84,35 @@ static fbpix rbuf[RENDER_W * RENDER_H] __attribute__((aligned(16)));
  * hardware crash decodes from a camera capture. */
 fbpix *const crash_fbs[3] = { fb0, fb1, fb2 };
 
-static uint32_t op_list[16] __attribute__((aligned(16)));
+/* The scaled (LOWRES) path repairs the OP list from ASSEMBLY in startup.S's
+ * vblank stub — video.c is compiled by jcc68k, which emits ~10 instructions per
+ * store, far too slow to beat the OP's object fetch at VC 32. Those builds must
+ * therefore export the state the stub touches; every other build keeps it
+ * file-local exactly as before. */
+/* 2026-08-02: startup.S's exc_catch references op_list UNCONDITIONALLY, so the
+ * old "file-local except in LOWRES" rule no longer holds - a full-height
+ * (non-LOWRES, 320x240) build failed to link with 8 undefined references to
+ * op_list.  Export it in every configuration; dropping `static` costs nothing. */
+#define OPSTATIC          /* exported to startup.S in all builds */
+
+
+OPSTATIC uint32_t op_list[16] __attribute__((aligned(16)));
+/* A10 (2026-07-30): CONTIGUOUS shadow of the 6 longs the vblank ISR restores.
+   The ISR must rebuild the scaled object before the OP re-fetches it at VC 32.
+   The old repair was six `move.l abs,abs` - each 5 words of INSTRUCTION FETCH
+   before any data moves, ~30 fetch words total - and video.c:145 records it
+   chronically finishing at VC 33-35 once render-time bus starvation cuts the
+   68k to ~10-20% bus service. Under starvation the fetches are the expensive
+   part, so a movem block copy (2 instructions) is the shortest path to the
+   deadline. Keep these SIX longs adjacent and in OP-list order. */
+uint32_t op_shadow[6] __attribute__((aligned(16)));
 static uint16_t a_vdb_g, a_vde_g;   /* active vertical window (VC half-lines) */
 
 volatile uint32_t frame_count;
 
-static fbpix *draw_buf;               /* CPU renders here                    */
-static uint32_t front_fb;             /* what the OP displays                */
-static volatile uint32_t pending_fb;  /* buffer the ISR should show, 0=none  */
+FLIPSTATIC fbpix *draw_buf;               /* CPU renders here                    */
+OPSTATIC uint32_t front_fb;           /* what the OP displays                */
+OPSTATIC volatile uint32_t pending_fb;/* buffer the ISR should show, 0=none  */
 
 /* FAST OP-LIST REPAIR (plain unscaled object only). The OP destroys ONLY
  * phrase 0 of the bitmap object (data ptr / ypos / height) as it draws; the
@@ -82,9 +120,37 @@ static volatile uint32_t pending_fb;  /* buffer the ISR should show, 0=none  */
  * PAST the object fetch at 32 — under render-time bus starvation (~10-20%
  * bus service). The ISR now restores just the two destroyed longs from
  * values PRECOMPUTED outside the ISR (flip values prepared in video_flip). */
-static volatile uint32_t op_fix0, op_fix1;     /* phrase 0 for front_fb  */
-static volatile uint32_t pend_fix0, pend_fix1; /* phrase 0 for pending_fb */
-static uint32_t op_link;                       /* link field, set at build */
+OPSTATIC volatile uint32_t op_fix0;            /* phrase 0 for front_fb  */
+static volatile uint32_t op_fix1;
+OPSTATIC volatile uint32_t pend_fix0;          /* phrase 0 for pending_fb */
+static volatile uint32_t pend_fix1;
+FLIPSTATIC uint32_t op_link;                       /* link field, set at build */
+
+#ifdef OPDBL
+/* ---- OP-LIST DOUBLE BUFFER (2026-08-02) -------------------------------
+ * The OP DESTROYS phrase 0 of the object as it draws it, so this ISR has always
+ * had to REPAIR the list before the OP re-fetches it at VC 32. video.c's own
+ * probe measured the old 8-long rebuild landing at VC 33-35 under bus
+ * starvation - i.e. the repair was already losing that race, which is why it
+ * was cut down to precomputed stores. On an ACTIVE cartridge (the GameDrive,
+ * with its SD/USB traffic on the cart bus) the extra bus load pushes it over
+ * again and the OP fetches a HALF-REPAIRED object: the field then displays the
+ * wrong buffer. Measured as ~1.86 full-screen changes per rendered frame vs a
+ * clean 1.00 on the Skunkboard - the ghosting.
+ * So stop racing the deadline and DELETE it: keep TWO complete lists and
+ * alternate. The only deadline-bound work becomes ONE store (OLP <- the clean
+ * list); the 6-store repair of the list destroyed LAST field then has a whole
+ * field of slack instead of ~32 half-lines.
+ * Storage is free: op_list is already uint32_t[16] and the scaled object uses
+ * only [0..7], so list B lives at [8..15]. Each list needs its OWN link, since
+ * the link points at that list's own STOP. */
+static volatile uint32_t olp_sw[2];    /* pre-byte-swapped OLP per list      */
+static volatile uint32_t olp_next;     /* OLP for the NEXT field (scalar, so
+                                          the critical store needs no index) */
+static volatile uint32_t link_hi[2];   /* link>>8, the ph0 half              */
+static volatile uint32_t fs_ph1_l[2];  /* ph1 carries the link too           */
+static volatile int op_cur;            /* list the OP is using this field    */
+#endif
 
 #if defined(LOWRES) && !defined(HALFRES)
 /* LOWRES: the 320x120 framebuffer is displayed at 320x240 by the OP hardware
@@ -103,7 +169,30 @@ static uint32_t op_link;                       /* link field, set at build */
  * VDB/VDE window are UNCHANGED from the 240 build, so the 120->240 scaled image
  * fills the exact same vertical window the 240-line bitmap did. */
 #define FS_HSCALE 0x20u   /* 1.0x  - no horizontal scaling (full 320 width)      */
+#ifdef VRES60
+#define FS_VSCALE 0x80u   /* 4.0x  -  60 source lines fill the 240-line window   */
+#else
 #define FS_VSCALE 0x40u   /* 2.0x  - 120 source lines fill the 240-line window   */
+#endif
+#define FS_SCALE  (((uint32_t)FS_VSCALE << 8) | (uint32_t)FS_HSCALE)
+
+/* FAST OP-LIST REPAIR FOR THE SCALED OBJECT (2026-07-24).
+ * The scaled path used to rebuild all 8 longs AND reprogram OLP from inside the
+ * vblank ISR every field. The plain path's probe (see above) already showed that
+ * the full rebuild chronically finishes at VC 33-35 — PAST the OP's object fetch
+ * at VC 32 — once render-time bus starvation cuts the 68k to ~10-20% bus service.
+ * That is the leading explanation for LOWRES blacking out on MULTIROOM+FB8 while
+ * it was HW-verified fine on the older, lightly-loaded single-room RGB16 path:
+ * the OP walks a half-written list.
+ * Fix: precompute every long outside the ISR and let the ISR do plain stores, no
+ * call, no arithmetic, no OLP write (OLP is not destroyed — the plain path has
+ * never rewritten it per field). Only phrase 0's data pointer varies per flip;
+ * phrases 1 and 2 are build-time constants. */
+uint32_t fs_ph1, fs_ph2, fs_ph3;          /* constant longs of the scaled object */
+/* op_list[5] (VSCALE|HSCALE) for the ISR's fast repair. It used to be a literal
+   #0x4020 in startup.S, which overrode whatever C put there - see the note in
+   the ISR. Owned here so the two paths cannot disagree. */
+uint32_t fs_ph5 = ((uint32_t)FS_VSCALE << 8) | (uint32_t)FS_HSCALE;
 /* #define LOWRES_DIAG_PLAIN 1 -- ISOLATION TEST (HW-verified 2026-07-08): with
  * this defined, LOWRES displays the 320x120 fb as a PLAIN bitmap (no scale) and
  * the room renders CORRECTLY in the top 120 lines -> kernel+fb are FINE; the
@@ -125,6 +214,51 @@ static void build_object_list(uint32_t fb_addr)
                | (1u << 15) | OP_DEPTH | BASE_X;
     op_list[4] = 0;
     op_list[5] = 4;
+#elif defined(OPPLAIN)
+    /* SCALER-BISECT PROBE (2026-07-25). Silicon shows the LOWRES display
+     * breaking up mid-frame (a stationary white band + garbled rows over the
+     * lower ~45%, with Lara drawn COMPLETE on top of it) while the SAME .cof
+     * renders clean in jagemu — so the corruption is on the DISPLAY side, and
+     * jagemu cannot arbitrate it (its OP never writes objects back and is
+     * never bus-starved). Two candidates remain and they need opposite fixes:
+     *   (a) the TYPE-1 scaled object cannot survive render-time bus pressure
+     *       (it re-fetches 3 phrases/line and writes back the remainder — ~50%
+     *       more OP bus traffic per line than the plain object, and the
+     *       Makefile already records the scaler "blacking out under heavy
+     *       multiroom fill" while the unscaled path survives);
+     *   (b) the renderer and the scan-out genuinely share a buffer.
+     * OPPLAIN=1 shows the SAME 320x120 framebuffer through a PLAIN (TYPE-0)
+     * unscaled object — top 120 lines, black below — changing NOTHING else:
+     * same render, same flip protocol, same ISR repair, same buffers.
+     *   bands GONE  -> the scaler is the culprit (a), LOWRES-via-scaler is dead
+     *   bands STAY  -> a real draw/scan race (b), fix the barrier
+     * One flash, one photo. */
+    uint32_t link = ((uint32_t)&op_list[4]) >> 3;   /* STOP at op_list[4] */
+
+    op_list[0] = (fb_addr << 8) | (link >> 8);
+    op_list[1] = (link << 24)
+               | ((uint32_t)RENDER_H << 14)         /* on-screen height (120) */
+               | ((uint32_t)BASE_Y << 4);           /* TYPE 0 = plain bitmap  */
+
+    op_list[2] = SCREEN_PWIDTH >> 4;
+    op_list[3] = ((uint32_t)SCREEN_PWIDTH << 28)
+               | ((uint32_t)SCREEN_PWIDTH << 18)
+               | (1u << 15)                         /* PITCH 1 */
+               | OP_DEPTH
+               | BASE_X;
+
+    op_list[4] = 0;                                 /* STOP */
+    op_list[5] = 4;
+
+    op_link = link;
+    op_fix0 = op_list[0];
+    fs_ph1  = op_list[1];
+    fs_ph2  = op_list[2];
+    fs_ph3  = op_list[3];
+    op_shadow[0]=op_list[0]; op_shadow[1]=op_list[1];
+    op_shadow[2]=op_list[2]; op_shadow[3]=op_list[3];
+    op_shadow[4]=0;          /* REMAINDER, exactly as the ISR writes it   */
+    op_shadow[5]=fs_ph5;     /* VSCALE|HSCALE - C owns the 2.0x/4.0x value */
 #else
     /* FIX (HW-verified 2026-07-08): a BARE scaled object (scaled bitmap ->
      * STOP, NO branch gating) is correct. My earlier BRANCH
@@ -147,20 +281,78 @@ static void build_object_list(uint32_t fb_addr)
                | BASE_X;
 
     op_list[4] = 0;                                 /* SCALE: REMAINDER = 0 */
-    op_list[5] = ((uint32_t)FS_VSCALE << 8) | (uint32_t)FS_HSCALE;
+    op_list[5] = FS_SCALE;
 
     op_list[6] = 0;                                 /* STOP */
     op_list[7] = 4;
+
+    /* cache everything the ISR must restore, so the ISR itself only stores */
+    op_link = link;
+    op_fix0 = op_list[0];
+    fs_ph1  = op_list[1];
+    fs_ph2  = op_list[2];
+    fs_ph3  = op_list[3];
+#ifdef OPDBL
+    /* Build list B at op_list[8..15] as a twin of A, with its OWN link (its
+       STOP is at [14], not [6]). Everything the ISR needs is precomputed here,
+       outside the deadline. */
+    {
+        uint32_t linkB = ((uint32_t)&op_list[14]) >> 3;
+        uint32_t a, b;
+        op_list[8]  = (fb_addr << 8) | (linkB >> 8);
+        op_list[9]  = (linkB << 24)
+                    | ((uint32_t)(RENDER_H - 1) << 14)
+                    | ((uint32_t)BASE_Y << 4)
+                    | 1u;
+        op_list[10] = op_list[2];
+        op_list[11] = op_list[3];
+        op_list[12] = 0;
+        op_list[13] = FS_SCALE;
+        op_list[14] = 0;                 /* STOP */
+        op_list[15] = 4;
+        link_hi[0]  = link  >> 8;
+        link_hi[1]  = linkB >> 8;
+        fs_ph1_l[0] = op_list[1];
+        fs_ph1_l[1] = op_list[9];
+        a = (uint32_t)&op_list[0];
+        b = (uint32_t)&op_list[8];
+        olp_sw[0] = (a >> 16) | (a << 16);   /* OLP wants its halves swapped */
+        olp_sw[1] = (b >> 16) | (b << 16);
+        op_cur   = 0;
+        olp_next = olp_sw[1];
+    }
+#endif
+    op_shadow[0]=op_list[0]; op_shadow[1]=op_list[1];
+    op_shadow[2]=op_list[2]; op_shadow[3]=op_list[3];
+    op_shadow[4]=0;          /* REMAINDER, exactly as the ISR writes it   */
+    op_shadow[5]=fs_ph5;     /* VSCALE|HSCALE - C owns the 2.0x/4.0x value */
 #endif
 }
 #else
+/* 2026-08-02: these live in the LOWRES branch above, but startup.S's ISR and
+ * exc_catch reference them UNCONDITIONALLY, so a full-height (320x240) build
+ * failed to link.  The plain object is UNSCALED, so VSCALE=HSCALE=0x20 (1.0x)
+ * rather than the LOWRES 2.0x/4.0x.  Values are filled in by
+ * build_object_list below, exactly as the scaled path does. */
+uint32_t fs_ph1, fs_ph2, fs_ph3;
+uint32_t fs_ph5 = 0x2020u;      /* 1.0x vertical, 1.0x horizontal */
+
 static void build_object_list(uint32_t fb_addr)
 {
     uint32_t link = ((uint32_t)&op_list[4]) >> 3;
 
     op_list[0] = (fb_addr << 8) | (link >> 8);
     op_list[1] = (link << 24)
+#ifdef SLITDISPLAY
+               /* BUS PROBE (2026-07-20): present only the top 64 lines —
+                  OP framebuffer fetch drops ~73% while ALL render work is
+                  unchanged. If fps rises, the OP's constant bus load is
+                  throttling Tom (the "bus bottleneck" theory); the fps bar
+                  (rows 21-55) stays visible for the measurement. */
+               | (64u << 14)
+#else
                | ((uint32_t)DISPLAY_H << 14)       /* on-screen height (240) */
+#endif
                | ((uint32_t)BASE_Y << 4);
 
     op_list[2] = SCREEN_PWIDTH >> 4;
@@ -181,6 +373,7 @@ static void build_object_list(uint32_t fb_addr)
 
 #ifdef SKUNK_CONSOLE
 #include "skunkdbg.h"
+
 void video_dump_oplist(void)
 {
     int i;
@@ -205,7 +398,22 @@ static void point_op_at_list(void)
  * which fires just before the display field starts. */
 void vblank_handler(void)
 {
+#if defined(BEACON_AT) && BEACON_AT == 11
+    /* Fires on the FIRST vblank interrupt ever taken. The beacon is validated
+       (it goes solid on a booting build), so BLACK here means the interrupt
+       genuinely never arrives - which is the documented VI failure mode:
+       "dead-black screen, ISR dead, flip spins forever". */
+    { extern void hang_beacon(uint16_t); hang_beacon(0x003E); }   /* GREEN */
+#endif
     uint32_t pf = pending_fb;
+#ifdef HANGDIAG
+    /* GREEN border on the FIRST vblank: proves interrupts are alive at all.
+       Any later HANGDIAG halt overwrites it, so the final colour is the most
+       specific fact available - and a border still BLACK after 45 s means the
+       ISR never ran even once. */
+    { static int hd_first = 0;
+      if (!hd_first) { hd_first = 1; *(volatile uint16_t *)0xF00058u = 0x03E0; } }
+#endif
 #if !(defined(LOWRES) && !defined(HALFRES))
     /* fast path: restore ONLY the OP-destroyed phrase — 2 stores, no calls.
        Flip values were precomputed in video_flip, outside the ISR. */
@@ -222,20 +430,81 @@ void vblank_handler(void)
     }
     OBF = 0;
 #else
-    /* scaled object: OP also destroys the scale-remainder phrase — keep the
-       full rebuild (fast repair not implemented for this path) */
+    /* scaled object: the OP destroys phrase 0 (data ptr / ypos / height) AND the
+       scale phrase's REMAINDER. Restore from precomputed values — stores only,
+       no call, no arithmetic, no OLP reprogram (see FAST OP-LIST REPAIR above).
+       Phrase 1 is restored too: it costs 2 stores and removes a failure class. */
+    /* NOTE: video.c is compiled by jcc68k (NOT gcc -O2 — see the Makefile).
+       jcc68k folds no constant offsets and keeps every local in memory, so an
+       indexed store costs ~10 instructions and a walking pointer ~13 (measured
+       by disassembly). Indexed is the cheaper phrasing here; ~60 instructions
+       total is still ~6x below the rebuild this replaces, and the probe showed
+       that rebuild overshooting the VC-32 fetch by only 1-3 half-lines. */
     if (pf) {
+        op_fix0 = pend_fix0;
         front_fb = pf;
         pending_fb = 0;
     }
-    build_object_list(front_fb);
-    point_op_at_list();
+#ifdef OPDBL
+    /* ONE deadline-bound store: point the OP at the list repaired last field.
+       Everything below runs with a full field of slack. */
+    OLP = olp_next;
+    if (pf) { op_fix0 = pend_fix0; front_fb = pf; pending_fb = 0; }
+    op_cur ^= 1;                       /* the store above switched lists     */
+    {
+        int dead = op_cur ^ 1;         /* destroyed during the LAST field    */
+        uint32_t *d = &op_list[dead * 8];
+        d[0] = ((front_fb) << 8) | link_hi[dead];
+        d[1] = fs_ph1_l[dead];
+        d[2] = fs_ph2;
+        d[3] = fs_ph3;
+        d[4] = 0;
+        d[5] = FS_SCALE;
+        olp_next = olp_sw[dead];       /* next field uses what we just fixed */
+    }
+    OBF = 0;
+#else
+#ifdef OPMIN
+    /* OPMIN (2026-08-02): DISCRIMINATOR, not a shipping option.
+       The ghosting on the GameDrive is the OP fetching a HALF-REPAIRED object:
+       this repair must land before the OP re-fetches at VC 32, and video.c's own
+       probe measured the old 8-long rebuild finishing at VC 33-35 under bus
+       starvation. But that could be the ISR being too SLOW *or* the ISR ENTRY
+       being too LATE, and the fixes differ completely (double-buffering the OP
+       list cures the former and does nothing for the latter).
+       So write ONLY what the OP actually destroys — phrase 0 ([0],[1]) and the
+       scale REMAINDER ([4]) — and leave [2],[3],[5] alone. Halves the store
+       count. If the ghosting improves, ISR LENGTH is the problem and
+       double-buffering is the fix. If it does not move, it is interrupt-entry
+       latency and shortening the ISR can never help. */
+    op_list[0] = op_fix0;
+    op_list[1] = fs_ph1;
+    op_list[4] = 0;
+#else
+    op_list[0] = op_fix0;          /* [0] data ptr | link                   */
+    op_list[1] = fs_ph1;           /* [1] height | ypos | TYPE=1            */
+    op_list[2] = fs_ph2;           /* [2] iwidth                            */
+    op_list[3] = fs_ph3;           /* [3] dwidth | pitch | depth | xpos     */
+    op_list[4] = 0;                /* [4] REMAINDER — destroyed every field */
+    op_list[5] = FS_SCALE;         /* [5] vscale | hscale                   */
+#endif
+    OBF = 0;
+#endif /* OPDBL */
 #endif
     frame_count++;
 }
 
 void video_init(void)
 {
+#ifdef EARLYCON
+    { extern void dbg_kv(const char *, long); dbg_kv("vi_enter", 1); }
+#endif
+#if defined(BEACON_AT) && BEACON_AT == 1
+    { extern void hang_beacon(uint16_t); hang_beacon(0x07C0); }   /* BLUE */
+#endif
+#ifdef HANGDIAG
+    *(volatile uint16_t *)0xF00058u = (uint16_t)0x07C0;
+#endif
     uint32_t i;
     int ntsc = (CONFIG & 0x10) != 0;
     uint16_t width  = ntsc ? NTSC_WIDTH  : PAL_WIDTH;
@@ -264,8 +533,14 @@ void video_init(void)
     a_vdb_g = (uint16_t)(vmid - height);
     a_vde_g = (uint16_t)(vmid + height);
 
+#ifdef EARLYCON
+    { extern void dbg_kv(const char *, long); dbg_kv("vi_cleared", 1); }
+#endif
     build_object_list(front_fb);
     point_op_at_list();
+#ifdef EARLYCON
+    { extern void dbg_kv(const char *, long); dbg_kv("vi_oplist", 1); }
+#endif
 
     /* horizontal window */
     HDE  = (uint16_t)((width / 2 - 1) | 0x400);
@@ -277,7 +552,22 @@ void video_init(void)
     VDB = a_vdb;
     VDE = 0xFFFF;
 
+#ifdef A10BG
+    /* A10 THREE-WAY PROBE (2026-07-30). BGEN is on, so BG fills every active
+       line that no object paints. On a BOOTING build the object covers the
+       screen and BG stays hidden; on a FAILING build nothing paints, which is
+       exactly why it reads black (BG=0). So paint BG BLUE here and RED from
+       the ISR, and one flash distinguishes:
+         RED   -> the ISR ran at least once  (=> OP/display or deadline bug)
+         BLUE  -> video_init finished, ISR NEVER ran (=> interrupt never fires)
+         BLACK -> never even got here / no signal
+       Self-validating: the BLUE arm proves BG is visible in the failing state,
+       which is the positive control hangbeacon.c demands before trusting a
+       negative. Jaguar RGB16 = R<<11 | B<<6 | G<<1. */
+    BG    = 0x07C0;            /* BLUE: video_init reached the end */
+#else
     BG    = 0;
+#endif
     BORD1 = 0;
     BORD2 = 0;
 
@@ -294,12 +584,107 @@ void video_init(void)
      * works, so the deadline cannot be moved. Bus-storm collisions with
      * this window are instead dodged at the SOURCE (video_wait_safe_vc()
      * before the Jerry room-transform kick in main.c). */
+    /* ☠️ REFUTED 2026-07-29: writing VMODE (VIDEN) BEFORE arming VI - so the
+       comparator is armed while the counter is running - does NOT fix A10.
+       Tried with IRQREARM off so the reorder was the only change, main.o
+       byte-identical to the failing build: still black. Do not re-run it. */
+#ifdef EARLYCON
+    { extern void dbg_kv(const char *, long); dbg_kv("vi_window", (long)a_vdb); }
+#endif
     VI = (uint16_t)(a_vdb - 4);
     INT1 = 0x0003;              /* enable VIDEO + GPU interrupts (STOP-sync) */
-    __asm__ volatile ("move.w #0x2000,%sr");
+    cpu_irq_on();
+#ifdef EARLYCON
+    { extern void dbg_kv(const char *, long); dbg_kv("vi_irqon", 1); }
+#endif
 
     /* RGB16, CSYNC, BGEN, VIDEN, PWIDTH=4 -> the standard 320-wide mode */
     VMODE = 0x06C7;
+#ifdef EARLYCON
+    { extern void dbg_kv(const char *, long); dbg_kv("vi_done", 1); }
+#endif
+#ifdef A10BG
+    /* GREEN = VI armed, INT1 enabled, cpu_irq_on() returned and VMODE written,
+       i.e. video_init ran to completion. The BLUE above sits BEFORE the arming
+       block, so blue alone would not have proved the arming was reached.
+         GREEN -> armed, and the ISR still never fired
+         BLUE  -> died inside the arming block itself
+         RED   -> ISR ran */
+    BG = 0x003E;
+#endif
+#if defined(BEACON_AT) && BEACON_AT == 2
+    { extern void hang_beacon(uint16_t); hang_beacon(0x003E); }   /* GREEN */
+#endif
+}
+
+/* Re-arm the vertical interrupt from its stored window.  A10 (2026-07-29):
+   on a failing build the video interrupt NEVER FIRES - proven with a validated
+   beacon - so every interrupt-dependent wait sleeps forever (gpu_sync's STOP
+   first, then the flip's pending_fb wait). video.o is byte-identical between a
+   booting and a failing build, so nothing here is being overwritten; the arming
+   is simply not taking. This re-asserts it. */
+void video_rearm_irq(void);
+void video_rearm_irq(void)
+{
+    VI   = (uint16_t)(a_vdb_g - 4);
+    INT1 = 0x0003;
+    VMODE = 0x06C7;
+    cpu_irq_on();
+}
+
+/* Do the vblank ISR's work FROM THE MAIN LOOP.
+   A10: when the vertical interrupt stops firing, the ISR never runs, and both
+   waits that depend on it hang forever - gpu_sync's STOP and the flip's
+   pending_fb wait. Re-arming the interrupt (video_rearm_irq) recovers many
+   builds but not all. This is the belt to that pair of braces: it retires the
+   pending flip and rebuilds the phrases the OP consumes, so the picture keeps
+   advancing even with a dead ISR. Called only from the flip wait after it has
+   already spun for a long time, so it costs nothing when the ISR is healthy.
+   It can tear - it runs at an arbitrary raster position rather than in the
+   pre-display window - but a torn frame beats a dead console. */
+void video_flip_force(void);
+void video_flip_force(void)
+{
+    uint32_t pf = pending_fb;
+#ifdef VECDIAG
+    /* A10 probe: this function only runs once the vblank ISR has already
+       failed three re-arms, so it is the exact moment of failure. Report
+       whether 68k VECTOR 64 ($100) still points at vblank_stub.
+         GREEN  = vector intact  -> the interrupt is armed and vectored, and
+                  something else stops it being delivered
+         RED    = vector CLOBBERED -> a wild write hit low memory, which would
+                  be codegen-dependent and explains everything
+       The image loads at $4000, so nothing of ours should ever write $100. */
+    { extern void vblank_stub(void);
+      extern void hang_beacon(uint16_t);
+      uint32_t v = *(volatile uint32_t *)0x100u;
+      hang_beacon(v == (uint32_t)&vblank_stub ? 0x003E : 0xF800); }
+#endif
+    if (pf) {
+        op_fix0 = pend_fix0;
+        front_fb = pf;
+        pending_fb = 0;
+    }
+#if defined(LOWRES) && !defined(HALFRES) && !defined(OPPLAIN)
+    /* SCALED object: 6 longs, STOP at [6]. NOT valid under OPPLAIN, where the
+       object is 4 longs and the STOP lives at [4]/[5] - writing the scale
+       phrase there corrupts the STOP and the OP runs off into memory. */
+    op_list[0] = op_fix0;
+    op_list[1] = fs_ph1;
+    op_list[2] = fs_ph2;
+    op_list[3] = fs_ph3;
+    op_list[4] = 0;
+    op_list[5] = fs_ph5;
+#elif defined(OPPLAIN)
+    op_list[0] = op_fix0;
+    op_list[1] = fs_ph1;
+    op_list[2] = fs_ph2;
+    op_list[3] = fs_ph3;
+#else
+    op_list[0] = op_fix0;
+    op_list[1] = op_fix1;
+#endif
+    OBF = 0;
 }
 
 void *video_backbuffer(void)
@@ -310,18 +695,70 @@ void *video_backbuffer(void)
 /* Load a 256-entry RGB16 palette into the OP CLUT (for FB8 8bpp mode). */
 void video_set_clut(const uint16_t *pal)
 {
+#if defined(BEACON_AT) && BEACON_AT == 5
+    { extern void hang_beacon(uint16_t); hang_beacon(0xF800); }   /* RED */
+#endif
     volatile uint16_t *clut = (volatile uint16_t *)0xF00400u;
     int i;
     for (i = 0; i < 256; i++)
         clut[i] = pal[i];
 }
 
+#ifdef FLIPASM
+extern void video_flip_asm(void);
 void video_flip(void)
 {
+#ifdef A10BG
+    /* A10 LIVENESS probe: cycle BG on every flip attempt. The GREEN left by
+       video_init persists whether the 68k is running or stopped, so it cannot
+       tell those apart. This can:
+         changing colour -> the 68k is ALIVE and reaching video_flip; the
+                            interrupt simply never arrives
+         steady GREEN    -> never reached the first flip (stuck earlier - level
+                            load, or the first gpu_sync STOP sleeping forever) */
+    { static uint16_t t; t++; BG = (uint16_t)((t & 31) << 11); }   /* red ramp */
+#endif
+    video_flip_asm();
+}
+#else
+void video_flip(void)
+{
+#if defined(BEACON_AT) && BEACON_AT == 7
+    { extern void hang_beacon(uint16_t); hang_beacon(0xFFFE); }   /* WHITE */
+#endif
     uint32_t shown;
 
+    /* Was a tight DRAM poll on a volatile global — the anti-pattern gpu_sync's
+       own comment warns about ("a tight DRAM poll steals bus cycles from Tom for
+       the entire frame"). Tom is RENDERING during this wait, so the spin slows
+       the very thing it waits for. STOP releases the bus; the vblank ISR clears
+       pending_fb and vblank bounds the wake. Supervisor mode throughout.
+       Safe at init: if the ISR were not running, pending_fb would never clear
+       and the old spin would have hung here too. */
+#ifdef HANGDIAG
+    /* POLL, never STOP: a STOP that is never woken cannot time itself out -
+       the counter below would never advance - and "asleep forever" is exactly
+       the failure mode still on the table. */
+    { uint32_t g = 0;
+      while (pending_fb) {
+          g++;
+          if (g > 8000000u) {
+              *(volatile uint16_t *)0xF00058u = 0x07FF;  /* CYAN: flip wait */
+              for (;;) ;
+          }
+      } }
+#else
     while (pending_fb)
+#ifdef FLIPSPIN
         ;
+#else
+        /* atomic check+STOP (see gpu_sync PACING note). Here the waker is
+           the VBL ISR itself so the old race self-healed in one field, but
+           the closed window costs nothing and one lost field is exactly
+           what this campaign hunts. */
+        cpu_stop_unless(&pending_fb, 0);
+#endif
+#endif
     shown = front_fb;
 #ifdef HALFRES
     /* line-double the 320x120 render buffer into a free 320x240 display buffer
@@ -350,13 +787,33 @@ void video_flip(void)
         /* precompute the ISR's phrase-0 repair values here (main-loop time)
            so the flip path in the ISR is also just 2 stores */
         pend_fix0 = ((uint32_t)done << 8) | (op_link >> 8);
+#if !(defined(LOWRES) && !defined(HALFRES))
         pend_fix1 = (op_link << 24)
                   | ((uint32_t)DISPLAY_H << 14)
                   | ((uint32_t)BASE_Y << 4);
+#else
+        /* COMPLETION BARRIER (2026-07-25). gpu_sync() waits for Tom's GPU
+         * PROGRAM, not for the Blitter: the kernel launches a span and moves
+         * on, so the last span(s) can still be transferring into `done` when
+         * we publish it. HALFRES never had this hole — blit_double() ends
+         * with blit_wait() (blit.c), so by the time IT publishes, the Blitter
+         * is idle and the display buffer is whole. That trailing wait is half
+         * of what "blit_double was also the frame barrier" meant; the other
+         * half (render off-screen) is already satisfied here, and MEASURED:
+         * 400 consecutive fields sampled in jagemu show draw_buf is never
+         * front_fb nor pending_fb (0 violations). So this is the one piece
+         * the direct-to-display path was actually missing.
+         * Cost is ~nil when the Blitter is already idle, which is the normal
+         * case after gpu_sync; it is an I/O-register poll, not a DRAM poll. */
+        while (!(B_CMD & BLIT_IDLE))
+            ;
+#endif  /* scaled path: phrase 0's second long is constant (fs_ph1) */
         pending_fb = (uint32_t)done;
     }
 #endif
 }
+
+#endif /* FLIPASM */
 
 /* HI-RES path (title screens): paint 320x240 directly into a display
    buffer, bypassing rbuf + the doubling blit. Same ISR flip protocol. */
@@ -407,7 +864,38 @@ void video_wait_safe_vc(void)
 
 void video_wait_vblank(void)
 {
+#if defined(BEACON_AT) && BEACON_AT == 8
+    { extern void hang_beacon(uint16_t); hang_beacon(0x07C0); }   /* BLUE */
+#endif
     uint32_t f = frame_count;
+#ifdef HANGDIAG
+    uint32_t g = 0;
+    while (frame_count == f) {
+        g++;
+        if (g > 8000000u) {               /* the VBL ISR is not running */
+            *(volatile uint16_t *)0xF00058u = 0xF81F;   /* MAGENTA: no vblank */
+            for (;;) ;
+        }
+    }
+#elif defined(IRQREARM)
+    /* A10, the LAST unbounded ISR-dependent wait in the title loop: with
+       gpu_sync and the flip both bounded, this is where a dead vblank ISR
+       parks the machine - frame_count is ONLY ever incremented by the ISR, so
+       "wait for the next field" becomes "wait forever" and nothing is ever
+       drawn. Bound it, re-arm the interrupt a few times, then stop waiting: a
+       frame that runs unpaced beats a console that never draws at all. */
+    { uint32_t g = 0, tries = 0;
+      while (frame_count == f) {
+          g++;
+          if (g > 200000u) {
+              g = 0;
+              tries++;
+              if (tries > 3) return;
+              video_rearm_irq();
+          }
+      } }
+#else
     while (frame_count == f)
         ;
+#endif
 }

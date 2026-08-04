@@ -13,10 +13,30 @@
 
 #define SPAN_CPU_LIMIT 12
 
+/* HANGDIAG: every wait in the 68k boot path is unbounded, so a hang anywhere
+   looks identical from the outside - a black screen.  Under HANGDIAG each one
+   gets a budget and, on timeout, paints a DISTINCT border colour and halts, so
+   a single photograph names which wait never completed.  Deliberately touches
+   no file that main.c compiles into: main.o stays byte-identical to the build
+   under test, which is essential because this fault is codegen-sensitive. */
+#ifdef HANGDIAG
+#define HANGDIAG_HALT(col) do { \
+    *(volatile uint16_t *)0xF00058u = (uint16_t)(col); \
+    for (;;) ; } while (0)
+#endif
+
 static void blit_wait(void)
 {
+#ifdef HANGDIAG
+    uint32_t g = 0;
+    while (!(B_CMD & BLIT_IDLE)) {
+        g++;
+        if (g > 8000000u) HANGDIAG_HALT(0xFFE0);   /* YELLOW: blit_wait */
+    }
+#else
     while (!(B_CMD & BLIT_IDLE))
         ;
+#endif
 }
 
 void blit_span(uint16_t *fb, int y, int x0, int x1, uint16_t c)
@@ -69,6 +89,28 @@ void blit_band(void *fb, int y0, int y1, uint32_t c)
     B_SRCD1  = cc;
     B_COUNT  = ((uint32_t)(y1 - y0) << 16) | RENDER_W;
     B_CMD    = BLIT_UPDA1 | BLIT_LFU_REP;
+}
+
+/* blit_copy: full-width Blitter image copy, src -> dst, `h` rows.
+ * Replaces the 68k byte loop that repainted the title art every frame
+ * (76800 x `moveb (a0)+,(a1)+`; 21.9% of all awake 68k cycles in a boot
+ * trace). Same A1/A2 setup as blit_double, without the row doubling.
+ * This is the "Blitter composite" the title-screen TODO asked for. */
+void blit_copy(const void *src, void *dst, int h)
+{
+    uint32_t xreset = ((uint32_t)(-RENDER_W)) & 0xFFFFu;
+    blit_wait();
+    A1_BASE  = (uint32_t)src;
+    A1_FLAGS = BLIT_PIX8 | BLIT_WID320 | BLIT_XPIX;
+    A1_PIXEL = 0;
+    A1_STEP  = (1u << 16) | xreset;
+    A2_BASE  = (uint32_t)dst;
+    A2_FLAGS = BLIT_PIX8 | BLIT_WID320 | BLIT_XPIX;
+    A2_PIXEL = 0;
+    A2_STEP  = (1u << 16) | xreset;
+    B_COUNT  = ((uint32_t)h << 16) | RENDER_W;
+    B_CMD    = BLIT_CMD_COPY | BLIT_UPDA1 | BLIT_UPDA2;
+    blit_wait();
 }
 
 #ifdef HALFRES
