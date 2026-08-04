@@ -63,8 +63,16 @@ typedef uint16_t fbpix;
 #define FLIPSTATIC static
 #endif
 
-FLIPSTATIC fbpix fb0[RENDER_W * DISPLAY_H] __attribute__((aligned(16)));
-FLIPSTATIC fbpix fb1[RENDER_W * DISPLAY_H] __attribute__((aligned(16)));
+/* Buffers are 240-tall even in LOWRES (task #4): the TITLE phase displays
+ * them as plain 320x240 (video_set_disp240), the game uses rows 0..119 via
+ * the scaled object. +172KB BSS, verified against the 0x200000 stack. */
+#if defined(LOWRES) && !defined(HALFRES)
+#define FB_ALLOC_H 240
+#else
+#define FB_ALLOC_H DISPLAY_H
+#endif
+FLIPSTATIC fbpix fb0[RENDER_W * FB_ALLOC_H] __attribute__((aligned(16)));
+FLIPSTATIC fbpix fb1[RENDER_W * FB_ALLOC_H] __attribute__((aligned(16)));
 #ifdef HALFRES
 /* HALFRES never triple-buffers the display (render target is rbuf; the
    flip ping-pongs fb0/fb1 — the fb2 fallback in video_flip is unreachable
@@ -73,7 +81,7 @@ FLIPSTATIC fbpix fb1[RENDER_W * DISPLAY_H] __attribute__((aligned(16)));
    cold-boot smash 2026-07-12). */
 #define fb2 fb0
 #else
-FLIPSTATIC fbpix fb2[RENDER_W * DISPLAY_H] __attribute__((aligned(16)));
+FLIPSTATIC fbpix fb2[RENDER_W * FB_ALLOC_H] __attribute__((aligned(16)));
 #endif
 #ifdef HALFRES
 /* HALFRES renders here (320x120); video_flip line-doubles it into a display buf. */
@@ -197,6 +205,7 @@ uint32_t fs_ph5 = ((uint32_t)FS_VSCALE << 8) | (uint32_t)FS_HSCALE;
  * this defined, LOWRES displays the 320x120 fb as a PLAIN bitmap (no scale) and
  * the room renders CORRECTLY in the top 120 lines -> kernel+fb are FINE; the
  * ONLY blocker is the TYPE-1 scaled object below. Re-enable to re-confirm. */
+extern int g_disp240;               /* task #4: 1 = title plain-240 mode */
 static void build_object_list(uint32_t fb_addr)
 {
     /* A scaled (TYPE 1) object must be reached via BRANCH fall-through inside
@@ -260,6 +269,12 @@ static void build_object_list(uint32_t fb_addr)
     op_shadow[4]=0;          /* REMAINDER, exactly as the ISR writes it   */
     op_shadow[5]=fs_ph5;     /* VSCALE|HSCALE - C owns the 2.0x/4.0x value */
 #else
+    /* task #4 TITLE 240: SAME scaled TYPE-1 machinery, but scale 1.0x over the
+       240-tall fb (a 1:1 "scaled" object IS a plain display, and the entire
+       proven repair/OPDBL structure stays byte-identical in layout). */
+    { uint32_t t_srcl  = g_disp240 ? 239u : (uint32_t)(RENDER_H - 1);
+      fs_ph5 = g_disp240 ? 0x2020u                       /* 1.0x V, 1.0x H */
+                         : (((uint32_t)FS_VSCALE << 8) | (uint32_t)FS_HSCALE);
     /* FIX (HW-verified 2026-07-08): a BARE scaled object (scaled bitmap ->
      * STOP, NO branch gating) is correct. My earlier BRANCH
      * gating (VC vs a_vdb/a_vde) was masking the ENTIRE display -> black. The
@@ -269,7 +284,7 @@ static void build_object_list(uint32_t fb_addr)
 
     op_list[0] = (fb_addr << 8) | (link >> 8);
     op_list[1] = (link << 24)
-               | ((uint32_t)(RENDER_H - 1) << 14)   /* source lines - 1 (scaled) */
+               | (t_srcl << 14)                     /* source lines - 1 (scaled) */
                | ((uint32_t)BASE_Y << 4)            /* YPOS                       */
                | 1u;                                /* TYPE 1 = scaled bitmap     */
 
@@ -281,7 +296,7 @@ static void build_object_list(uint32_t fb_addr)
                | BASE_X;
 
     op_list[4] = 0;                                 /* SCALE: REMAINDER = 0 */
-    op_list[5] = FS_SCALE;
+    op_list[5] = fs_ph5;
 
     op_list[6] = 0;                                 /* STOP */
     op_list[7] = 4;
@@ -301,13 +316,13 @@ static void build_object_list(uint32_t fb_addr)
         uint32_t a, b;
         op_list[8]  = (fb_addr << 8) | (linkB >> 8);
         op_list[9]  = (linkB << 24)
-                    | ((uint32_t)(RENDER_H - 1) << 14)
+                    | (t_srcl << 14)
                     | ((uint32_t)BASE_Y << 4)
                     | 1u;
         op_list[10] = op_list[2];
         op_list[11] = op_list[3];
         op_list[12] = 0;
-        op_list[13] = FS_SCALE;
+        op_list[13] = fs_ph5;
         op_list[14] = 0;                 /* STOP */
         op_list[15] = 4;
         link_hi[0]  = link  >> 8;
@@ -326,7 +341,17 @@ static void build_object_list(uint32_t fb_addr)
     op_shadow[2]=op_list[2]; op_shadow[3]=op_list[3];
     op_shadow[4]=0;          /* REMAINDER, exactly as the ISR writes it   */
     op_shadow[5]=fs_ph5;     /* VSCALE|HSCALE - C owns the 2.0x/4.0x value */
+    }
 #endif
+}
+
+/* TITLE 240 switch (task #4): call with Tom idle + a just-flipped display.
+ * Rebuilds both OP lists + every precomputed repair value for the new mode. */
+int g_disp240 = 1;   /* PROBE: boot in title-240 (scaled-1x) */
+void video_set_disp240(int on)
+{
+    g_disp240 = on;
+    build_object_list(front_fb);
 }
 #else
 /* 2026-08-02: these live in the LOWRES branch above, but startup.S's ISR and
@@ -459,7 +484,7 @@ void vblank_handler(void)
         d[2] = fs_ph2;
         d[3] = fs_ph3;
         d[4] = 0;
-        d[5] = FS_SCALE;
+        d[5] = fs_ph5;                 /* scale (game) or STOP-low 4 (title) */
         olp_next = olp_sw[dead];       /* next field uses what we just fixed */
     }
     OBF = 0;

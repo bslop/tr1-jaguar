@@ -26,6 +26,25 @@ int  cpu_stop_unless(volatile uint32_t *addr, uint32_t val);
 static volatile uint32_t mailbox[4] __attribute__((aligned(16)));
 
 extern const uint8_t gpu_kernel[], gpu_kernel_end[];
+#ifdef MULTIROOM
+/* TITLE-HQ kernel (task #4): same kernel assembled with LOWRES=0 (240-line
+ * projection constants).  gpu_kernel_select() swaps which blob is resident in
+ * GPU SRAM; call ONLY with Tom idle (after gpu_sync / before the next kick).
+ * The title phase runs HQ; entering the game re-selects the normal kernel. */
+extern const uint8_t gpu_kernel_hq[], gpu_kernel_hq_end[];
+static int g_kernel_cur = 0;             /* 0 = game kernel (boot default) */
+void gpu_kernel_select(int hq)
+{
+    const uint32_t *src; uint32_t n, i; volatile uint32_t *dst;
+    if (hq == g_kernel_cur) return;
+    src = hq ? (const uint32_t *)gpu_kernel_hq : (const uint32_t *)gpu_kernel;
+    n   = hq ? (uint32_t)(gpu_kernel_hq_end - gpu_kernel_hq) / 4
+             : (uint32_t)(gpu_kernel_end - gpu_kernel) / 4;
+    dst = (volatile uint32_t *)G_SRAM;
+    for (i = 0; i < n; i++) dst[i] = src[i];
+    g_kernel_cur = hq;
+}
+#endif
 
 int gpu_init(void)
 {

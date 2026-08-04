@@ -2901,7 +2901,7 @@ int main(void)
     gpu_ok = gpu_init();             /* Tom drains the span list if up */
     CRUMB(0x07FF);                   /* CYAN: gpu_init done */
     { extern int jerry_init(void);
-      gpu_geotex_setclip(0, 319, 0, RENDER_H-1);   /* clip = full screen */
+      gpu_geotex_setclip(0, 319, 0, 239);  /* task #4: 240-line title */   /* clip = full screen */
       g_jerry_ok = jerry_init();
       CRUMB(0xF81F);                 /* MAGENTA: jerry_init done */
       g_sfx_ok = g_jerry_ok;
@@ -3266,7 +3266,14 @@ int main(void)
                                                render in sequential batches
                                                (NOVISCULL can request all) */
         static uint32_t jxlist[1+8*5];      /* Jerry room-transform list */
+#ifdef JERRYX
         static uint32_t jcache[8][2244] __attribute__((aligned(8)));
+#else
+        /* Jerry room co-transform RETIRED (see 5717): jcache is never filled
+           when JERRYX is off. Shrink it to a stub - reclaims 71.8KB of BSS
+           for the 240-tall title framebuffers (task #4) + stack headroom. */
+        static uint32_t jcache[1][4] __attribute__((aligned(8)));
+#endif
         static const uint8_t *jxroom[8];    /* blob base per slot (for sort) */
         int njx;
         int roomCount, atlasW;
@@ -3293,9 +3300,9 @@ int main(void)
              16 + 52*8 + 100*TREC = 3432 bytes. At the old 2304 it tripped the
              clamp below and rendered with ZERO faces - an invisible item, not
              an error. */
-          static uint8_t rblob[4][3456] __attribute__((aligned(8)));
+          static uint8_t rblob[4][9216] __attribute__((aligned(8)));
 #else
-          static uint8_t rblob[4][1280] __attribute__((aligned(8)));
+          static uint8_t rblob[4][4096] __attribute__((aligned(8)));
 #endif
           const uint8_t *rsrc[4]; const uint8_t *ratl[4];
           int rvcnt[4], rblen[4];
@@ -3386,6 +3393,10 @@ int main(void)
                 }
             } }
 #endif
+          /* ---- task #4: TITLE MODE - native 240-line display + 240-line
+             projection kernel. The game phase switches both back below. */
+          { extern void video_set_disp240(int); extern void gpu_kernel_select(int);
+            video_set_disp240(1); gpu_kernel_select(1); }
           for (;;) {
               /* PHYSICAL PAD ONLY, DEBOUNCED: a bit counts only when TWO
                  consecutive reads agree (single-frame pad glitches were
@@ -3456,11 +3467,9 @@ int main(void)
                      the straight copy.
                      (Native-240 composite tried 2026-07-12: too slow on the
                      68k — revisit with a Blitter composite, task #29.) */
-                  { int yy2, xx2;
-                    for (yy2 = 0; yy2 < RENDER_H; yy2++)
-                      for (xx2 = 0; xx2 < RENDER_W; xx2++)
-                          tfb[yy2*RENDER_W+xx2] =
-                              simg[(yy2*(240/RENDER_H))*RENDER_W+xx2]; }
+                  /* task #4: the title displays plain-240 now - copy the
+                     320x240 art 1:1 (it was decimated to 120 before). */
+                  blit_copy(simg, tfb, 240);
 #else
                   blit_copy(simg, tfb, RENDER_H);   /* was a 76800-iteration 68k byte loop */
 #endif
@@ -3776,6 +3785,9 @@ int main(void)
                                         sfx_play(1, SFX_MENU_SHOW); break; }
               }
           }
+          /* task #4: leave TITLE mode - game kernel + scaled 120-line display */
+          { extern void video_set_disp240(int); extern void gpu_kernel_select(int);
+            video_set_disp240(0); gpu_kernel_select(0); }
 #if defined(GYMTEST) || defined(CAVETEST)
           menu_done:
           { volatile uint32_t *v0 = (volatile uint32_t *)0xF1C340u;
@@ -5896,8 +5908,8 @@ int main(void)
                    units in front of Lara, ignoring entities/AI/gates, to prove
                    the model renders. Wolf ahead, bear ahead-and-right. */
                 if (ndrawn < 37) {
-                    int fx = (int)(((int32_t)SIN(g_layaw) * 1600) >> 16);
-                    int fz = (int)(((int32_t)COS(g_layaw) * 1600) >> 16);
+                    int fx = (int)(((int32_t)SIN(g_layaw) * 900) >> 16);
+                    int fz = (int)(((int32_t)COS(g_layaw) * 900) >> 16);
                     g_batx[0] = g_lax + fx;  g_baty[0] = g_lay;  g_batz[0] = g_laz + fz;
                     build_ent_wolf(ent_wolf_blob[0], atlasW, 0,
                                    g_batframe % MRT_WOLF_FRAMES);

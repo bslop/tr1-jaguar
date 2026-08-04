@@ -32,3 +32,16 @@ gpu_probe_kernel:
 gpu_probe_kernel_end:
 
 	.section .note.GNU-stack,"",%progbits
+
+/* TITLE-HQ kernel (task #4): same gpu_geotex assembled with LOWRES=0
+ * (240-line projection). The 68k uploads this during the TITLE phase and
+ * re-uploads gpu_kernel when the game starts. */
+	.section .rodata
+	.balign	4
+	.globl	gpu_kernel_hq
+	.globl	gpu_kernel_hq_end
+gpu_kernel_hq:
+#if defined(MULTIROOM)
+	.incbin	"build/gpu_geotex_hq.bin"
+#endif
+gpu_kernel_hq_end:
