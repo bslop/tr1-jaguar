@@ -65,11 +65,11 @@ for mi, m in enumerate(mats):
 quads = []; tris = []
 def is_sidewall(vi):
     zs2 = [verts[k][2] for k in vi]
-    return max(zs2) - min(zs2) >= 8       # spans the slab depth = a wall
+    return max(zs2) - min(zs2) >= 1       # any z-span = a wall (tops are flat)
 for vi, mi in faces:
     uv = cells[mi]
-    if len(vi) == 4 and is_sidewall(vi):
-        quads.append((vi, uv)); continue
+    if is_sidewall(vi):
+        continue          # 1px at bas-relief depth: invisible, not worth bytes
     if len(vi) == 3:
         tris.append((vi, uv))
     else:                                  # quad top / ngon: fan to tris
