@@ -26,6 +26,8 @@ sc = 156.0 / (max(xs) - min(xs))
 cx = (max(xs)+min(xs))/2.0
 ys = [v[1] for v in verts_b]; cy = (max(ys)+min(ys))/2.0
 zs = [v[2] for v in verts_b]; cz = (max(zs)+min(zs))/2.0
+# Standing, face toward the camera (-Z): the convention the photo-traced pad
+# proved on the ring. Blender +Y(top)->-Y(up), +Z(face)->-Z(front).
 verts = [(int(round((v[0]-cx)*sc)),
           int(round(-(v[1]-cy)*sc)),
           int(round(-(v[2]-cz)*sc))) for v in verts_b]
@@ -35,7 +37,9 @@ AW = 256
 pal = struct.unpack(">256H", open(os.path.join(OUT, "title_pal.bin"), "rb").read())
 def dec(c): return (((c>>11)&31)*255//31, ((c>>1)&31)*255//31, ((c>>6)&31)*255//31)
 prgb = [dec(c) for c in pal]
+GAIN = float(os.environ.get("JAGPAD_GAIN", "1.6"))   # title_pal is dark; bias up
 def nearest(r, g, b):
+    r = min(255, int(r*GAIN)); g = min(255, int(g*GAIN)); b = min(255, int(b*GAIN))
     best = 1<<30; bi = 0
     for i,(pr,pg,pb) in enumerate(prgb):
         dd = (r-pr)**2 + (g-pg)**2 + (b-pb)**2
@@ -52,16 +56,28 @@ for mi, m in enumerate(mats):
             atlas[yy*AW + x0 + xx] = idx
     cells.append((x0+4, 4))            # cell centre texel
 
-# ---- faces ----
+# ---- faces: PHASE-AWARE (kernel draws ALL quads then ALL tris, no z-sort).
+# Detail plates sit ABOVE the body, so anything that must paint over another
+# surface goes in the TRI phase, in authoring order (body first, details last).
+# Only depth-safe SIDE WALLS (verts spanning front/back in z) stay quads. ----
 quads = []; tris = []
+def is_sidewall(vi):
+    zs2 = [verts[k][2] for k in vi]
+    return max(zs2) - min(zs2) >= 8       # spans the slab depth = a wall
 for vi, mi in faces:
     uv = cells[mi]
-    if len(vi) == 4: quads.append((vi, uv))
-    elif len(vi) == 3: tris.append((vi, uv))
-    else:                               # ngon: fan
+    if len(vi) == 4 and is_sidewall(vi):
+        quads.append((vi, uv)); continue
+    if len(vi) == 3:
+        tris.append((vi, uv))
+    else:                                  # quad top / ngon: fan to tris
         for k in range(1, len(vi)-1):
             tris.append(([vi[0], vi[k], vi[k+1]], uv))
 
+# static painter: farther (larger z) first - authoring order was scrambled
+# by Blender's join_triangles, and the kernel has no depth sort.
+tris.sort(key=lambda f: -sum(verts[k][2] for k in f[0])/len(f[0]))
+quads.sort(key=lambda f: -sum(verts[k][2] for k in f[0])/len(f[0]))
 nv, nq, nt = len(verts), len(quads), len(tris)
 expanded = 16 + nv*8 + nq*36 + nt*30
 BUDGET = int(os.environ.get("JAGPAD_BUDGET", "9216"))

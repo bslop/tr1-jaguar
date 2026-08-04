@@ -3300,7 +3300,7 @@ int main(void)
              16 + 52*8 + 100*TREC = 3432 bytes. At the old 2304 it tripped the
              clamp below and rendered with ZERO faces - an invisible item, not
              an error. */
-          static uint8_t rblob[4][9216] __attribute__((aligned(8)));
+          static uint8_t rblob[4][10560] __attribute__((aligned(8)));
 #else
           static uint8_t rblob[4][4096] __attribute__((aligned(8)));
 #endif
@@ -3607,9 +3607,9 @@ int main(void)
                         /* Controls - INV_CONTROLS (97). Shares the front-of-ring
                            spot; its own orientation is CTRL_YAW/PITCH/ROLL. Not
                            yet tuned against the reference. */
-                        { PASS_X, PASS_Y, PASS_Z, CTRL_YAW,   230, -80, 470, 96  },
+                        { PASS_X, PASS_Y, PASS_Z, CTRL_YAW,   230, -80, 470, 24  },
                         /* Lara's Home - the polaroid. */
-                        { 0,   0, 240, 0,     230, -80, 470, 96  },
+                        { 0,   0, 240, 0,     230, -80, 470, 24  },
                       };
                       static const int16_t mrot[RING_N][2] = {   /* pitch, roll */
                         { PASS_PITCH, PASS_ROLL },
