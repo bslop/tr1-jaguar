@@ -28,7 +28,7 @@ ys = [v[1] for v in verts_b]; cy = (max(ys)+min(ys))/2.0
 zs = [v[2] for v in verts_b]; cz = (max(zs)+min(zs))/2.0
 # Standing, face toward the camera (-Z): the convention the photo-traced pad
 # proved on the ring. Blender +Y(top)->-Y(up), +Z(face)->-Z(front).
-FLAT = float(os.environ.get("JAGPAD_FLAT", "0.25"))  # bas-relief: painter
+FLAT = float(os.environ.get("JAGPAD_FLAT", "1.0"))  # bas-relief: painter
 # order stays valid at every ring yaw (a deep stack inverts when spun)
 verts = [(int(round((v[0]-cx)*sc)),
           int(round(-(v[1]-cy)*sc)),
@@ -68,8 +68,13 @@ def is_sidewall(vi):
     return max(zs2) - min(zs2) >= 1       # any z-span = a wall (tops are flat)
 for vi, mi in faces:
     uv = cells[mi]
-    if is_sidewall(vi):
-        continue          # 1px at bas-relief depth: invisible, not worth bytes
+    zs2 = [verts[k][2] for k in vi]
+    span = max(zs2) - min(zs2)
+    if span >= 3:
+        # silhouette wall (body/back/deck) - KEEP or the model is see-through
+        if len(vi) == 4: quads.append((vi, uv)); continue
+    elif span >= 1:
+        continue          # 1-2px detail wall: invisible, not worth bytes
     if len(vi) == 3:
         tris.append((vi, uv))
     else:                                  # quad top / ngon: fan to tris
