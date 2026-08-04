@@ -28,9 +28,11 @@ ys = [v[1] for v in verts_b]; cy = (max(ys)+min(ys))/2.0
 zs = [v[2] for v in verts_b]; cz = (max(zs)+min(zs))/2.0
 # Standing, face toward the camera (-Z): the convention the photo-traced pad
 # proved on the ring. Blender +Y(top)->-Y(up), +Z(face)->-Z(front).
+FLAT = float(os.environ.get("JAGPAD_FLAT", "0.25"))  # bas-relief: painter
+# order stays valid at every ring yaw (a deep stack inverts when spun)
 verts = [(int(round((v[0]-cx)*sc)),
           int(round(-(v[1]-cy)*sc)),
-          int(round(-(v[2]-cz)*sc))) for v in verts_b]
+          int(round(-(v[2]-cz)*sc*FLAT))) for v in verts_b]
 
 # ---- atlas: one 8x8 swatch cell per material, title_pal-nearest ----
 AW = 256
