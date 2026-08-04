@@ -2901,7 +2901,7 @@ int main(void)
     gpu_ok = gpu_init();             /* Tom drains the span list if up */
     CRUMB(0x07FF);                   /* CYAN: gpu_init done */
     { extern int jerry_init(void);
-      gpu_geotex_setclip(0, 319, 0, 239);  /* task #4: 240-line title */   /* clip = full screen */
+      gpu_geotex_setclip(0, 319, 0, RENDER_H-1);   /* clip = full screen */
       g_jerry_ok = jerry_init();
       CRUMB(0xF81F);                 /* MAGENTA: jerry_init done */
       g_sfx_ok = g_jerry_ok;
@@ -3642,7 +3642,7 @@ int main(void)
                       tcam[0]=(uint32_t)(COS(0)>>4); tcam[1]=(uint32_t)(SIN(0)>>4);
                       tcam[2]=(uint32_t)(COS(6)>>4); tcam[3]=(uint32_t)(SIN(6)>>4);
                       tcam[4]=0; tcam[5]=(uint32_t)(-20); tcam[6]=0; tcam[7]=0;
-                      gpu_geotex_setclip(0, 319, 0, RENDER_H-1);
+                      gpu_geotex_setclip(0, 319, 0, 239);  /* task #4: 240-line title */
                       if (popen) {
                           /* OPENING / OPEN: the closed booklet is replaced by the
                              opened spread (slot RING_N), swung up to the camera
