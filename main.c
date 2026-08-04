@@ -3511,13 +3511,13 @@ int main(void)
 #endif
 
 #ifndef PASS_X
-#define PASS_X (-34)
+#define PASS_X 22
 #endif
 #ifndef PASS_Y
-#define PASS_Y 270
+#define PASS_Y 203
 #endif
 #ifndef PASS_Z
-#define PASS_Z 530
+#define PASS_Z 700
 #endif
 /* The OPEN spread (model 71). Reference: it fills the middle of the screen,
    ~60%% of frame height, centred (45%%, 75%%), running off the bottom edge. */
@@ -3603,13 +3603,13 @@ int main(void)
                         /* Game - the passport. Tuned against the original's
                            title screen: booklet 24.4%% of frame height, centred
                            (46.6%%, 79.8%%). See PASS_X/Y/Z above. */
-                        { PASS_X, PASS_Y, PASS_Z, PASS_YAW,  -230, -80, 470, 24  },
+                        { PASS_X, PASS_Y, PASS_Z, PASS_YAW,  -119, -72, 800, 24  },
                         /* Controls - INV_CONTROLS (97). Shares the front-of-ring
                            spot; its own orientation is CTRL_YAW/PITCH/ROLL. Not
                            yet tuned against the reference. */
-                        { PASS_X, PASS_Y, PASS_Z, CTRL_YAW,   230, -80, 470, 24  },
+                        { PASS_X, PASS_Y, PASS_Z, CTRL_YAW,  -215, 148, 800, 24  },
                         /* Lara's Home - the polaroid. */
-                        { 0,   0, 240, 0,     230, -80, 470, 24  },
+                        { PASS_X, PASS_Y, PASS_Z, 0,          -25, -30, 800, 24  },
                       };
                       static const int16_t mrot[RING_N][2] = {   /* pitch, roll */
                         { PASS_PITCH, PASS_ROLL },
@@ -3633,8 +3633,11 @@ int main(void)
                           px[it2] = m[0] + ((m[4]-m[0])*f>>8);
                           py[it2] = m[1] + ((m[5]-m[1])*f>>8);
                           pz[it2] = m[2] + ((m[6]-m[2])*f>>8);
+                          /* the ORIGINAL spins the selected item a full 360
+                             clockwise, showing front AND back (user reference
+                             2026-08-04). Unselected items hold still. */
                           yw[it2] = (m[3] + ((m[7]-m[3])*f>>8)
-                                     + ((f<64) ? ((SIN(spin)*24)>>16) : 0)) & 1023;
+                                     + ((f<64) ? spin : 0)) & 1023;
                           zi[it2] = pz[it2];
                           pt[it2] = mrot[it2][0];
                           rl[it2] = mrot[it2][1];
@@ -3678,6 +3681,19 @@ int main(void)
                           gpu_geotex(rblob[it2], tfb, tcam, ratl[it2], 256u);
                         }
                       }
+                  }
+                  /* RING LABEL + SELECT PROMPT (reference 2026-08-04): the
+                     original shows the item's name bottom-centre and a
+                     "Select" prompt bottom-left. Jaguar wording, TR font. */
+                  if (!copen && !popen) {
+                      static const char *const RLBL[3] =
+                          { "New Game", "Controls", "Laras Home" };
+                      const char *lb = RLBL[page < 3 ? page : 0];
+                      int ln = 0; while (lb[ln]) ln++;
+                      menu_text((fbpix *)tfb, RENDER_W, 240,
+                                lb, (320 - ln*8)/2, 200, 2, 2, 255);
+                      menu_text((fbpix *)tfb, RENDER_W, 240,
+                                "A Select", 10, 200, 2, 2, 255);
                   }
                   /* CONTROLS PAGE (2026-08-01) - an OVERLAY on the dimmed
                      title, which is exactly what the original does: the logo,
