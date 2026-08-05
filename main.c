@@ -3387,17 +3387,33 @@ int main(void)
               rvcnt[it2]=nv; rblen[it2]=len;
 #else
               /* title assets are LEGACY format — copy record-wise, inserting
-                 the dummy plane prefix the STAGEDIET kernel expects */
+                 the dummy plane prefix the STAGEDIET kernel expects.
+                 ☠️ TRIS ARE PROMOTED TO REPEATED-CORNER QUADS (2026-08-05):
+                 the title path tears tri records on silicon (pad
+                 checkerboard, Sound headphones holes) while every all-quad
+                 item is solid — in-game tris are fine, so the fault sits in
+                 this path's tri handling. Every tri becomes a quad with
+                 v3=v2 / uv3=uv2: a degenerate fourth corner renders the same
+                 triangle through the proven quad path. */
               int hdr=16+nv*8, i3, f3;
-              int len=hdr+nq*QREC+nt*TREC;
+              int len=hdr+(nq+nt)*QREC;
               uint16_t *w2; const uint16_t *s2;
               if (len > (int)sizeof(rblob[0])) { nq=0; nt=0; len=hdr; }
               for (i3=0;i3<hdr;i3++) rblob[it2][i3]=sb[i3];
+              /* staged header: every face is a quad now */
+              rblob[it2][2]=(uint8_t)((nq+nt)>>8);
+              rblob[it2][3]=(uint8_t)(nq+nt);
+              rblob[it2][4]=0; rblob[it2][5]=0;
               w2=(uint16_t*)(rblob[it2]+hdr); s2=(const uint16_t*)(sb+hdr);
               for (f3=0;f3<nq;f3++){ EMIT_PLANE(w2);
                   for(i3=0;i3<12;i3++) w2[i3]=s2[i3]; w2+=12; s2+=12; }
               for (f3=0;f3<nt;f3++){ EMIT_PLANE(w2);
-                  for(i3=0;i3<9;i3++) w2[i3]=s2[i3]; w2+=9; s2+=9; }
+                  w2[0]=s2[0]; w2[1]=s2[1]; w2[2]=s2[2]; w2[3]=s2[2];
+                  w2[4]=s2[3]; w2[5]=s2[4];
+                  w2[6]=s2[5]; w2[7]=s2[6];
+                  w2[8]=s2[7]; w2[9]=s2[8];
+                  w2[10]=s2[7]; w2[11]=s2[8];
+                  w2+=12; s2+=9; }
               rvcnt[it2]=nv; rblen[it2]=len;
 #endif
             } }
