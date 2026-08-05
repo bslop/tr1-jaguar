@@ -136,68 +136,86 @@ def to_blob(p): return (int(round((p[0]-cx)*sc)), int(round((p[1]-cy)*sc)))
 P2=[to_blob(p) for p in poly]
 
 
-# ---- 3. ear-clip the outline (works for concave) ----
-def area2(a,b,c): return (b[0]-a[0])*(c[1]-a[1])-(c[0]-a[0])*(b[1]-a[1])
-def earclip(pts):
-    n=len(pts); idxs=list(range(n))
-    # ensure CCW in pixel space (y down): signed area
-    sa=sum(pts[i][0]*pts[(i+1)%n][1]-pts[(i+1)%n][0]*pts[i][1] for i in range(n))
-    if sa<0: idxs=idxs[::-1]
-    tris=[]
-    guard=0
-    while len(idxs)>3 and guard<1000:
-        guard+=1
-        n2=len(idxs)
-        for k in range(n2):
-            a,bb,c=idxs[(k-1)%n2],idxs[k],idxs[(k+1)%n2]
-            if area2(pts[a],pts[bb],pts[c])<=0: continue
-            ok=True
-            for j in idxs:
-                if j in (a,bb,c): continue
-                w0=area2(pts[a],pts[bb],pts[j]); w1=area2(pts[bb],pts[c],pts[j]); w2=area2(pts[c],pts[a],pts[j])
-                if w0>0 and w1>0 and w2>0: ok=False; break
-            if ok:
-                tris.append((a,bb,c)); idxs.pop(k); break
-        else: break
-    if len(idxs)==3: tris.append(tuple(idxs))
-    return tris
-cap=earclip(P2)
-# TESSELLATE the caps to the PS1 blob's operating point (~9px^2 tris at ring
-# scale): huge tris smear badly under the kernel's affine texture stepping
-# (screen-linear du/dx per face), and the PS1 pad's ~100 small tris are the
-# proven fix. Longest-edge midpoint split until area <= TARGET units^2.
-TARGET=float(os.environ.get("PAD_TRIAREA","900"))
-capv=list(P2)                          # 2D working verts (blob x,y)
-def tarea(a,b,c):
-    return abs((b[0]-a[0])*(c[1]-a[1])-(c[0]-a[0])*(b[1]-a[1]))/2.0
-def split(tris0):
-    out=[]
-    stack=list(tris0)
-    MAXE2=float(os.environ.get("PAD_MAXEDGE","80"))**2
-    while stack:
-        t=stack.pop()
-        a,b,c=t
-        e2=max((capv[t[i]][0]-capv[t[(i+1)%3]][0])**2+(capv[t[i]][1]-capv[t[(i+1)%3]][1])**2 for i in range(3))
-        # split on EITHER big area OR a long edge: ear-clip leaves perimeter
-        # SLIVERS (tiny area, huge UV span) and those are the affine-streak
-        # generators - the kernel's du/dx overshoots off the atlas
-        if tarea(capv[a],capv[b],capv[c])<=TARGET and e2<=MAXE2:
-            out.append(t); continue
-        # longest edge
-        e=[(a,b,c),(b,c,a),(c,a,b)]
-        (p0,p1,p2v)=max(e,key=lambda e2:(capv[e2[0]][0]-capv[e2[1]][0])**2+(capv[e2[0]][1]-capv[e2[1]][1])**2)
-        mx=(capv[p0][0]+capv[p1][0])//2; my=(capv[p0][1]+capv[p1][1])//2
-        try: mi=capv.index((mx,my))
-        except ValueError: mi=len(capv); capv.append((mx,my))
-        stack.append((p0,mi,p2v)); stack.append((mi,p1,p2v))
-    return out
-cap=split(cap)
+# ---- 3. GRID-CLIP plate mesh (2026-08-04, replaces ear-clip+split):
+# uniform cells clipped to the convex outline -> well-shaped tris, NO
+# T-junctions, NO slivers. Midpoint tessellation of ear-clip fans made
+# sliver chains whose INTEGER screen area flips sign mid-spin = fat wedge
+# holes on silicon (the "yellow streaks" = dial art through the gaps).
+CELL=int(os.environ.get("PAD_CELL","34"))
+# hull as CCW (pixel space y-down: enforce by signed area)
+sa=sum(P2[i][0]*P2[(i+1)%N][1]-P2[(i+1)%N][0]*P2[i][1] for i in range(N))
+H=P2[:] if sa>0 else P2[::-1]
+def clip_cell(x0,y0,x1,y1):
+    poly=[(x0,y0),(x1,y0),(x1,y1),(x0,y1)]
+    for i in range(len(H)):
+        a=H[i]; b2=H[(i+1)%len(H)]
+        out=[]
+        for j in range(len(poly)):
+            c=poly[j]; d2=poly[(j+1)%len(poly)]
+            ic=(b2[0]-a[0])*(c[1]-a[1])-(b2[1]-a[1])*(c[0]-a[0])>=0
+            idd=(b2[0]-a[0])*(d2[1]-a[1])-(b2[1]-a[1])*(d2[0]-a[0])>=0
+            if ic: out.append(c)
+            if ic!=idd:
+                # p(t)=c+t(d-c) on line ab: t = -cross(b-a,c-a)/cross(b-a,d-c)
+                cr_ca=(b2[0]-a[0])*(c[1]-a[1])-(b2[1]-a[1])*(c[0]-a[0])
+                cr_dc=(b2[0]-a[0])*(d2[1]-c[1])-(b2[1]-a[1])*(d2[0]-c[0])
+                if cr_dc!=0:
+                    t=max(0.0,min(1.0,-cr_ca/cr_dc))
+                    out.append((c[0]+(d2[0]-c[0])*t, c[1]+(d2[1]-c[1])*t))
+        poly=out
+        if not poly: return []
+    return poly
+xs2=[p[0] for p in P2]; ys2=[p[1] for p in P2]
+gx0,gx1=min(xs2),max(xs2); gy0,gy1=min(ys2),max(ys2)
+vmap={}; capv=[]
+def vid(pt):
+    k=(int(round(pt[0])),int(round(pt[1])))
+    if k not in vmap:
+        vmap[k]=len(capv); capv.append(k)
+    return vmap[k]
+cap=[]
+yy=gy0
+while yy<gy1:
+    xx=gx0
+    while xx<gx1:
+        poly=clip_cell(xx,yy,min(xx+CELL,gx1),min(yy+CELL,gy1))
+        if len(poly)>=3:
+            ids=[vid(pt) for pt in poly]
+            ids2=[ids[0]]
+            for k in ids[1:]:
+                if k!=ids2[-1]: ids2.append(k)
+            if len(ids2)>=3 and ids2[0]!=ids2[-1]:
+                for k in range(1,len(ids2)-1):
+                    a,b3,c=ids2[0],ids2[k],ids2[k+1]
+                    ar=(capv[b3][0]-capv[a][0])*(capv[c][1]-capv[a][1])-(capv[c][0]-capv[a][0])*(capv[b3][1]-capv[a][1])
+                    if ar!=0: cap.append((a,b3,c))
+        xx+=CELL
+    yy+=CELL
 NCV=len(capv)
-print("cap tris after tessellation:",len(cap),"cap verts:",NCV)
-verts=[]
-for (x,y) in capv: verts.append((-x,y, TH))    # front sheet (180 about Y:
-for (x,y) in capv: verts.append((-x,y,-TH))    # face lands at ring yaw 0)
+print("grid mesh: %d verts %d tris"%(NCV,len(cap)))
+# boundary verts (on a hull edge) ordered along the perimeter, for the rim
+def on_edge(pt):
+    for i in range(len(H)):
+        a=H[i]; b2=H[(i+1)%len(H)]
+        cr=(b2[0]-a[0])*(pt[1]-a[1])-(b2[1]-a[1])*(pt[0]-a[0])
+        if abs(cr)<=max(abs(b2[0]-a[0]),abs(b2[1]-a[1]))*1.5:
+            dot=(pt[0]-a[0])*(b2[0]-a[0])+(pt[1]-a[1])*(b2[1]-a[1])
+            L2=(b2[0]-a[0])**2+(b2[1]-a[1])**2
+            if -0.05*L2<=dot<=1.05*L2:
+                return i+max(0,min(1,dot/L2 if L2 else 0))
+    return None
+bnd=[]
+for idx,pt in enumerate(capv):
+    t=on_edge(pt)
+    if t is not None: bnd.append((t,idx))
+bnd.sort()
+ring=[i for _,i in bnd]
+NB=len(ring)
+print("rim boundary verts:",NB)
 
+verts=[]
+for (x,y) in capv: verts.append((-x,y, TH))    # front sheet (180 about Y)
+for (x,y) in capv: verts.append((-x,y,-TH))
 # ---- 4. atlas: front 124x?, back beside, rim swatch; quantize ----
 pal=struct.unpack(">256H",open(OUT+"/title_pal.bin","rb").read())
 def dec(c): return (((c>>11)&31)*255//31,((c>>1)&31)*255//31,((c>>6)&31)*255//31)
@@ -249,11 +267,10 @@ for (a,bb,c) in cap:
     tris.append(([a,bb,c],[plate_uv(*capv[a],False),plate_uv(*capv[bb],False),plate_uv(*capv[c],False)]))
 for (a,bb,c) in cap:
     tris.append(([NCV+c,NCV+bb,NCV+a],[plate_uv(*capv[c],True),plate_uv(*capv[bb],True),plate_uv(*capv[a],True)]))
-for i in range(N):
-    j=(i+1)%N
-    a,bq2,c,d2=i,j,NCV+j,NCV+i
-    tris.append(([a,bq2,c],[rimuv]*3))
-    tris.append(([a,c,d2],[rimuv]*3))
+for k in range(NB):
+    a=ring[k]; b4=ring[(k+1)%NB]
+    tris.append(([a,b4,NCV+b4],[rimuv]*3))
+    tris.append(([a,NCV+b4,NCV+a],[rimuv]*3))
 # ---- 6. winding: negative signed volume (PS1 convention) ----
 def vol():
     v=0
