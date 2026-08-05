@@ -3691,9 +3691,9 @@ int main(void)
                       const char *lb = RLBL[page < 3 ? page : 0];
                       int ln = 0; while (lb[ln]) ln++;
                       menu_text((fbpix *)tfb, RENDER_W, 240,
-                                lb, (320 - ln*8)/2, 200, 2, 2, 255);
+                                lb, (320 - ln*8)/2, 200, 2, 2, 0);   /* title_pal[255]=black; 0 is bright */
                       menu_text((fbpix *)tfb, RENDER_W, 240,
-                                "A Select", 10, 200, 2, 2, 255);
+                                "A Select", 10, 200, 2, 2, 0);
                   }
                   /* CONTROLS PAGE (2026-08-01) - an OVERLAY on the dimmed
                      title, which is exactly what the original does: the logo,
