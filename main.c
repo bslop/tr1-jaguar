@@ -3433,7 +3433,7 @@ int main(void)
                 remain = gd_fsize((unsigned)vh);
                 if (remain < 1024 || (remain & 511) ||
                     gd_fread((unsigned)vh, vb, 1024, GD_FREAD_CPU) != 0 ||
-                    vb[0] != 'J' || vb[1] != 'V') {
+                    vb[0] != 'J' || vb[1] != 'V' || vb[3] != '3') {
                     gd_fclose((unsigned)vh); continue;
                 }
                 remain -= 1024;
@@ -3446,9 +3446,9 @@ int main(void)
                 have = 0; pos = 0;
                 t0 = frame_count;
                 for (fi = 0; fi < vnf; fi++) {
-                    uint32_t L;
+                    uint32_t L, AL;
                     uint8_t *s, *e, *dst, *dend;
-                    int y2, x2, need = 4, lo, hi, u0, u1;
+                    int y2, x2, need = 8, lo, hi, u0, u1;
                     uint8_t *wlo, *whi;              /* written byte extent */
 #ifdef VIDPROF
                     volatile uint16_t *vcp = (volatile uint16_t *)0xF00006u;
@@ -3464,11 +3464,15 @@ int main(void)
 #endif
                     for (;;) {
                         if (have - pos >= need) {
-                            if (need > 4) break;
-                            L = ((uint32_t)vb[pos] << 24) | ((uint32_t)vb[pos+1] << 16)
-                              | ((uint32_t)vb[pos+2] << 8) | vb[pos+3];
-                            if (L == 0 || L > 24576u) { fi = vnf; break; }
-                            need = 4 + (int)((L + 3u) & ~3u);
+                            if (need > 8) break;
+                            L  = ((uint32_t)vb[pos] << 24) | ((uint32_t)vb[pos+1] << 16)
+                               | ((uint32_t)vb[pos+2] << 8) | vb[pos+3];
+                            AL = ((uint32_t)vb[pos+4] << 24) | ((uint32_t)vb[pos+5] << 16)
+                               | ((uint32_t)vb[pos+6] << 8) | vb[pos+7];
+                            if (L == 0 || L > 24576u || AL > 4096u || (AL & 3)) {
+                                fi = vnf; break;
+                            }
+                            need = 8 + (int)AL + (int)((L + 3u) & ~3u);
                             if (have - pos >= need) break;
                         }
                         if (pos) { int mv = have - pos, k2;
@@ -3490,7 +3494,36 @@ int main(void)
 #ifdef VIDPROF
                     tRd = VPT() - tA; tA = VPT();
 #endif
-                    pos += 4;
+                    pos += 8;
+                    /* AUDIO (user 2026-08-05: 'Add the audio to the
+                       videos'): the disc XA track rides in each record as
+                       s8@11025 chunks; hand them to the DSP voice-0
+                       gapless queue (the music streamer's engine). mbuf
+                       is idle until the title music primes - reuse it as
+                       the double buffer. Wait briefly for the queue slot:
+                       chunks are 124.8ms, frames 125ms, so it frees in
+                       time; the bound keeps a dead DSP from hanging us. */
+                    if (AL) {
+                        if (g_sfx_ok) {
+                            int8_t *ab = mbuf[fi & 1];
+                            const uint32_t *as2 = (const uint32_t *)(vb + pos);
+                            uint32_t *ad = (uint32_t *)ab;
+                            uint32_t k2;
+                            for (k2 = 0; k2 < AL >> 2; k2++) ad[k2] = as2[k2];
+                            if (fi == 0) {
+                                jerry_sfx(0, ab, AL, 0);
+                            } else {
+                                volatile uint32_t *ncnt =
+                                    (volatile uint32_t *)0xF1C378u;
+                                uint32_t w2;
+                                for (w2 = 0; w2 < 200000u && *ncnt; w2++)
+                                    ;
+                                { extern void jerry_sfx_queue(const void*, uint32_t);
+                                  jerry_sfx_queue(ab, AL); }
+                            }
+                        }
+                        pos += (int)AL;
+                    }
                     s = vb + pos; e = s + L; pos += (int)((L + 3u) & ~3u);
                     /* user 2026-08-05: "Stop using the 68000. Do it in
                        jrisc on Tom." - the whole frame (JV02 decode +

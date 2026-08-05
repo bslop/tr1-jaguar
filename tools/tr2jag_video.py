@@ -22,6 +22,13 @@
 import os, struct, subprocess, sys, tempfile
 from PIL import Image
 
+# JV03: audio muxed in. Per-frame record = u32 vlen | u32 alen |
+# audio[alen pad4] | video[vlen pad4]; audio = s8 mono 11025Hz chunks
+# (1376/frame at 8fps - 4-aligned, 0.15% drift over a 10s clip). The
+# player hands audio to the DSP voice-0 gapless queue (the music path's
+# proven engine) and Tom decodes the video payload unchanged.
+ACHUNK = 1376
+
 SRC = sys.argv[1]
 OUT = sys.argv[2]
 FPS = int(sys.argv[3]) if len(sys.argv) > 3 else 12
@@ -62,6 +69,11 @@ def packbits(d, prev):
     return bytes(out)
 
 with tempfile.TemporaryDirectory() as td:
+    apath = os.path.join(td, "a.raw")
+    r2 = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", SRC, "-vn",
+                         "-f", "s8", "-ar", "11025", "-ac", "1", apath])
+    audio = open(apath, "rb").read() if r2.returncode == 0 and os.path.exists(apath) else b""
+    print("audio: %d bytes (%.1fs)" % (len(audio), len(audio) / 11025.0))
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", SRC,
                     "-vf", (("crop=%d:%d:%d:%d,hqdn3d=4:3:14:14,fps=%d,"
                              "scale=%dx%d:flags=lanczos")
@@ -72,7 +84,7 @@ with tempfile.TemporaryDirectory() as td:
                              "pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black")
                             % (r - l, b - t, l, t, FPS, W, H, W, H)),
                     os.path.join(td, "f_%04d.png")], check=True)
-    frames = sorted(os.listdir(td))
+    frames = sorted(f for f in os.listdir(td) if f.startswith("f_"))
     print("%d frames @ %dfps" % (len(frames), FPS))
     for colors in [int(v) for v in os.environ.get("JV_COLORS","96,64,48,32").split(",")]:
         # shared palette from a sampled montage, then dither-free remap
@@ -110,12 +122,18 @@ with tempfile.TemporaryDirectory() as td:
         if worst <= PAYLOAD_MAX:
             break
     assert worst <= PAYLOAD_MAX, "frame too big even at 32 colours"
+    # hold the last frame (all-skip payloads, ~172B) until the audio ends -
+    # CORE's sting runs ~2.7s past its last video frame
+    hold = bytes([127] * 171 + [99 + 12])          # 171*112 + 48 = 19200
+    while audio and len(enc) * ACHUNK < len(audio):
+        enc.append(hold)
+    print("frames incl. audio-hold:", len(enc))
     with open(OUT, "wb") as o:
         # header+palette padded to 1024 and the tail to a 512 multiple:
         # the GD BIOS FREAD is only ever exercised with sector-aligned,
         # sector-sized reads (the music path's proven envelope) - the
         # 528-byte header read desynced/wedged the stream on silicon.
-        o.write(b"JV02")
+        o.write(b"JV03")
         o.write(struct.pack(">HHHH4x", W, H, FPS, len(enc)))
         for i in range(256):
             if i < colors:
@@ -123,13 +141,17 @@ with tempfile.TemporaryDirectory() as td:
             else:
                 o.write(struct.pack(">H", 0))
         o.write(b"\0" * (1024 - 16 - 512))
-        for p in enc:
-            # records padded to 4 bytes (length field = TRUE length): the
+        for fi, p in enumerate(enc):
+            # records padded to 4 bytes (length fields = TRUE lengths): the
             # player's rolling buffer then stays 4-aligned through
             # compaction, so every FREAD destination is aligned - an odd
             # destination address-errors the 68k inside the BIOS copy
             # (the frozen mid-clip frame, 2026-08-05).
-            o.write(struct.pack(">I", len(p)))
+            a = audio[fi * ACHUNK:(fi + 1) * ACHUNK]
+            if a and len(a) < ACHUNK:
+                a = a + b"\0" * (ACHUNK - len(a))
+            o.write(struct.pack(">II", len(p), len(a)))
+            o.write(a)                       # ACHUNK is 4-aligned already
             o.write(p)
             o.write(b"\0" * ((4 - len(p) % 4) % 4))
         o.write(b"\0" * ((512 - o.tell() % 512) % 512))
