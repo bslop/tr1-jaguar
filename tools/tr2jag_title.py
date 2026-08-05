@@ -188,7 +188,12 @@ def main():
     tpal=[struct.unpack_from(">H",tp,i*2)[0] for i in range(256)]
     def unpack16(c): return ((c>>11)&31,(c>>1)&31,(c>>6)&31)
     tprgb=[unpack16(c) for c in tpal]
+    GAIN=float(os.environ.get("PASS_GAIN","1.0"))
     def nearest(r5,g5,b5):
+        # PASS_GAIN: brightness bias before matching (the Sound headphones
+        # read charcoal on silicon; the PS1's are silver).
+        if GAIN!=1.0:
+            r5=min(31,int(r5*GAIN)); g5=min(31,int(g5*GAIN)); b5=min(31,int(b5*GAIN))
         # NEUTRAL-AWARE (2026-08-05): near-grey source texels may use the
         # reserved grey-ramp tail (245..254) - restricting them to the warm
         # art entries turned the Sound headphones BROWN. Saturated texels
