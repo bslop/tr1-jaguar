@@ -3790,6 +3790,19 @@ int main(void)
                       tcam[2]=(uint32_t)(COS(6)>>4); tcam[3]=(uint32_t)(SIN(6)>>4);
                       tcam[4]=0; tcam[5]=(uint32_t)(-20); tcam[6]=0; tcam[7]=0;
                       gpu_geotex_setclip(0, 319, 0, 239);  /* task #4: 240-line title */
+#ifdef RINGBG
+                      /* DIAGNOSTIC BACKDROP: bright panel behind the select
+                         slot so DROPPED FACES are objectively visible in a
+                         capture. Holes over the dial's dark centre are
+                         black-on-black and invisible to the capture loop -
+                         which is exactly how five "fixed" runs passed the
+                         probe and failed the user's eye (2026-08-05). */
+                      { int by5, bx5; uint8_t *bf5=(uint8_t *)tfb;
+                        for (by5=120; by5<220; by5++)
+                            for (bx5=110; bx5<230; bx5++)
+                                bf5[by5*RENDER_W+bx5]=6;   /* bright gold */
+                      }
+#endif
                       if (popen) {
                           /* OPENING / OPEN: the closed booklet is replaced by the
                              opened spread (slot RING_N), swung up to the camera

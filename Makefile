@@ -1158,6 +1158,11 @@ ifdef TITLESEL
 CFLAGS   += -DTITLESEL=$(TITLESEL)
 CXXFLAGS += -DTITLESEL=$(TITLESEL)
 endif
+# RINGBG=1: bright diagnostic panel behind the select slot (hole detector)
+ifdef RINGBG
+CFLAGS   += -DRINGBG
+CXXFLAGS += -DRINGBG
+endif
 
 # LARA_FOOT1/2=N: footfall frames as EIGHTHS of the run/walk cycle. The
 # footstep SFX is phase-locked to the animation (it used to fire off a

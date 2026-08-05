@@ -189,8 +189,14 @@ def main():
     def unpack16(c): return ((c>>11)&31,(c>>1)&31,(c>>6)&31)
     tprgb=[unpack16(c) for c in tpal]
     def nearest(r5,g5,b5):
+        # NEUTRAL-AWARE (2026-08-05): near-grey source texels may use the
+        # reserved grey-ramp tail (245..254) - restricting them to the warm
+        # art entries turned the Sound headphones BROWN. Saturated texels
+        # stay art-only so the passport's golds keep their gold (the page-
+        # edge regression that motivated the restriction).
+        lim = 255 if (max(r5,g5,b5)-min(r5,g5,b5)) <= 3 else ART_COLORS
         bd=1<<30; bi=0
-        for i,(rr,gg,bb) in enumerate(tprgb[:ART_COLORS]):
+        for i,(rr,gg,bb) in enumerate(tprgb[:lim]):
             d=(r5-rr)**2+(g5-gg)**2+(b5-bb)**2
             if d<bd: bd=d; bi=i
         return bi
