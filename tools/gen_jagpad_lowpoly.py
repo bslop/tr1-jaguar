@@ -133,13 +133,24 @@ for root,fl in comp_faces.items():
                 FACES[fi][0].reverse()
 print("components flipped to positive volume:", flipped)
 
-# ---- emit: quads + tris (staging promotes tris safely) ----
+# ---- emit: closed bodies FIRST, decals LAST (kernel = data order, no
+# z-test: the shell painted over its own decals when created after them) ----
+decal_set=set()
+for root,fl in comp_faces.items():
+    if not comp_closed(fl):
+        for fi in fl: decal_set.add(fi)
+order=[fi for fi in range(len(FACES)) if fi not in decal_set]+      [fi for fi in range(len(FACES)) if fi in decal_set]
 quads=[]; tris=[]
 CELLMAP={0:None,1:cells[3],2:cells[4],3:cells[5],4:cells[6],5:cells[7]}
-for vi,mi in FACES:
+for fi in order:
+    vi,mi=FACES[fi]
     uv = body_cell(vi) if mi==0 else CELLMAP[mi]
-    if len(vi)==4: quads.append((vi,uv))
-    elif len(vi)==3: tris.append((vi,uv))
+    dec2 = fi in decal_set
+    # kernel phases: ALL quads then ALL tris. Shell caps are n-gons -> tris,
+    # so they'd paint over decal QUADS. Decals therefore emit as TRIS (after
+    # the caps in the tri list), shell keeps its natural types.
+    if len(vi)==4 and not dec2: quads.append((vi,uv))
+    elif len(vi)==3 and not dec2: tris.append((vi,uv))
     else:
         for k in range(1,len(vi)-1):
             tris.append(([vi[0],vi[k],vi[k+1]],uv))
