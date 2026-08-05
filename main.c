@@ -2828,14 +2828,17 @@ static void menu_dim(uint8_t *fb, int W, int H, uint8_t blackidx)
    trigger for the silicon boot hang in A10 (see OPEN_ISSUES.md; the sidestep
    needed exactly the same treatment).  Its own frame keeps main() alone. */
 static void title_bake(const uint8_t *sb, uint8_t *db, int nv,
-                       int yaw, int pitch, int roll, int px, int py, int pz)
+                       int yaw, int pitch, int roll, int tilt,
+                       int px, int py, int pz)
     __attribute__((noinline));
 static void title_bake(const uint8_t *sb, uint8_t *db, int nv,
-                       int yaw, int pitch, int roll, int px, int py, int pz)
+                       int yaw, int pitch, int roll, int tilt,
+                       int px, int py, int pz)
 {
     fix cy2 = COS(yaw), sy2 = SIN(yaw);
     fix cp2 = COS(pitch), sp2 = SIN(pitch);
     fix cr2 = COS(roll), sr2 = SIN(roll);
+    fix ct2 = COS(tilt), st2 = SIN(tilt);
     int vi;
     for (vi = 0; vi < nv; vi++) {
         const uint8_t *vp = sb + 16 + vi*8;
@@ -2854,6 +2857,14 @@ static void title_bake(const uint8_t *sb, uint8_t *db, int nv,
                      ly2 = t2; }
         int lx2 = (x*cy2 + lz0*sy2)>>16;
         int lz2 = (lz0*cy2 - x*sy2)>>16;
+        /* CAMERA-FACING TILT (2026-08-05): the fitted rest spot sits ~460
+           units below the camera axis; without tipping the item toward the
+           camera a flat booklet spins as a foreshortened SLIVER (the
+           'diagonal stick'). Applied AFTER yaw so the spin axis stays
+           vertical - the PS1 does the same. */
+        if (tilt) { int t2 = (ly2*ct2 - lz2*st2)>>16;
+                    lz2 = (ly2*st2 + lz2*ct2)>>16;
+                    ly2 = t2; }
         /* ROLL in the image plane. These PSX inventory models are authored
            lying over and the ring bake only ever applied YAW - which is why
            yaw turned the passport EDGE-ON instead of standing it up.
@@ -3601,10 +3612,10 @@ int main(void)
 #endif
 
 #ifndef PASS_X
-#define PASS_X 163
+#define PASS_X (-45)
 #endif
 #ifndef PASS_Y
-#define PASS_Y 478
+#define PASS_Y 402
 #endif
 #ifndef PASS_Z
 #define PASS_Z 719
@@ -3712,10 +3723,10 @@ int main(void)
    centroids. Sel world pos comes out (178,309,719) - PASS_X/Y/Z below match
    so the passport-open lerp starts where the item actually sits. */
 #ifndef RING_CX2
-#define RING_CX2 2
+#define RING_CX2 (-206)
 #endif
 #ifndef RING_CY2
-#define RING_CY2 481
+#define RING_CY2 405
 #endif
 #ifndef RING_RX
 #define RING_RX 948
@@ -3851,8 +3862,9 @@ int main(void)
                       { extern int gpu_sync(void); gpu_sync(); }
                       for (ord2 = 0; ord2 < (popen ? 1 : RING_N); ord2++) {
                         it2 = popen ? RING_N : rord[ord2];
-                        { title_bake(rsrc[it2], rblob[it2], rvcnt[it2],
-                                     yw[it2], pt[it2], rl[it2],
+                        { int tl2 = -((41*(py[it2]-20))/pz[it2]);
+                          title_bake(rsrc[it2], rblob[it2], rvcnt[it2],
+                                     yw[it2], pt[it2], rl[it2], tl2,
                                      px[it2], py[it2], pz[it2]);
                           /* midpoint fixup: appended 4th-corner verts =
                              average of their tri's baked v0/v2 (exact -
