@@ -3601,10 +3601,10 @@ int main(void)
 #endif
 
 #ifndef PASS_X
-#define PASS_X 178
+#define PASS_X 163
 #endif
 #ifndef PASS_Y
-#define PASS_Y 309
+#define PASS_Y 436
 #endif
 #ifndef PASS_Z
 #define PASS_Z 719
@@ -3712,10 +3712,10 @@ int main(void)
    centroids. Sel world pos comes out (178,309,719) - PASS_X/Y/Z below match
    so the passport-open lerp starts where the item actually sits. */
 #ifndef RING_CX2
-#define RING_CX2 17
+#define RING_CX2 2
 #endif
 #ifndef RING_CY2
-#define RING_CY2 312
+#define RING_CY2 439
 #endif
 #ifndef RING_RX
 #define RING_RX 948
@@ -3886,9 +3886,9 @@ int main(void)
                       const char *lb = RLBL[page];
                       int ln = 0; while (lb[ln]) ln++;
                       menu_text((fbpix *)tfb, RENDER_W, 240,
-                                lb, (320 - ln*8)/2, 200, 2, 2, 0);   /* title_pal[255]=black; 0 is bright */
+                                lb, (320 - ln*8)/2, 213, 2, 2, 0);   /* row matched to the reference */
                       menu_text((fbpix *)tfb, RENDER_W, 240,
-                                "A Select", 10, 200, 2, 2, 0);
+                                "A Select", 10, 213, 2, 2, 0);
                   }
                   /* CONTROLS PAGE (2026-08-01) - an OVERLAY on the dimmed
                      title, which is exactly what the original does: the logo,
