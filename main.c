@@ -3616,6 +3616,9 @@ vshow:
                 }
                 gd_fclose((unsigned)vh);
             }
+            if (gpu_ok)
+                gpu_jvdec_done();   /* restore the init-once kernel params
+                                       (mailbox ptr) the video block used */
           }
 #endif
           /* RING ORDER: 0 = Game (passport), 1 = Controls, 2 = Lara's Home.

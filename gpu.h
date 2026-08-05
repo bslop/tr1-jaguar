@@ -42,6 +42,7 @@ void gpu_textured_kick(const uint32_t *list, uint32_t count, void *fb,
  * projects/culls per face, and Blitter-textures the spans. 68k passes only
  * the room blob + camera block + atlas. room = room0_tex.bin. */
 void gpu_jvdec_load(void);
+void gpu_jvdec_done(void);
 int  gpu_jvdec_frame(const void *src, unsigned len, void *stg, void *fb,
                      int u0p, int u1p, int *lo, int *hi);
 void gpu_geotex_setclip(int x0, int x1, int y0, int y1);

@@ -27,7 +27,7 @@ from PIL import Image
 # (1376/frame at 8fps - 4-aligned, 0.15% drift over a 10s clip). The
 # player hands audio to the DSP voice-0 gapless queue (the music path's
 # proven engine) and Tom decodes the video payload unchanged.
-ACHUNK = 1376
+ACHUNK = None   # set per-fps below: round(11025/fps/4)*4
 
 SRC = sys.argv[1]
 OUT = sys.argv[2]
@@ -69,6 +69,8 @@ def packbits(d, prev):
     return bytes(out)
 
 with tempfile.TemporaryDirectory() as td:
+    ACHUNK = (11025 // FPS // 4) * 4
+    print("audio chunk %dB/frame @ %dfps" % (ACHUNK, FPS))
     apath = os.path.join(td, "a.raw")
     r2 = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", SRC, "-vn",
                          "-f", "s8", "-ar", "11025", "-ac", "1", apath])

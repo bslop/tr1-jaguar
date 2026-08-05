@@ -89,6 +89,20 @@ void gpu_jvdec_load(void)
         dst[i] = src[i];
 }
 
+/* Restore the boot-time param block after the clips: gpu_init wrote the
+ * mailbox pointer (+4) and zeroed the geomdirect lara fields (+20/+24)
+ * ONCE; the video params clobber all three, and a geotex kick after that
+ * stores its DONE flag through garbage - the 68k times out on every kick
+ * and the ring items draw desynced (the post-video 'menu doesn't work',
+ * 2026-08-05). */
+void gpu_jvdec_done(void)
+{
+    G_CTRL = 0;
+    *(volatile uint32_t *)(G_PARAMS + 4)  = (uint32_t)mailbox;
+    *(volatile uint32_t *)(G_PARAMS + 20) = 0;
+    *(volatile uint32_t *)(G_PARAMS + 24) = 0;
+}
+
 int gpu_jvdec_frame(const void *src, uint32_t len, void *stg, void *fb,
                     int u0p, int u1p, int *lo, int *hi)
 {
