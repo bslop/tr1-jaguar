@@ -41,6 +41,12 @@ for line in open(os.environ["JAGPAD_OBJ"]):
         for k in range(1,len(c)-1):
             Ftmp.append((c[0],c[k],c[k+1]))
 V0=np.array(Vs); VT=np.array(VTs)
+# PAD_YSTRETCH (2026-08-05): the scan is SQUASHED - 1.9 wide x 1.48 tall
+# where a real Jaguar pad is ~160x240mm (aspect 1.5 tall, not 0.78). The
+# squat blob never read as a controller regardless of mesh quality. Stretch
+# model Y before EVERYTHING (bake + outline derive from it coherently).
+_YS=float(os.environ.get("PAD_YSTRETCH","1.9"))
+V0[:,1]*=_YS
 F=[[[a[0],b[0],c[0]],[a[1],b[1],c[1]]] for a,b,c in Ftmp]
 print("obj: %dv %d tris"%(len(V0),len(F)))
 
@@ -194,6 +200,9 @@ print("outline points:",N)
 pxs=[p[0] for p in poly]; pys=[p[1] for p in poly]
 cx=(max(pxs)+min(pxs))/2; cy=(max(pys)+min(pys))/2
 sc=156.0/(max(pxs)-min(pxs))
+# keep the stretched pad inside the ring envelope: cap height ~170 units
+_h=(max(pys)-min(pys))*sc
+if _h>170.0: sc*=170.0/_h
 TH=22
 def to_blob(p): return (int(round((p[0]-cx)*sc)), int(round((p[1]-cy)*sc)))
 P2=[to_blob(p) for p in poly]
