@@ -3396,14 +3396,19 @@ int main(void)
              played ~6x slow at 2 calls/frame), so the stream is pulled in
              ~24KB chunks into a rolling buffer and frames are parsed out
              of it - one BIOS call per several frames. */
-          { extern void video_set_disp240(int);
-            extern volatile uint32_t frame_count;
+          { extern volatile uint32_t frame_count;
             uint8_t *vb  = (uint8_t *)rblob;         /* stream buffer     */
             uint8_t *stg = (uint8_t *)rblob + 31488; /* 160x120 stage     */
             int vc;
-            video_set_disp240(1);
+            /* Plays in the boot 120-line SCALED mode (OP VSCALE doubles
+               vertically - proven game path; horizontal OP scaling is
+               BANNED, it starves the bus). The 68k doubles horizontally
+               only, and only for the CHANGED row band (temporal deltas):
+               the backbuffer ping-pongs, so each frame repaints the union
+               of its own band and the previous frame's. */
             for (vc = 0; vc < 2; vc++) {
                 int vh = -1, mi2, vw, vhh, vfps, vnf, fi, remain, have, pos;
+                int plo = 0, phi = 120;              /* prev frame's band */
                 uint32_t t0;
                 for (mi2 = 0; mi2 < 2 && vh < 0; mi2++)
                     vh = gd_fopen(vc ? (mi2 ? "/CORE.JV" : "CORE.JV")
@@ -3434,8 +3439,8 @@ int main(void)
                 for (fi = 0; fi < vnf; fi++) {
                     uint32_t L;
                     uint8_t *s, *e, *dst, *dend;
-                    int y2, x2, need = 4;
-                    /* ensure the length word, then the whole payload */
+                    int y2, x2, need = 4, lo, hi, u0, u1;
+                    uint8_t *wlo, *whi;              /* written byte extent */
                     /* records are 4-padded in the file, so pos stays a
                        multiple of 4 and every FREAD destination below is
                        aligned - an odd destination address-errors the 68k
@@ -3462,18 +3467,20 @@ int main(void)
                     }
                     if (fi >= vnf) break;
                     pos += 4;
-                    /* RLE-decode the 160x120 frame into the stage */
-                    s = vb + pos; e = s + L; pos += (int)((L + 3u) & ~3u);
                     /* JV02 tokens: 0..99 colour-run, 100..127 SKIP-run
                        (previous frame persists in the stage - temporal
-                       delta), 128..255 literal. */
+                       delta), 128..255 literal. Track the written band. */
+                    s = vb + pos; e = s + L; pos += (int)((L + 3u) & ~3u);
                     dst = stg; dend = stg + 160 * 120;
+                    wlo = dend; whi = stg;           /* empty extent */
                     while (s < e && dst < dend) {
                         int tk = *s++;
                         if (tk < 100) {
                             int n = tk + 2; uint8_t v = *s++;
                             if (n > (int)(dend - dst)) n = dend - dst;
+                            if (dst < wlo) wlo = dst;
                             while (n--) *dst++ = v;
+                            if (dst > whi) whi = dst;
                         } else if (tk < 128) {
                             int n = (tk - 99) * 4;
                             if (n > (int)(dend - dst)) n = dend - dst;
@@ -3481,20 +3488,28 @@ int main(void)
                         } else {
                             int n = tk - 127;
                             if (n > (int)(dend - dst)) n = dend - dst;
+                            if (dst < wlo) wlo = dst;
                             while (n--) *dst++ = *s++;
+                            if (dst > whi) whi = dst;
                         }
                     }
-                    /* 2x2 pixel-double into the 320x240 backbuffer */
+                    if (wlo < whi) { lo = (int)(wlo - stg) / 160;
+                                     hi = (int)(whi - 1 - stg) / 160; }
+                    else           { lo = 120; hi = 0; }   /* nothing new */
+                    /* horizontal-double the union band into the 320x120
+                       backbuffer; the OP VSCALE shows it full height */
+                    u0 = (lo < plo) ? lo : plo;
+                    u1 = (hi > phi) ? hi : phi;
+                    if (fi < 2) { u0 = 0; u1 = 119; }   /* fresh buffers */
+                    if (u1 > 119) u1 = 119;
                     { uint8_t *fb = (uint8_t *)video_backbuffer();
-                      for (y2 = 0; y2 < 120; y2++) {
+                      for (y2 = u0; y2 <= u1; y2++) {
                           uint8_t  *sr = stg + y2 * 160;
-                          uint16_t *d0 = (uint16_t *)(fb + (y2 * 2) * 320);
-                          uint16_t *d1 = (uint16_t *)(fb + (y2 * 2 + 1) * 320);
-                          for (x2 = 0; x2 < 160; x2++) {
-                              uint16_t vv = (uint16_t)((sr[x2] << 8) | sr[x2]);
-                              d0[x2] = vv; d1[x2] = vv;
-                          }
+                          uint16_t *d0 = (uint16_t *)(fb + y2 * 320);
+                          for (x2 = 0; x2 < 160; x2++)
+                              d0[x2] = (uint16_t)((sr[x2] << 8) | sr[x2]);
                       } }
+                    plo = lo; phi = hi;
                     while ((int)(frame_count - t0) < ((fi + 1) * 60) / vfps)
                         ;
                     video_flip();
