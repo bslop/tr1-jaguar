@@ -3862,7 +3862,10 @@ int main(void)
                       { extern int gpu_sync(void); gpu_sync(); }
                       for (ord2 = 0; ord2 < (popen ? 1 : RING_N); ord2++) {
                         it2 = popen ? RING_N : rord[ord2];
-                        { int tl2 = -((41*(py[it2]-20))/pz[it2]);
+                        { /* 2/3 of the elevation: full compensation un-foreshortens
+                             flat covers into a STRETCHED look (user) - the
+                             PS1 keeps some perspective. */
+                          int tl2 = -((27*(py[it2]-20))/pz[it2]);
                           title_bake(rsrc[it2], rblob[it2], rvcnt[it2],
                                      yw[it2], pt[it2], rl[it2], tl2,
                                      px[it2], py[it2], pz[it2]);

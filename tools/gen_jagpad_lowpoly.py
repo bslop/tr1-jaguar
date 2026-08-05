@@ -29,18 +29,19 @@ VB = d["verts"]; FACES = d["faces"]
 # ---- scale: uniform, sized by HEIGHT (real pad is tall; cap 180 units) ----
 ys = [v[1] for v in VB]; xs = [v[0] for v in VB]; zs = [v[2] for v in VB]
 cy = (max(ys)+min(ys))/2.0; cx = (max(xs)+min(xs))/2.0; cz = (max(zs)+min(zs))/2.0
-sc = 180.0/(max(ys)-min(ys))
+_h=max(ys)-min(ys); _w=max(xs)-min(xs)
+sc = min(180.0/_h, 170.0/_w)
 V = [(int(round((v[0]-cx)*sc)),
       int(round(-(v[1]-cy)*sc)),
       int(round(-(v[2]-cz)*sc))) for v in VB]
 
 # ---- swatch atlas: one 8x8 cell per material, title_pal nearest ----
-MATS = [(26,26,28),   # body: black
-        (12,12,13),   # dark: keypad bed
-        (184,23,18),  # red: C/B/A
-        (107,107,115),# key: keypad keys
-        (8,8,9),      # black: dpad/pills
-        (66,66,71)]   # panel: back label
+MATS = [(28,28,31),   # body: black
+        (48,48,54),   # dark: keypad bed / hump (contrast vs body)
+        (217,31,23),  # red: C/B/A
+        (158,158,168),# key: keypad keys
+        (8,8,9),      # black: dpad cross / groove
+        (77,77,84)]   # panel: dpad disc / back label
 pal = struct.unpack(">256H", open(os.path.join(OUT, "title_pal.bin"), "rb").read())
 def dec(c): return (((c>>11)&31)*255//31, ((c>>1)&31)*255//31, ((c>>6)&31)*255//31)
 prgb = [dec(c) for c in pal]
