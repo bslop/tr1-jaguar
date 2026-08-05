@@ -3604,7 +3604,7 @@ int main(void)
 #define PASS_X 163
 #endif
 #ifndef PASS_Y
-#define PASS_Y 436
+#define PASS_Y 490
 #endif
 #ifndef PASS_Z
 #define PASS_Z 719
@@ -3715,7 +3715,7 @@ int main(void)
 #define RING_CX2 2
 #endif
 #ifndef RING_CY2
-#define RING_CY2 439
+#define RING_CY2 493
 #endif
 #ifndef RING_RX
 #define RING_RX 948
