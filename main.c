@@ -3717,7 +3717,10 @@ int main(void)
                           if (f > 256) f = 256;
                           px[it2] = RING_CX + (int)((RING_RAD * SIN(phi)) >> 16);
                           py[it2] = RING_CY - (int)((RING_RAD * COS(phi)) >> 16);
-                          pz[it2] = 800 - (((256 - f) * 100) >> 8);
+                          /* DEPTH ring (reference): far-side items recede -
+                             smaller, tucked inside the arc, clear of the logo.
+                             front 700 -> opposite side 950. */
+                          pz[it2] = 700 + ((f * 250) >> 8);
                           /* the ORIGINAL spins the selected item a full 360
                              clockwise, showing front AND back (user reference
                              2026-08-04). Unselected items hold still. */
