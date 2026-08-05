@@ -22,6 +22,15 @@ gpu_kernel:
 #endif
 gpu_kernel_end:
 
+/* JV02 boot-FMV decoder kernel (BOOTVID; loaded only while the logos
+ * play, then the title's kernel_select reloads the renderer). */
+	.balign	4
+	.globl	gpu_jvdec_kernel
+	.globl	gpu_jvdec_kernel_end
+gpu_jvdec_kernel:
+	.incbin	"build/gpu_jvdec.bin"
+gpu_jvdec_kernel_end:
+
 /* GPU-driven Blitter probe kernel (BLITPROBE builds use it; embedding it
  * unconditionally keeps this file free of extra flag plumbing). */
 	.balign	4

@@ -3406,6 +3406,9 @@ int main(void)
                VSCALE does the vertical doubling); the title's own
                disp240(1) switch right after restores it. */
             video_set_disp240(0);
+            if (gpu_ok)
+                gpu_jvdec_load();   /* Tom decodes; kernel_select(1) below
+                                       restores the renderer after */
             /* Plays in the 120-line SCALED mode (OP VSCALE doubles
                vertically - proven game path; horizontal OP scaling is
                BANNED, it starves the bus). The 68k doubles horizontally
@@ -3488,16 +3491,26 @@ int main(void)
                     tRd = VPT() - tA; tA = VPT();
 #endif
                     pos += 4;
-                    /* JV02 tokens: 0..99 colour-run, 100..127 SKIP-run
-                       (previous frame persists in the stage - temporal
-                       delta), 128..255 literal. Track the written band. */
                     s = vb + pos; e = s + L; pos += (int)((L + 3u) & ~3u);
+                    /* user 2026-08-05: "Stop using the 68000. Do it in
+                       jrisc on Tom." - the whole frame (JV02 decode +
+                       horizontal double) runs in gpu_jvdec.gas; the 68k
+                       only streams chunks and flips. Fallback below keeps
+                       GPU-less runs alive. */
+                    if (gpu_ok) {
+                        int lo2 = 120, hi2 = -1;
+                        int fu0 = (fi < 2) ? 0 : plo,
+                            fu1 = (fi < 2) ? 119 : phi;
+                        if (gpu_jvdec_frame(s, (unsigned)L, stg,
+                                            video_backbuffer(),
+                                            fu0, fu1, &lo2, &hi2)) {
+                            lo = lo2; hi = hi2;
+                            goto vshow;
+                        }
+                    }
+                    /* ---- 68k fallback: decode + double ---- */
                     dst = stg; dend = stg + 160 * 120;
                     wlo = dend; whi = stg;           /* empty extent */
-                    /* VIDPROF verdict (2026-08-05): decode was 205-256ms/
-                       frame - byte stores under OP bus contention cost ~10x
-                       a model that ignores the bus. LONG stores for runs,
-                       WORD copies for literals: 2-4x fewer bus cycles. */
                     while (s < e && dst < dend) {
                         int tk = *s++;
                         if (tk < 100) {
@@ -3530,11 +3543,6 @@ int main(void)
                     if (wlo < whi) { lo = (int)(wlo - stg) / 160;
                                      hi = (int)(whi - 1 - stg) / 160; }
                     else           { lo = 120; hi = 0; }   /* nothing new */
-#ifdef VIDPROF
-                    tDe = VPT() - tA; tDb0 = VPT();
-#endif
-                    /* horizontal-double the union band into the 320x120
-                       backbuffer; the OP VSCALE shows it full height */
                     u0 = (lo < plo) ? lo : plo;
                     u1 = (hi > phi) ? hi : phi;
                     if (fi < 2) { u0 = 0; u1 = 119; }   /* fresh buffers */
@@ -3548,6 +3556,7 @@ int main(void)
                               d0[x2 >> 1] = a2b | ((uint32_t)sr[x2+1] * 0x0101u);
                           }
                       } }
+vshow:
                     plo = lo; phi = hi;
 #ifdef VIDPROF
                     /* per-stage cost bars in scanline-ticks (fc*263+line):

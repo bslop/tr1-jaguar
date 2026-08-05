@@ -41,6 +41,9 @@ void gpu_textured_kick(const uint32_t *list, uint32_t count, void *fb,
 /* geotex kernel: Tom reads textured room geometry from DRAM, transforms/
  * projects/culls per face, and Blitter-textures the spans. 68k passes only
  * the room blob + camera block + atlas. room = room0_tex.bin. */
+void gpu_jvdec_load(void);
+int  gpu_jvdec_frame(const void *src, unsigned len, void *stg, void *fb,
+                     int u0p, int u1p, int *lo, int *hi);
 void gpu_geotex_setclip(int x0, int x1, int y0, int y1);
 void gpu_geotex_dispatch(const uint32_t *list, void *fb, const void *camblk,
                          const void *atlas, uint32_t atlas_width);

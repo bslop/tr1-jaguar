@@ -780,6 +780,9 @@ $(BUILD)/skunkglue.o: skunkglue.s | $(BUILD)
 $(BUILD)/gpu_spanfill.bin: gpu_spanfill.gas | $(BUILD)
 	$(JAS) $< -o $@ --gpu
 
+$(BUILD)/gpu_jvdec.bin: gpu_jvdec.gas | $(BUILD)
+	$(JAS) $< -o $@ --gpu
+
 $(BUILD)/gpu_geomwalk.bin: gpu_geomwalk.gas | $(BUILD)
 	$(JAS) $< -o $@ --gpu
 
@@ -1027,7 +1030,7 @@ $(BUILD)/gpu_blitprobe.bin: gpu_blitprobe.gas | $(BUILD)
 
 # gpu_blob.S .incbin's whichever kernel is selected; depend on all so a
 # toggle rebuilds cleanly.
-$(BUILD)/gpu_blob.o: gpu_blob.S $(BUILD)/gpu_spanfill.bin $(BUILD)/gpu_geomwalk.bin $(BUILD)/gpu_geomxform.bin $(BUILD)/gpu_geomdirect.bin $(BUILD)/gpu_textured.bin $(BUILD)/gpu_bltex.bin $(BUILD)/gpu_blitprobe.bin | $(BUILD)
+$(BUILD)/gpu_blob.o: gpu_blob.S $(BUILD)/gpu_jvdec.bin $(BUILD)/gpu_spanfill.bin $(BUILD)/gpu_geomwalk.bin $(BUILD)/gpu_geomxform.bin $(BUILD)/gpu_geomdirect.bin $(BUILD)/gpu_textured.bin $(BUILD)/gpu_bltex.bin $(BUILD)/gpu_blitprobe.bin | $(BUILD)
 	$(CC) $(ASFLAGS) -c $< -o $@
 
 # gpu_geotex.gas is written by an agent; only depend on its blob for GEOTEX

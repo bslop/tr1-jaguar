@@ -72,6 +72,53 @@ int gpu_init(void)
     return gpu_spanfill((const uint32_t *)G_SRAM, 0, (uint16_t *)0x10000);
 }
 
+/* ---- BOOT-FMV JV02 decoder (gpu_jvdec.gas) ------------------------------
+ * Loads its own kernel (swapping out whatever is resident - BOOTVID runs
+ * before the title selects the renderer). Per frame: decode payload into
+ * the 160x120 stage, horizontally double the union band into the fb.
+ * Returns 1 + this frame's written band in *lo/*hi; 0 on timeout. */
+void gpu_jvdec_load(void)
+{
+    extern const uint8_t gpu_jvdec_kernel[], gpu_jvdec_kernel_end[];
+    const uint32_t *src = (const uint32_t *)gpu_jvdec_kernel;
+    uint32_t n = (uint32_t)(gpu_jvdec_kernel_end - gpu_jvdec_kernel) / 4;
+    volatile uint32_t *dst = (volatile uint32_t *)G_SRAM;
+    uint32_t i;
+    G_CTRL = 0;
+    for (i = 0; i < n; i++)
+        dst[i] = src[i];
+}
+
+int gpu_jvdec_frame(const void *src, uint32_t len, void *stg, void *fb,
+                    int u0p, int u1p, int *lo, int *hi)
+{
+    uint32_t i;
+    G_CTRL = 0;
+    *(volatile uint32_t *)(G_PARAMS + 0)  = (uint32_t)src;
+    *(volatile uint32_t *)(G_PARAMS + 4)  = len;
+    *(volatile uint32_t *)(G_PARAMS + 8)  = (uint32_t)stg;
+    *(volatile uint32_t *)(G_PARAMS + 12) = (uint32_t)fb;
+    *(volatile uint32_t *)(G_PARAMS + 16) = (uint32_t)u0p;
+    *(volatile uint32_t *)(G_PARAMS + 20) = (uint32_t)u1p;
+    *(volatile uint32_t *)(G_PARAMS + 32) = 0;
+    G_PC = G_SRAM;
+    G_CTRL = 1;
+    /* sparse poll - a tight DRAM poll starves Tom (porting notes) */
+    for (i = 0; i < 80000; i++) {
+        volatile uint32_t d;
+        for (d = 0; d < 40; d++)
+            ;
+        if (*(volatile uint32_t *)(G_PARAMS + 32) == MAGIC_DONE) {
+            G_CTRL = 0;
+            *lo = (int)*(volatile uint32_t *)(G_PARAMS + 24);
+            *hi = (int)*(volatile uint32_t *)(G_PARAMS + 28);
+            return 1;
+        }
+    }
+    G_CTRL = 0;
+    return 0;
+}
+
 int gpu_spanfill(const uint32_t *list, uint32_t count, uint16_t *fb)
 {
     uint32_t i;
