@@ -217,7 +217,7 @@ def clip_cell(x0,y0,x1,y1):
     return poly
 xs2=[p[0] for p in P2]; ys2=[p[1] for p in P2]
 gx0,gx1=min(xs2),max(xs2); gy0,gy1=min(ys2),max(ys2)
-vmap={}; capv=[]
+vmap={}; capv=[]; cappolys=[]
 def vid(pt):
     k=(int(round(pt[0])),int(round(pt[1])))
     if k not in vmap:
@@ -235,10 +235,7 @@ while yy<gy1:
             for k in ids[1:]:
                 if k!=ids2[-1]: ids2.append(k)
             if len(ids2)>=3 and ids2[0]!=ids2[-1]:
-                for k in range(1,len(ids2)-1):
-                    a,b3,c=ids2[0],ids2[k],ids2[k+1]
-                    ar=(capv[b3][0]-capv[a][0])*(capv[c][1]-capv[a][1])-(capv[c][0]-capv[a][0])*(capv[b3][1]-capv[a][1])
-                    if ar!=0: cap.append((a,b3,c))
+                cappolys.append(ids2)
         xx+=CELL
     yy+=CELL
 NCV=len(capv)
@@ -331,36 +328,55 @@ def plate_uv(x,y,back):
 
 # ---- 5. faces: front cap, back cap (reversed), rim ----
 tris=[]
-for (a,bb,c) in cap:
-    tris.append(([a,bb,c],[plate_uv(*capv[a],False),plate_uv(*capv[bb],False),plate_uv(*capv[c],False)]))
-for (a,bb,c) in cap:
-    tris.append(([NCV+c,NCV+bb,NCV+a],[plate_uv(*capv[c],True),plate_uv(*capv[bb],True),plate_uv(*capv[a],True)]))
+# QUADS ONLY (2026-08-05): every ring item that renders solid on silicon is
+# quads; the pad was the only all-tris item and the only one that tears.
+# Grid cells are natural quads; leftover tris ride as repeated-corner quads;
+# rim segments are natural quads.
+quads=[]
+def cellq(ids,back):
+    vv=[NCV+i if back else i for i in ids]
+    src=list(ids)
+    if back: vv=vv[::-1]; src=src[::-1]
+    while len(vv)<4: vv.append(vv[-1]); src.append(src[-1])
+    quads.append((vv,[plate_uv(*capv[i],back) for i in src]))
+for poly in cappolys:
+    if len(poly)==3: cellq(poly,False)
+    else:
+        for k in range(1,len(poly)-1,2):
+            ids=[poly[0],poly[k],poly[k+1],poly[k+2] if k+2<len(poly) else poly[k+1]]
+            cellq(ids,False)
+for poly in cappolys:
+    if len(poly)==3: cellq(poly,True)
+    else:
+        for k in range(1,len(poly)-1,2):
+            ids=[poly[0],poly[k],poly[k+1],poly[k+2] if k+2<len(poly) else poly[k+1]]
+            cellq(ids,True)
 for k in range(NB):
     a=ring[k]; b4=ring[(k+1)%NB]
-    tris.append(([a,b4,NCV+b4],[rimuv]*3))
-    tris.append(([a,NCV+b4,NCV+a],[rimuv]*3))
+    quads.append(([a,b4,NCV+b4,NCV+a],[rimuv]*4))
 # ---- 6. winding: negative signed volume (PS1 convention) ----
 def vol():
     v=0
-    for vi,_ in tris:
-        a,c2,d2=[verts[k] for k in vi]
-        v+=a[0]*(c2[1]*d2[2]-c2[2]*d2[1])-a[1]*(c2[0]*d2[2]-c2[2]*d2[0])+a[2]*(c2[0]*d2[1]-c2[1]*d2[0])
+    for vi,_ in quads:
+        for t in ((0,1,2),(0,2,3)):
+            a,c2,d2=[verts[vi[k]] for k in t]
+            v+=a[0]*(c2[1]*d2[2]-c2[2]*d2[1])-a[1]*(c2[0]*d2[2]-c2[2]*d2[0])+a[2]*(c2[0]*d2[1]-c2[1]*d2[0])
     return v
 VOLSIGN=int(os.environ.get("PAD_VOLSIGN","1"))
 if (vol()>0) != (VOLSIGN>0):
-    tris=[([v[0],v[2],v[1]],[u[0],u[2],u[1]]) for v,u in tris]
+    quads=[([v[3],v[2],v[1],v[0]],[u[3],u[2],u[1],u[0]]) for v,u in quads]
 print("signed volume:",vol())
 
-nv,nt=len(verts),len(tris)
-exp=16+nv*8+nt*30
-print("prism: %dv %dt expanded %dB"%(nv,nt,exp))
+nv,nq2=len(verts),len(quads)
+exp=16+nv*8+nq2*36
+print("prism: %dv %dq expanded %dB"%(nv,nq2,exp))
 assert exp<=10560
 bb2=bytearray()
-bb2+=struct.pack(">HHHHH",nv,0,nt,256,AH)
+bb2+=struct.pack(">HHHHH",nv,nq2,0,256,AH)
 bb2+=struct.pack(">hhh",0,0,0)
 for (x,y,z) in verts: bb2+=struct.pack(">hhhH",x,y,z,255)
-for vi,uvs in tris:
-    bb2+=struct.pack(">HHH",*vi)
+for vi,uvs in quads:
+    bb2+=struct.pack(">HHHH",*vi)
     for (u,v) in uvs: bb2+=struct.pack(">HH",int(u),int(v))
 while len(bb2)&7: bb2+=b'\0'
 open(OUT+"/ctrl_geom.bin","wb").write(bb2)
