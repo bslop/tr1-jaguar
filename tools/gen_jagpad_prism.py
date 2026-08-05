@@ -192,7 +192,25 @@ while yy<gy1:
         xx+=CELL
     yy+=CELL
 NCV=len(capv)
-print("grid mesh: %d verts %d tris"%(NCV,len(cap)))
+# deterministic jitter on INTERIOR verts: axis-aligned tri edges collapse in
+# the kernel's edge walker (flat-top checkerboard, silicon 2026-08-04);
+# PSX meshes never have them, ours were ALL axis-aligned. Boundary stays
+# exact for the rim stitch.
+bset={ (int(round(pt[0])),int(round(pt[1]))) for pt in [] }
+def _onhull(pt):
+    for i in range(len(H)):
+        a=H[i]; b2=H[(i+1)%len(H)]
+        cr=(b2[0]-a[0])*(pt[1]-a[1])-(b2[1]-a[1])*(pt[0]-a[0])
+        if abs(cr)<=max(abs(b2[0]-a[0]),abs(b2[1]-a[1]))*1.5:
+            dot=(pt[0]-a[0])*(b2[0]-a[0])+(pt[1]-a[1])*(b2[1]-a[1])
+            L2=(b2[0]-a[0])**2+(b2[1]-a[1])**2
+            if -0.05*L2<=dot<=1.05*L2: return True
+    return False
+for i2,(vx,vy) in enumerate(capv):
+    if _onhull((vx,vy)): continue
+    hsh=(vx*73856093 ^ vy*19349663)&7
+    capv[i2]=(vx+(hsh%3)-1+((hsh>>1)&1)*2-1, vy+((hsh>>2)%3)-1+(hsh&1)*2-1)
+print("grid mesh: %d verts %d tris (interior jittered)"%(NCV,len(cap)))
 # boundary verts (on a hull edge) ordered along the perimeter, for the rim
 def on_edge(pt):
     for i in range(len(H)):
@@ -214,8 +232,8 @@ NB=len(ring)
 print("rim boundary verts:",NB)
 
 verts=[]
-for (x,y) in capv: verts.append((-x,y, TH))    # front sheet (180 about Y)
-for (x,y) in capv: verts.append((-x,y,-TH))
+for (x,y) in capv: verts.append((x,y,-TH))     # front sheet (toward camera)
+for (x,y) in capv: verts.append((x,y, TH))     # back sheet
 # ---- 4. atlas: front 124x?, back beside, rim swatch; quantize ----
 pal=struct.unpack(">256H",open(OUT+"/title_pal.bin","rb").read())
 def dec(c): return (((c>>11)&31)*255//31,((c>>1)&31)*255//31,((c>>6)&31)*255//31)
@@ -278,7 +296,8 @@ def vol():
         a,c2,d2=[verts[k] for k in vi]
         v+=a[0]*(c2[1]*d2[2]-c2[2]*d2[1])-a[1]*(c2[0]*d2[2]-c2[2]*d2[0])+a[2]*(c2[0]*d2[1]-c2[1]*d2[0])
     return v
-if vol()>0:
+VOLSIGN=int(os.environ.get("PAD_VOLSIGN","1"))
+if (vol()>0) != (VOLSIGN>0):
     tris=[([v[0],v[2],v[1]],[u[0],u[2],u[1]]) for v,u in tris]
 print("signed volume:",vol())
 
