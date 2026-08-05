@@ -3453,7 +3453,7 @@ int main(void)
                             for (k2 = 0; k2 < mv; k2++) vb[k2] = vb[pos + k2];
                             have = mv; pos = 0; }
                         { int want = (31488 - have) & ~511;   /* sector-sized */
-                          if (want > 24576) want = 24576;
+                          if (want > 31232) want = 31232;
                           if (want > remain) want = remain;
                           if (want <= 0) { fi = vnf; break; }
                           if (gd_fread((unsigned)vh, vb + have, (unsigned)want,
@@ -3464,13 +3464,20 @@ int main(void)
                     pos += 4;
                     /* RLE-decode the 160x120 frame into the stage */
                     s = vb + pos; e = s + L; pos += (int)((L + 3u) & ~3u);
+                    /* JV02 tokens: 0..99 colour-run, 100..127 SKIP-run
+                       (previous frame persists in the stage - temporal
+                       delta), 128..255 literal. */
                     dst = stg; dend = stg + 160 * 120;
                     while (s < e && dst < dend) {
                         int tk = *s++;
-                        if (tk < 128) {
+                        if (tk < 100) {
                             int n = tk + 2; uint8_t v = *s++;
                             if (n > (int)(dend - dst)) n = dend - dst;
                             while (n--) *dst++ = v;
+                        } else if (tk < 128) {
+                            int n = (tk - 99) * 4;
+                            if (n > (int)(dend - dst)) n = dend - dst;
+                            dst += n;
                         } else {
                             int n = tk - 127;
                             if (n > (int)(dend - dst)) n = dend - dst;

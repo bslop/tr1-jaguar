@@ -33,11 +33,21 @@ l, t, r, b = [int(v) for v in CROP.split(",")]
 def jag16(r8, g8, b8):
     return (((r8 >> 3) & 31) << 11) | (((b8 >> 3) & 31) << 6) | (((g8 >> 3) & 31) << 1)
 
-def packbits(d):
+def packbits(d, prev):
+    # JV02 tokens: 0..99 colour-run (n=t+2, 2..101); 100..127 SKIP-run
+    # (n=(t-99)*4, 4..112: keep the previous frame's pixels - the stage
+    # persists across frames); 128..255 literal (n=t-127, 1..128).
     out = bytearray(); i = 0; n = len(d)
     while i < n:
+        if prev is not None:
+            k = i
+            while k < n and d[k] == prev[k] and k - i < 112:
+                k += 1
+            if k - i >= 4:
+                out.append(100 + (k - i) // 4 - 1); i += ((k - i) // 4) * 4
+                continue
         j = i
-        while j + 1 < n and d[j + 1] == d[j] and j - i < 128:
+        while j + 1 < n and d[j + 1] == d[j] and j - i < 99:
             j += 1
         run = j - i + 1
         if run >= 2:
@@ -53,13 +63,14 @@ def packbits(d):
 
 with tempfile.TemporaryDirectory() as td:
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", SRC,
-                    "-vf", ("crop=%d:%d:%d:%d,fps=%d,scale=%d:%d:force_original_aspect_ratio="
-                            "decrease:flags=lanczos,pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black")
+                    "-vf", ("crop=%d:%d:%d:%d,hqdn3d=4:3:14:14,fps=%d,scale=%d:%d:"
+                            "force_original_aspect_ratio=decrease:flags=lanczos,"
+                            "pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black")
                     % (r - l, b - t, l, t, FPS, W, H, W, H),
                     os.path.join(td, "f_%04d.png")], check=True)
     frames = sorted(os.listdir(td))
     print("%d frames @ %dfps" % (len(frames), FPS))
-    for colors in (96, 64, 48, 32):
+    for colors in [int(v) for v in os.environ.get("JV_COLORS","96,64,48,32").split(",")]:
         # shared palette from a sampled montage, then dither-free remap
         samp = frames[:: max(1, len(frames) // 12)]
         mont = Image.new("RGB", (W, H * len(samp)))
@@ -67,12 +78,27 @@ with tempfile.TemporaryDirectory() as td:
             mont.paste(Image.open(os.path.join(td, f)).convert("RGB"), (0, i * H))
         palimg = mont.quantize(colors=colors)
         pal = palimg.getpalette()[: colors * 3]
+        import numpy as np
+        DB = int(os.environ.get("JV_DEADBAND", "16"))
+        prgb = np.array(pal + [0] * (768 - len(pal)), dtype=np.int32).reshape(256, 3)
         enc = []
         worst = 0
+        prev = None
         for f in frames:
             im = Image.open(os.path.join(td, f)).convert("RGB")
-            q = im.quantize(palette=palimg, dither=Image.Dither.NONE)
-            p = packbits(q.tobytes())
+            q = np.frombuffer(im.quantize(palette=palimg,
+                    dither=Image.Dither.NONE).tobytes(), dtype=np.uint8).copy()
+            if prev is not None and DB:
+                # temporal deadband (conditional replenishment): keep the
+                # previous index wherever the source pixel is within DB of
+                # the colour already on screen - MDEC noise otherwise flips
+                # indices in static regions and starves the skip-runs.
+                src = np.asarray(im, dtype=np.int32).reshape(-1, 3)
+                d2 = np.abs(src - prgb[prev]).sum(1)
+                keep = d2 <= DB * 3
+                q[keep] = prev[keep]
+            p = packbits(q.tobytes(), None if prev is None else prev.tobytes())
+            prev = q
             worst = max(worst, len(p))
             enc.append(p)
         rate = sum(len(p) for p in enc) * FPS // max(1, len(enc))
@@ -85,7 +111,7 @@ with tempfile.TemporaryDirectory() as td:
         # the GD BIOS FREAD is only ever exercised with sector-aligned,
         # sector-sized reads (the music path's proven envelope) - the
         # 528-byte header read desynced/wedged the stream on silicon.
-        o.write(b"JV01")
+        o.write(b"JV02")
         o.write(struct.pack(">HHHH4x", W, H, FPS, len(enc)))
         for i in range(256):
             if i < colors:
