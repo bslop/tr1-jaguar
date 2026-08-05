@@ -3308,7 +3308,11 @@ int main(void)
              16 + 52*8 + 100*TREC = 3432 bytes. At the old 2304 it tripped the
              clamp below and rendered with ZERO faces - an invisible item, not
              an error. */
-          static uint8_t rblob[6][10560] __attribute__((aligned(8)));
+          /* 6144: sized to the LARGEST staged item (detail sunglasses,
+             5792B expanded; the prism pad is only 2208B now). 10560 was the
+             old scan-pad allowance and blew the 2MB budget once the prism's
+             32KB atlas joined the image (__bss_end guard, 2026-08-04). */
+          static uint8_t rblob[6][6144] __attribute__((aligned(8)));
 #else
           static uint8_t rblob[6][4096] __attribute__((aligned(8)));
 #endif
