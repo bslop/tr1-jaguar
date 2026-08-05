@@ -3318,6 +3318,8 @@ int main(void)
 #endif
           const uint8_t *rsrc[6]; const uint8_t *ratl[6];
           int rvcnt[6], rblen[6];
+          int rnv0[6], rnq0[6], rnt0[6];  /* per-item counts for the
+                                             post-bake midpoint fixup */
           /* PASSPORT OPEN: 0 = on the ring, 1..PASS_OPEN_TICKS = opening,
              PASS_OPEN_TICKS = fully open (the page view). */
           int popen = 0;
@@ -3433,7 +3435,12 @@ int main(void)
                   w2[10]=(uint16_t)((s2[7]+s2[3])>>1);
                   w2[11]=(uint16_t)((s2[8]+s2[4])>>1);
                   w2+=12; s2+=9; }
-              rvcnt[it2]=nv+nt; rblen[it2]=len;
+              /* bake only the REAL verts each frame (the ROM source has no
+                 midpoints); the appended verts are rebuilt post-bake from
+                 the baked endpoints - midpoints commute with the affine
+                 bake, so the result is exact. */
+              rvcnt[it2]=nv; rnv0[it2]=nv; rnq0[it2]=nq; rnt0[it2]=nt;
+              rblen[it2]=len;
 #endif
             } }
 #ifndef NO_GAMEDRIVE
@@ -3823,6 +3830,21 @@ int main(void)
                         { title_bake(rsrc[it2], rblob[it2], rvcnt[it2],
                                      yw[it2], pt[it2], rl[it2],
                                      px[it2], py[it2], pz[it2]);
+                          /* midpoint fixup: appended 4th-corner verts =
+                             average of their tri's baked v0/v2 (exact -
+                             midpoints commute with the affine bake). */
+                          { int f4, nvR=rnv0[it2], ntR=rnt0[it2];
+                            const uint16_t *tf4=(const uint16_t *)
+                                (rsrc[it2]+16+nvR*8+rnq0[it2]*24);
+                            int16_t *bv=(int16_t *)(rblob[it2]+16);
+                            for (f4=0; f4<ntR; f4++) {
+                                int a4=tf4[f4*9+0]*4, c4=tf4[f4*9+2]*4;
+                                int16_t *mp=bv+(nvR+f4)*4;
+                                mp[0]=(int16_t)((bv[a4+0]+bv[c4+0])>>1);
+                                mp[1]=(int16_t)((bv[a4+1]+bv[c4+1])>>1);
+                                mp[2]=(int16_t)((bv[a4+2]+bv[c4+2])>>1);
+                                mp[3]=255;
+                            } }
                           gpu_geotex(rblob[it2], tfb, tcam, ratl[it2], 256u);
                         }
                       }
