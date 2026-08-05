@@ -290,6 +290,12 @@ ifdef SWANIM
 CFLAGS   += -DSWANIM
 CXXFLAGS += -DSWANIM
 endif
+# BOOTVID: play EIDOS.JV + CORE.JV boot logos from the GameDrive SD before
+# the title (tools/tr2jag_video.py makes them). Missing files skip cleanly.
+ifdef BOOTVID
+CFLAGS   += -DBOOTVID
+CXXFLAGS += -DBOOTVID
+endif
 ifdef DBGROOM
 CFLAGS   += -DDBGROOM
 CXXFLAGS += -DDBGROOM

@@ -3382,6 +3382,117 @@ int main(void)
 #ifdef CAVETEST
           g_useset = 0; goto menu_done;   /* test: boot straight into the caves */
 #endif
+#if !defined(NO_GAMEDRIVE) && defined(BOOTVID)
+          /* BOOT LOGOS (2026-08-05, user: "have this video load after the
+             game is booted"): stream EIDOS.JV then CORE.JV (PS1 order) from
+             the SD card and play them before the title. Frames are native
+             320x240 8bpp PackBits RLE (tools/tr2jag_video.py); the payload
+             buffer is rblob - 50KB free until the ring items stage below.
+             Pacing rides the 60Hz VI clock, so a slow SD only stretches the
+             clip. Any fire button skips the current clip; missing files
+             (BigPEmu has no GameDrive) skip straight to the title. */
+          /* Frames are 160x120, pixel-doubled to 320x240 by the decoder.
+             The BIOS FREAD has a big per-call cost (the 320x240 first cut
+             played ~6x slow at 2 calls/frame), so the stream is pulled in
+             ~24KB chunks into a rolling buffer and frames are parsed out
+             of it - one BIOS call per several frames. */
+          { extern void video_set_disp240(int);
+            extern volatile uint32_t frame_count;
+            uint8_t *vb  = (uint8_t *)rblob;         /* stream buffer     */
+            uint8_t *stg = (uint8_t *)rblob + 31488; /* 160x120 stage     */
+            int vc;
+            video_set_disp240(1);
+            for (vc = 0; vc < 2; vc++) {
+                int vh = -1, mi2, vw, vhh, vfps, vnf, fi, remain, have, pos;
+                uint32_t t0;
+                for (mi2 = 0; mi2 < 2 && vh < 0; mi2++)
+                    vh = gd_fopen(vc ? (mi2 ? "/CORE.JV" : "CORE.JV")
+                                     : (mi2 ? "/EIDOS.JV" : "EIDOS.JV"),
+                                  GD_FOPEN_READ | GD_FOPEN_OPEN_EXISTING);
+                if (vh < 0) continue;
+                /* SECTOR DISCIPLINE: the GD BIOS FREAD is only proven for
+                   sector-aligned, sector-sized reads (the music path). The
+                   528-byte header read desynced the stream and wedged the
+                   drive on silicon (2026-08-05) - header block is padded
+                   to 1024 and the converter pads the file tail to a 512
+                   multiple, so every read below is 512-granular. */
+                remain = gd_fsize((unsigned)vh);
+                if (remain < 1024 || (remain & 511) ||
+                    gd_fread((unsigned)vh, vb, 1024, GD_FREAD_CPU) != 0 ||
+                    vb[0] != 'J' || vb[1] != 'V') {
+                    gd_fclose((unsigned)vh); continue;
+                }
+                remain -= 1024;
+                vw   = (vb[4] << 8) | vb[5];
+                vhh  = (vb[6] << 8) | vb[7];
+                vfps = (vb[8] << 8) | vb[9];
+                vnf  = (vb[10] << 8) | vb[11];
+                if (vw != 160 || vhh != 120 || vfps <= 0) vnf = 0;
+                video_set_clut((const uint16_t *)(vb + 16));
+                have = 0; pos = 0;
+                t0 = frame_count;
+                for (fi = 0; fi < vnf; fi++) {
+                    uint32_t L;
+                    uint8_t *s, *e, *dst, *dend;
+                    int y2, x2, need = 4;
+                    /* ensure the length word, then the whole payload */
+                    for (;;) {
+                        if (have - pos >= need) {
+                            if (need > 4) break;
+                            L = ((uint32_t)vb[pos] << 24) | ((uint32_t)vb[pos+1] << 16)
+                              | ((uint32_t)vb[pos+2] << 8) | vb[pos+3];
+                            if (L == 0 || L > 24576u) { fi = vnf; break; }
+                            need = 4 + (int)L;
+                            if (have - pos >= need) break;
+                        }
+                        if (pos) { int mv = have - pos, k2;
+                            for (k2 = 0; k2 < mv; k2++) vb[k2] = vb[pos + k2];
+                            have = mv; pos = 0; }
+                        { int want = (31488 - have) & ~511;   /* sector-sized */
+                          if (want > 24576) want = 24576;
+                          if (want > remain) want = remain;
+                          if (want <= 0) { fi = vnf; break; }
+                          if (gd_fread((unsigned)vh, vb + have, (unsigned)want,
+                                       GD_FREAD_CPU) != 0) { fi = vnf; break; }
+                          have += want; remain -= want; }
+                    }
+                    if (fi >= vnf) break;
+                    pos += 4;
+                    /* RLE-decode the 160x120 frame into the stage */
+                    s = vb + pos; e = s + L; pos += (int)L;
+                    dst = stg; dend = stg + 160 * 120;
+                    while (s < e && dst < dend) {
+                        int tk = *s++;
+                        if (tk < 128) {
+                            int n = tk + 2; uint8_t v = *s++;
+                            if (n > (int)(dend - dst)) n = dend - dst;
+                            while (n--) *dst++ = v;
+                        } else {
+                            int n = tk - 127;
+                            if (n > (int)(dend - dst)) n = dend - dst;
+                            while (n--) *dst++ = *s++;
+                        }
+                    }
+                    /* 2x2 pixel-double into the 320x240 backbuffer */
+                    { uint8_t *fb = (uint8_t *)video_backbuffer();
+                      for (y2 = 0; y2 < 120; y2++) {
+                          uint8_t  *sr = stg + y2 * 160;
+                          uint16_t *d0 = (uint16_t *)(fb + (y2 * 2) * 320);
+                          uint16_t *d1 = (uint16_t *)(fb + (y2 * 2 + 1) * 320);
+                          for (x2 = 0; x2 < 160; x2++) {
+                              uint16_t vv = (uint16_t)((sr[x2] << 8) | sr[x2]);
+                              d0[x2] = vv; d1[x2] = vv;
+                          }
+                      } }
+                    while ((int)(frame_count - t0) < ((fi + 1) * 60) / vfps)
+                        ;
+                    video_flip();
+                    if (joypad_read() & (PAD_A | PAD_B | PAD_C)) break;
+                }
+                gd_fclose((unsigned)vh);
+            }
+          }
+#endif
           /* RING ORDER: 0 = Game (passport), 1 = Controls, 2 = Lara's Home.
              Slot 3 is the OPENED passport - staged like the rest but not a
              ring item. (Sound is deferred - user 2026-07-29.) */
