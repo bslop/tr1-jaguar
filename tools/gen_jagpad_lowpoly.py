@@ -161,7 +161,7 @@ nv,nq,nt=len(V),len(quads),len(tris)
 # midpoint verts -> verts grow by nt, every face costs a 36B quad record.
 exp=16+(nv+nt)*8+(nq+nt)*36
 print("lowpoly pad: %dv %dq %dt staged %dB"%(nv,nq,nt,exp))
-assert exp<=7424, "over rblob budget"
+assert exp<=8448, "over rblob budget"
 b=bytearray()
 b+=struct.pack(">HHHHH",nv,nq,nt,AW,ah)
 b+=struct.pack(">hhh",0,0,0)

@@ -3328,7 +3328,7 @@ int main(void)
              the max pad (180v/16q/112t) stages at 6960B and the 6144 slot's
              overflow clamp made it an INVISIBLE ITEM (the exact failure the
              old 2304-byte comment warned about). */
-          static uint8_t rblob[6][7424] __attribute__((aligned(8)));
+          static uint8_t rblob[6][8448] __attribute__((aligned(8)));
 #else
           static uint8_t rblob[6][4096] __attribute__((aligned(8)));
 #endif
