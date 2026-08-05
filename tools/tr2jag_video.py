@@ -132,20 +132,30 @@ def encode_vq():
         # temporal deadband in CODEBOOK space: a block is "changed" only if
         # its new entry is visually far from the one on screen - glow noise
         # otherwise flips entries every frame (EIDOS hit 43KB/s without it)
-        VQDB = float(os.environ.get("JV_VQDB", "900"))
+        VQDB = float(os.environ.get("JV_VQDB", "350"))
+        KEYF = int(os.environ.get("JV_KEYF", "30"))
         cdist = ((cbvec[:, None, :] - cbvec[None, :, :])**2).sum(2) / 16.0
         enc2 = []
         prev = None
-        for a in idxf:
+        for fidx, a in enumerate(idxf):
             bl = blocks(a); v = pal[bl].reshape(len(bl), -1)
             assign = np.empty(len(bl), dtype=np.int32)
             for i in range(0, len(bl), 8192):
                 dd = ((v[i:i+8192, None, :] - cbvec[None, :, :])**2).sum(2)
                 assign[i:i+8192] = dd.argmin(1)
-            if prev is None:
+            if prev is None or (KEYF and fidx % KEYF == 0):
+                # KEYFRAME: full repaint - self-heals any accumulated
+                # drift (deadband residue, buffer-invariant slips)
                 changed = np.ones(len(bl), bool)
             else:
                 changed = cdist[assign, prev] > VQDB
+                # settling pass: spend quiet-frame budget on the worst
+                # sub-threshold offenders so fades converge to truth
+                if changed.sum() < 1500:
+                    resid = np.where(~changed, cdist[assign, prev], 0)
+                    idxs = np.argsort(resid)[::-1][: int(1500 - changed.sum())]
+                    add = idxs[resid[idxs] > 40]
+                    changed[add] = True
                 assign = np.where(changed, assign, prev)
             prev = assign.copy()
             out = bytearray(); i = 0; n = len(bl)
