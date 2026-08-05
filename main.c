@@ -3395,26 +3395,45 @@ int main(void)
                  this path's tri handling. Every tri becomes a quad with
                  v3=v2 / uv3=uv2: a degenerate fourth corner renders the same
                  triangle through the proven quad path. */
-              int hdr=16+nv*8, i3, f3;
+              /* the promoted quad's 4th corner must be a REAL vertex: a
+                 repeated corner makes a zero-length edge the kernel
+                 mishandles (still-broken headphones, the pad's notch). Each
+                 tri gets an appended vertex at the MIDPOINT of its closing
+                 edge - coverage is exactly the triangle, four distinct
+                 verts. 68k is big-endian, so s16 blob fields read native. */
+              int hdr=16+(nv+nt)*8, i3, f3;
               int len=hdr+(nq+nt)*QREC;
               uint16_t *w2; const uint16_t *s2;
-              if (len > (int)sizeof(rblob[0])) { nq=0; nt=0; len=hdr; }
-              for (i3=0;i3<hdr;i3++) rblob[it2][i3]=sb[i3];
-              /* staged header: every face is a quad now */
+              if (len > (int)sizeof(rblob[0])) { nq=0; nt=0; hdr=16+nv*8; len=hdr; }
+              for (i3=0;i3<16+nv*8;i3++) rblob[it2][i3]=sb[i3];
+              { const int16_t *sv=(const int16_t*)(sb+16);
+                int16_t *dv=(int16_t*)(rblob[it2]+16+nv*8);
+                const uint16_t *tf=(const uint16_t*)(sb+16+nv*8+nq*24);
+                for (f3=0;f3<nt;f3++){
+                    int tv0=tf[f3*9+0], tv2=tf[f3*9+2];
+                    dv[f3*4+0]=(int16_t)((sv[tv0*4+0]+sv[tv2*4+0])>>1);
+                    dv[f3*4+1]=(int16_t)((sv[tv0*4+1]+sv[tv2*4+1])>>1);
+                    dv[f3*4+2]=(int16_t)((sv[tv0*4+2]+sv[tv2*4+2])>>1);
+                    dv[f3*4+3]=255; } }
+              /* staged header: every face is a quad, verts grew by nt */
+              rblob[it2][0]=(uint8_t)((nv+nt)>>8);
+              rblob[it2][1]=(uint8_t)(nv+nt);
               rblob[it2][2]=(uint8_t)((nq+nt)>>8);
               rblob[it2][3]=(uint8_t)(nq+nt);
               rblob[it2][4]=0; rblob[it2][5]=0;
-              w2=(uint16_t*)(rblob[it2]+hdr); s2=(const uint16_t*)(sb+hdr);
+              w2=(uint16_t*)(rblob[it2]+hdr); s2=(const uint16_t*)(sb+16+nv*8);
               for (f3=0;f3<nq;f3++){ EMIT_PLANE(w2);
                   for(i3=0;i3<12;i3++) w2[i3]=s2[i3]; w2+=12; s2+=12; }
               for (f3=0;f3<nt;f3++){ EMIT_PLANE(w2);
-                  w2[0]=s2[0]; w2[1]=s2[1]; w2[2]=s2[2]; w2[3]=s2[2];
+                  w2[0]=s2[0]; w2[1]=s2[1]; w2[2]=s2[2];
+                  w2[3]=(uint16_t)(nv+f3);
                   w2[4]=s2[3]; w2[5]=s2[4];
                   w2[6]=s2[5]; w2[7]=s2[6];
                   w2[8]=s2[7]; w2[9]=s2[8];
-                  w2[10]=s2[7]; w2[11]=s2[8];
+                  w2[10]=(uint16_t)((s2[7]+s2[3])>>1);
+                  w2[11]=(uint16_t)((s2[8]+s2[4])>>1);
                   w2+=12; s2+=9; }
-              rvcnt[it2]=nv; rblen[it2]=len;
+              rvcnt[it2]=nv+nt; rblen[it2]=len;
 #endif
             } }
 #ifndef NO_GAMEDRIVE

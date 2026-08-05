@@ -238,6 +238,27 @@ while yy<gy1:
                 cappolys.append(ids2)
         xx+=CELL
     yy+=CELL
+# split every cell poly into 4-vert windows NOW, padding odd tails with the
+# MIDPOINT of the closing edge - a repeated corner makes a zero-length edge
+# the kernel mishandles (the persistent notch + top-edge slivers: 5-gon
+# cells' second window repeated its last vert). Midpoint = coverage exactly
+# the leftover triangle, four distinct verts.
+def _mid(a9,c9):
+    k9=((capv[a9][0]+capv[c9][0])//2,(capv[a9][1]+capv[c9][1])//2)
+    if k9 in vmap: return vmap[k9]
+    vmap[k9]=len(capv); capv.append(k9); return vmap[k9]
+cellquads=[]
+for _poly in cappolys:
+    if len(_poly)==3:
+        cellquads.append([_poly[0],_poly[1],_poly[2],_mid(_poly[2],_poly[0])])
+        continue
+    k=1
+    while k+1 < len(_poly):
+        if k+2 < len(_poly):
+            cellquads.append([_poly[0],_poly[k],_poly[k+1],_poly[k+2]])
+        else:
+            cellquads.append([_poly[0],_poly[k],_poly[k+1],_mid(_poly[k+1],_poly[0])])
+        k+=2
 NCV=len(capv)
 # deterministic jitter on INTERIOR verts: axis-aligned tri edges collapse in
 # the kernel's edge walker (flat-top checkerboard, silicon 2026-08-04);
@@ -337,20 +358,9 @@ def cellq(ids,back):
     vv=[NCV+i if back else i for i in ids]
     src=list(ids)
     if back: vv=vv[::-1]; src=src[::-1]
-    while len(vv)<4: vv.append(vv[-1]); src.append(src[-1])
     quads.append((vv,[plate_uv(*capv[i],back) for i in src]))
-for poly in cappolys:
-    if len(poly)==3: cellq(poly,False)
-    else:
-        for k in range(1,len(poly)-1,2):
-            ids=[poly[0],poly[k],poly[k+1],poly[k+2] if k+2<len(poly) else poly[k+1]]
-            cellq(ids,False)
-for poly in cappolys:
-    if len(poly)==3: cellq(poly,True)
-    else:
-        for k in range(1,len(poly)-1,2):
-            ids=[poly[0],poly[k],poly[k+1],poly[k+2] if k+2<len(poly) else poly[k+1]]
-            cellq(ids,True)
+for ids in cellquads: cellq(ids,False)
+for ids in cellquads: cellq(ids,True)
 for k in range(NB):
     a=ring[k]; b4=ring[(k+1)%NB]
     quads.append(([a,b4,NCV+b4,NCV+a],[rimuv]*4))
@@ -367,6 +377,22 @@ if (vol()>0) != (VOLSIGN>0):
     quads=[([v[3],v[2],v[1],v[0]],[u[3],u[2],u[1],u[0]]) for v,u in quads]
 print("signed volume:",vol())
 
+# RIM ORIENTATION POST-PASS: the boundary-ring direction was arbitrary and
+# the global volume flip orients the PLATES; an inward rim only betrays
+# itself as TOP-edge gaps (camera sits above the ring). Test one rim quad's
+# outward-facing in 3D: normal dot radial (rim quads are the last NB).
+if NB>=2:
+    vi,_=quads[-NB]
+    a3=verts[vi[0]]; b3=verts[vi[1]]; c3=verts[vi[2]]
+    e1=(b3[0]-a3[0],b3[1]-a3[1],b3[2]-a3[2])
+    e2=(c3[0]-a3[0],c3[1]-a3[1],c3[2]-a3[2])
+    nx=e1[1]*e2[2]-e1[2]*e2[1]; ny=e1[2]*e2[0]-e1[0]*e2[2]
+    mx3=(a3[0]+b3[0])/2.0; my3=(a3[1]+b3[1])/2.0
+    if nx*mx3+ny*my3 < 0:
+        for k in range(len(quads)-NB,len(quads)):
+            v,u=quads[k]
+            quads[k]=([v[3],v[2],v[1],v[0]],[u[3],u[2],u[1],u[0]])
+        print("rim flipped outward")
 nv,nq2=len(verts),len(quads)
 exp=16+nv*8+nq2*36
 print("prism: %dv %dq expanded %dB"%(nv,nq2,exp))
