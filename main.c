@@ -3660,7 +3660,11 @@ int main(void)
 #define RING_CX (-141)
 #endif
 #ifndef RING_CY
-#define RING_CY 40
+/* 124: the circle centre now projects onto the ART's dial centre (137,117
+   in 320x240) - at 40 the ring rode ~20px high and the top items sat over
+   the TOMB RAIDER logo (reference video: items hug the dial arc, selected
+   one right above its label). */
+#define RING_CY 124
 #endif
 #ifndef RING_RAD
 #define RING_RAD 230
