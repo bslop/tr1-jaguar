@@ -134,9 +134,7 @@ sc=156.0/(max(pxs)-min(pxs))
 TH=22
 def to_blob(p): return (int(round((p[0]-cx)*sc)), int(round((p[1]-cy)*sc)))
 P2=[to_blob(p) for p in poly]
-verts=[]
-for (x,y) in P2: verts.append((-x,y, TH))      # front ring (180 about Y:
-for (x,y) in P2: verts.append((-x,y,-TH))      # face lands at ring yaw 0)
+
 
 # ---- 3. ear-clip the outline (works for concave) ----
 def area2(a,b,c): return (b[0]-a[0])*(c[1]-a[1])-(c[0]-a[0])*(b[1]-a[1])
@@ -164,7 +162,36 @@ def earclip(pts):
     if len(idxs)==3: tris.append(tuple(idxs))
     return tris
 cap=earclip(P2)
-print("cap tris:",len(cap))
+# TESSELLATE the caps to the PS1 blob's operating point (~9px^2 tris at ring
+# scale): huge tris smear badly under the kernel's affine texture stepping
+# (screen-linear du/dx per face), and the PS1 pad's ~100 small tris are the
+# proven fix. Longest-edge midpoint split until area <= TARGET units^2.
+TARGET=float(os.environ.get("PAD_TRIAREA","900"))
+capv=list(P2)                          # 2D working verts (blob x,y)
+def tarea(a,b,c):
+    return abs((b[0]-a[0])*(c[1]-a[1])-(c[0]-a[0])*(b[1]-a[1]))/2.0
+def split(tris0):
+    out=[]
+    stack=list(tris0)
+    while stack:
+        t=stack.pop()
+        a,b,c=t
+        if tarea(capv[a],capv[b],capv[c])<=TARGET:
+            out.append(t); continue
+        # longest edge
+        e=[(a,b,c),(b,c,a),(c,a,b)]
+        (p0,p1,p2v)=max(e,key=lambda e2:(capv[e2[0]][0]-capv[e2[1]][0])**2+(capv[e2[0]][1]-capv[e2[1]][1])**2)
+        mx=(capv[p0][0]+capv[p1][0])//2; my=(capv[p0][1]+capv[p1][1])//2
+        try: mi=capv.index((mx,my))
+        except ValueError: mi=len(capv); capv.append((mx,my))
+        stack.append((p0,mi,p2v)); stack.append((mi,p1,p2v))
+    return out
+cap=split(cap)
+NCV=len(capv)
+print("cap tris after tessellation:",len(cap),"cap verts:",NCV)
+verts=[]
+for (x,y) in capv: verts.append((-x,y, TH))    # front sheet (180 about Y:
+for (x,y) in capv: verts.append((-x,y,-TH))    # face lands at ring yaw 0)
 
 # ---- 4. atlas: front 124x?, back beside, rim swatch; quantize ----
 pal=struct.unpack(">256H",open(OUT+"/title_pal.bin","rb").read())
@@ -210,12 +237,12 @@ def plate_uv(x,y,back):
 # ---- 5. faces: front cap, back cap (reversed), rim ----
 tris=[]
 for (a,bb,c) in cap:
-    tris.append(([a,bb,c],[plate_uv(*P2[a],False),plate_uv(*P2[bb],False),plate_uv(*P2[c],False)]))
+    tris.append(([a,bb,c],[plate_uv(*capv[a],False),plate_uv(*capv[bb],False),plate_uv(*capv[c],False)]))
 for (a,bb,c) in cap:
-    tris.append(([N+c,N+bb,N+a],[plate_uv(*P2[c],True),plate_uv(*P2[bb],True),plate_uv(*P2[a],True)]))
+    tris.append(([NCV+c,NCV+bb,NCV+a],[plate_uv(*capv[c],True),plate_uv(*capv[bb],True),plate_uv(*capv[a],True)]))
 for i in range(N):
     j=(i+1)%N
-    a,bq2,c,d2=i,j,N+j,N+i
+    a,bq2,c,d2=i,j,NCV+j,NCV+i
     tris.append(([a,bq2,c],[rimuv]*3))
     tris.append(([a,c,d2],[rimuv]*3))
 # ---- 6. winding: negative signed volume (PS1 convention) ----

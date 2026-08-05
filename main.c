@@ -3791,7 +3791,10 @@ int main(void)
                       static const char *const RLBL[5] =
                           { "Game", "Screen Adjust", "Sound", "Controls",
                             "Laras Home" };
-                      const char *lb = RLBL[page < 3 ? page : 0];
+                      /* the '<3' clamp was the 3-item ring's - it made pages 3/4 label
+                         themselves "Game" and masked a working TITLESEL for two
+                         whole diagnostic loops (2026-08-04). */
+                      const char *lb = RLBL[page];
                       int ln = 0; while (lb[ln]) ln++;
                       menu_text((fbpix *)tfb, RENDER_W, 240,
                                 lb, (320 - ln*8)/2, 200, 2, 2, 0);   /* title_pal[255]=black; 0 is bright */
