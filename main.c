@@ -4054,6 +4054,8 @@ int main(void)
                   page = (edge & PAD_RIGHT) ? (page + 1) : (page + RING_N - 1);
                   if (page >= RING_N) page -= RING_N;
                   ringT = (page * 256) / RING_N;
+                  spin = 0;   /* the newly selected item greets FACE-ON,
+                                 then starts its turn (reference behavior) */
                   sfx_play(1, SFX_MENU_SPIN);
               }
               else if (!copen && !sopen && (edge & PAD_A)) {

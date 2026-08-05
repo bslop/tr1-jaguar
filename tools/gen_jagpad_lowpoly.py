@@ -36,12 +36,13 @@ V = [(int(round((v[0]-cx)*sc)),
       int(round(-(v[2]-cz)*sc))) for v in VB]
 
 # ---- swatch atlas: one 8x8 cell per material, title_pal nearest ----
-MATS = [(28,28,31),   # body: black
-        (48,48,54),   # dark: keypad bed / hump (contrast vs body)
-        (217,31,23),  # red: C/B/A
-        (158,158,168),# key: keypad keys
-        (8,8,9),      # black: dpad cross / groove
-        (77,77,84)]   # panel: dpad disc / back label
+MATS = [(28,28,31),   # body: lower shell / rim
+        (44,44,50),   # dark: hump face
+        (222,32,24),  # red: C/B/A
+        (162,162,172),# key: keys / highlights / rings
+        (7,7,8),      # black: dpad disc / grooves / panel bed
+        (78,78,86),   # panel: pills / back label
+        (46,46,52)]   # bodytop: the leaning control face
 pal = struct.unpack(">256H", open(os.path.join(OUT, "title_pal.bin"), "rb").read())
 def dec(c): return (((c>>11)&31)*255//31, ((c>>1)&31)*255//31, ((c>>6)&31)*255//31)
 prgb = [dec(c) for c in pal]
@@ -57,7 +58,7 @@ cells = []
 # body gets THREE lighting shades (flat-shaded form: lit from above); the
 # rest one cell each. Cell order: [body-front, body-top, body-side, dark,
 # red, key, black, panel]
-SHADES = [(30,30,33),(72,72,78),(16,16,18)] + MATS[1:]
+SHADES = [(30,30,33),(88,88,96),(15,15,17)] + MATS[1:]
 for mi,(r,g,b) in enumerate(SHADES):
     idx = nearest(r,g,b)
     x0 = mi*10
@@ -142,7 +143,7 @@ for root,fl in comp_faces.items():
         for fi in fl: decal_set.add(fi)
 order=[fi for fi in range(len(FACES)) if fi not in decal_set]+      [fi for fi in range(len(FACES)) if fi in decal_set]
 quads=[]; tris=[]
-CELLMAP={0:None,1:cells[3],2:cells[4],3:cells[5],4:cells[6],5:cells[7]}
+CELLMAP={0:None,1:cells[3],2:cells[4],3:cells[5],4:cells[6],5:cells[7],6:cells[8]}
 for fi in order:
     vi,mi=FACES[fi]
     uv = body_cell(vi) if mi==0 else CELLMAP[mi]
