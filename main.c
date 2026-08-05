@@ -3464,7 +3464,11 @@ int main(void)
                             for (k2 = 0; k2 < mv; k2++) vb[k2] = vb[pos + k2];
                             have = mv; pos = 0; }
                         { int want = (31488 - have) & ~511;   /* sector-sized */
-                          if (want > 31232) want = 31232;
+                          /* 24576 cap: v3 sustained ~37KB/s here; raising
+                             the cap to 31232 collapsed calls to ~11KB/s -
+                             something past ~24KB/call falls off a cliff
+                             inside the GD BIOS. Stay in the proven zone. */
+                          if (want > 24576) want = 24576;
                           if (want > remain) want = remain;
                           if (want <= 0) { fi = vnf; break; }
                           if (gd_fread((unsigned)vh, vb + have, (unsigned)want,
