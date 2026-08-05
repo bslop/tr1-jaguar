@@ -179,7 +179,8 @@ def encode_vq():
             enc2.append(hold)
         with open(OUT, "wb") as o:
             o.write(b"JV04")
-            o.write(struct.pack(">HHHH4x", W2, H2, FPS, len(enc2)))
+            o.write(struct.pack(">HHHH", W2, H2, FPS, len(enc2)))
+            o.write(struct.pack(">BBBB", 1 if KEYF == 1 else 0, 0, 0, 0))
             for i in range(256):
                 if i < NCOL:
                     o.write(struct.pack(">H", jag16(int(pal[i][0]), int(pal[i][1]), int(pal[i][2]))))

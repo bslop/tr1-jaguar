@@ -3430,6 +3430,11 @@ int main(void)
                 vhh  = (vb[6] << 8) | vb[7];
                 vfps = (vb[8] << 8) | vb[9];
                 vnf  = (vb[10] << 8) | vb[11];
+                { int kfonly = vb[12];   /* keyframe-only stream: every
+                       frame full-repaints, so the prev-pass is vacuous -
+                       the CORE block displacement showed the two-pass
+                       phase invariant does not survive silicon */
+                  if (kfonly) vnf |= 0x10000; }
                 if (vw != 320 || vhh != 240 || vfps <= 0) vnf = 0;
                 video_set_clut((const uint16_t *)(vb + 16));
                 if (gd_fread((unsigned)vh, cbk, 4096, GD_FREAD_CPU) != 0) {
@@ -3439,6 +3444,7 @@ int main(void)
                 have = 0; pos = 0;
                 t0 = frame_count;
                 { int acc = 0, abuf = 0, astarted = 0;
+                { int kfonly = (vnf >> 16) & 1; vnf &= 0xFFFF;
                 for (fi = 0; fi < vnf; fi++) {
                     uint32_t L, AL;
                     int need = 8;
@@ -3513,12 +3519,13 @@ int main(void)
                          this frame's; the display only ever shows
                          completed frames. */
                       gok = gpu_ok &&
-                            gpu_jvdec_frame(ptk, plen, tk, L, cbk, bb);
+                            gpu_jvdec_frame(ptk, kfonly ? 0 : plen,
+                                            tk, L, cbk, bb);
                       if (!gok) {
                           int pass;
                           for (pass = 0; pass < 2; pass++) {
                               uint8_t *s = pass ? tk : ptk;
-                              uint8_t *e = s + (pass ? L : plen);
+                              uint8_t *e = s + (pass ? L : (kfonly ? 0 : plen));
                               uint8_t *dA = bb;
                               int bx = 0, left = 4800;
                               while (s < e && left > 0) {
@@ -3550,6 +3557,7 @@ int main(void)
                         ;
                     video_flip();
                     if (joypad_read() & (PAD_A | PAD_B | PAD_C)) break;
+                }
                 }
                 /* flush the last partial audio batch */
                 if (g_sfx_ok && acc) {
