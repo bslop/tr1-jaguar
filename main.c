@@ -3323,7 +3323,12 @@ int main(void)
              5792B expanded; the prism pad is only 2208B now). 10560 was the
              old scan-pad allowance and blew the 2MB budget once the prism's
              32KB atlas joined the image (__bss_end guard, 2026-08-04). */
-          static uint8_t rblob[6][6144] __attribute__((aligned(8)));
+          /* 7424: staged size is 16+(nv+nt)*8+(nq+nt)*36 since the tri
+             promotion appends midpoint verts and promotes tris to quads -
+             the max pad (180v/16q/112t) stages at 6960B and the 6144 slot's
+             overflow clamp made it an INVISIBLE ITEM (the exact failure the
+             old 2304-byte comment warned about). */
+          static uint8_t rblob[6][7424] __attribute__((aligned(8)));
 #else
           static uint8_t rblob[6][4096] __attribute__((aligned(8)));
 #endif

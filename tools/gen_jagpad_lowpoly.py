@@ -157,9 +157,11 @@ for fi in order:
         for k in range(1,len(vi)-1):
             tris.append(([vi[0],vi[k],vi[k+1]],uv))
 nv,nq,nt=len(V),len(quads),len(tris)
-exp=16+nv*8+nq*36+nt*30
-print("lowpoly pad: %dv %dq %dt expanded %dB"%(nv,nq,nt,exp))
-assert exp<=6144, "over rblob budget"
+# TRUE staged size: the title staging promotes tris to quads with appended
+# midpoint verts -> verts grow by nt, every face costs a 36B quad record.
+exp=16+(nv+nt)*8+(nq+nt)*36
+print("lowpoly pad: %dv %dq %dt staged %dB"%(nv,nq,nt,exp))
+assert exp<=7424, "over rblob budget"
 b=bytearray()
 b+=struct.pack(">HHHHH",nv,nq,nt,AW,ah)
 b+=struct.pack(">hhh",0,0,0)
