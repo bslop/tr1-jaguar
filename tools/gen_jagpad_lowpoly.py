@@ -68,11 +68,18 @@ for mi,(r,g,b) in enumerate(SHADES):
             atlas[yy*AW + x0 + xx] = idx
     cells.append((x0+4, 4))
 def body_cell(vi):
-    # face normal in blob space (y DOWN): top faces have ny<0
+    # face normal in blob space (y DOWN): top faces have ny<0. Orientation-
+    # agnostic: flip the normal outward (vs the face centroid) so the shading
+    # survives any global winding A/B (the SINGLE flip used to relight the
+    # model upside down).
     A,B,C=V[vi[0]],V[vi[1]],V[vi[2]]
     ux,uy,uz=B[0]-A[0],B[1]-A[1],B[2]-A[2]
     wx,wy,wz=C[0]-A[0],C[1]-A[1],C[2]-A[2]
     nx,ny,nz=uy*wz-uz*wy, uz*wx-ux*wz, ux*wy-uy*wx
+    gx=sum(V[k][0] for k in vi)/len(vi)
+    gy=sum(V[k][1] for k in vi)/len(vi)
+    gz=sum(V[k][2] for k in vi)/len(vi)
+    if nx*gx+ny*gy+nz*gz < 0: nx,ny,nz=-nx,-ny,-nz
     l=max(1,abs(nx)+abs(ny)+abs(nz))
     if ny/l < -0.45: return cells[1]      # top-facing: lit
     if abs(nx)/l > 0.55: return cells[2]  # side: darkest
@@ -116,12 +123,26 @@ def face_ar(vi):
     return ar
 flipped=0
 if SINGLE:
-    # one connected Blender-normal-consistent mesh: single global A/B via
-    # total rest-pose projected area
-    tot=sum(face_ar(FACES[fi][0]) for fi in range(len(FACES)))
-    if tot<0:
+    # one connected CLOSED mesh: total rest-pose projected area is EXACTLY
+    # ZERO by construction (front and back cancel), so the old area A/B was
+    # vacuous - jlp15 shipped in Blender's raw winding and rendered
+    # INSIDE-OUT at the greet (front culled at yaw 0, its interior showing
+    # MIRRORED through the culled back = the 'reds on the left' capture,
+    # 2026-08-05). Orient by SIGNED VOLUME instead; silicon calibration:
+    # +volume = inside-out for this path, so exterior-visible is vol<0.
+    # PAD_ORIENT=1 overrides.
+    want=int(os.environ.get("PAD_ORIENT","-1"))
+    vol=0
+    for vi,_ in FACES:
+        for k in range(1,len(vi)-1):
+            a,c2,d2=V[vi[0]],V[vi[k]],V[vi[k+1]]
+            vol+=(a[0]*(c2[1]*d2[2]-c2[2]*d2[1])
+                 -a[1]*(c2[0]*d2[2]-c2[2]*d2[0])
+                 +a[2]*(c2[0]*d2[1]-c2[1]*d2[0]))
+    if (vol>0) != (want>0):
         for vi,_ in FACES: vi.reverse()
         flipped=1
+    print("SINGLE: signed volume %d -> %s"%(vol,"flipped" if flipped else "kept"))
     comp_faces={}
 for root,fl in comp_faces.items():
     if comp_closed(fl):
