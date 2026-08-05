@@ -3447,10 +3447,18 @@ int main(void)
                     uint8_t *s, *e, *dst, *dend;
                     int y2, x2, need = 4, lo, hi, u0, u1;
                     uint8_t *wlo, *whi;              /* written byte extent */
+#ifdef VIDPROF
+                    volatile uint16_t *vcp = (volatile uint16_t *)0xF00006u;
+                    uint32_t tRd = 0, tDe = 0, tDb0 = 0, tA;
+#define VPT() (frame_count * 263u + ((*vcp) >> 1))
+#endif
                     /* records are 4-padded in the file, so pos stays a
                        multiple of 4 and every FREAD destination below is
                        aligned - an odd destination address-errors the 68k
                        inside the BIOS copy (frozen mid-clip, 2026-08-05) */
+#ifdef VIDPROF
+                    tA = VPT();
+#endif
                     for (;;) {
                         if (have - pos >= need) {
                             if (need > 4) break;
@@ -3476,6 +3484,9 @@ int main(void)
                           have += want; remain -= want; }
                     }
                     if (fi >= vnf) break;
+#ifdef VIDPROF
+                    tRd = VPT() - tA; tA = VPT();
+#endif
                     pos += 4;
                     /* JV02 tokens: 0..99 colour-run, 100..127 SKIP-run
                        (previous frame persists in the stage - temporal
@@ -3483,12 +3494,20 @@ int main(void)
                     s = vb + pos; e = s + L; pos += (int)((L + 3u) & ~3u);
                     dst = stg; dend = stg + 160 * 120;
                     wlo = dend; whi = stg;           /* empty extent */
+                    /* VIDPROF verdict (2026-08-05): decode was 205-256ms/
+                       frame - byte stores under OP bus contention cost ~10x
+                       a model that ignores the bus. LONG stores for runs,
+                       WORD copies for literals: 2-4x fewer bus cycles. */
                     while (s < e && dst < dend) {
                         int tk = *s++;
                         if (tk < 100) {
                             int n = tk + 2; uint8_t v = *s++;
                             if (n > (int)(dend - dst)) n = dend - dst;
                             if (dst < wlo) wlo = dst;
+                            while (n && ((uint32_t)dst & 3)) { *dst++ = v; n--; }
+                            { uint32_t vv = ((uint32_t)v << 24) | ((uint32_t)v << 16)
+                                          | ((uint32_t)v << 8) | v;
+                              while (n >= 4) { *(uint32_t *)dst = vv; dst += 4; n -= 4; } }
                             while (n--) *dst++ = v;
                             if (dst > whi) whi = dst;
                         } else if (tk < 128) {
@@ -3499,6 +3518,11 @@ int main(void)
                             int n = tk - 127;
                             if (n > (int)(dend - dst)) n = dend - dst;
                             if (dst < wlo) wlo = dst;
+                            if ((((uint32_t)dst ^ (uint32_t)s) & 1) == 0) {
+                                if (n && ((uint32_t)dst & 1)) { *dst++ = *s++; n--; }
+                                while (n >= 2) { *(uint16_t *)dst = *(const uint16_t *)s;
+                                                 dst += 2; s += 2; n -= 2; }
+                            }
                             while (n--) *dst++ = *s++;
                             if (dst > whi) whi = dst;
                         }
@@ -3506,6 +3530,9 @@ int main(void)
                     if (wlo < whi) { lo = (int)(wlo - stg) / 160;
                                      hi = (int)(whi - 1 - stg) / 160; }
                     else           { lo = 120; hi = 0; }   /* nothing new */
+#ifdef VIDPROF
+                    tDe = VPT() - tA; tDb0 = VPT();
+#endif
                     /* horizontal-double the union band into the 320x120
                        backbuffer; the OP VSCALE shows it full height */
                     u0 = (lo < plo) ? lo : plo;
@@ -3515,11 +3542,31 @@ int main(void)
                     { uint8_t *fb = (uint8_t *)video_backbuffer();
                       for (y2 = u0; y2 <= u1; y2++) {
                           uint8_t  *sr = stg + y2 * 160;
-                          uint16_t *d0 = (uint16_t *)(fb + y2 * 320);
-                          for (x2 = 0; x2 < 160; x2++)
-                              d0[x2] = (uint16_t)((sr[x2] << 8) | sr[x2]);
+                          uint32_t *d0 = (uint32_t *)(fb + y2 * 320);
+                          for (x2 = 0; x2 < 160; x2 += 2) {
+                              uint32_t a2b = ((uint32_t)sr[x2] * 0x0101u) << 16;
+                              d0[x2 >> 1] = a2b | ((uint32_t)sr[x2+1] * 0x0101u);
+                          }
                       } }
                     plo = lo; phi = hi;
+#ifdef VIDPROF
+                    /* per-stage cost bars in scanline-ticks (fc*263+line):
+                       row0 read, row1 decode, row2 double, row3 flip+wait.
+                       1px = 16 lines ~ 1.02ms. Read them off a capture. */
+                    { extern volatile uint32_t frame_count;
+                      volatile uint16_t *vcreg = (volatile uint16_t *)0xF00006u;
+                      uint32_t tn = frame_count * 263u + (*vcreg >> 1);
+                      uint8_t *fb2 = (uint8_t *)video_backbuffer();
+                      int b0 = (int)((tRd) >> 4), b1 = (int)((tDe) >> 4),
+                          b2 = (int)((tn - tDb0) >> 4), bx;
+                      if (b0 > 319) b0 = 319; if (b1 > 319) b1 = 319;
+                      if (b2 > 319) b2 = 319;
+                      for (bx = 0; bx < 320; bx++) {
+                          fb2[0*320+bx] = bx < b0 ? 6 : 0;
+                          fb2[1*320+bx] = bx < b1 ? 6 : 0;
+                          fb2[2*320+bx] = bx < b2 ? 6 : 0;
+                      } }
+#endif
                     while ((int)(frame_count - t0) < ((fi + 1) * 60) / vfps)
                         ;
                     video_flip();
