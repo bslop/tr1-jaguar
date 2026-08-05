@@ -63,10 +63,14 @@ def packbits(d, prev):
 
 with tempfile.TemporaryDirectory() as td:
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", SRC,
-                    "-vf", ("crop=%d:%d:%d:%d,hqdn3d=4:3:14:14,fps=%d,scale=%d:%d:"
-                            "force_original_aspect_ratio=decrease:flags=lanczos,"
-                            "pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black")
-                    % (r - l, b - t, l, t, FPS, W, H, W, H),
+                    "-vf", (("crop=%d:%d:%d:%d,hqdn3d=4:3:14:14,fps=%d,"
+                             "scale=%dx%d:flags=lanczos")
+                            % (r - l, b - t, l, t, FPS, W, H)
+                            if os.environ.get("JV_STRETCH", "1") == "1" else
+                            ("crop=%d:%d:%d:%d,hqdn3d=4:3:14:14,fps=%d,scale=%d:%d:"
+                             "force_original_aspect_ratio=decrease:flags=lanczos,"
+                             "pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black")
+                            % (r - l, b - t, l, t, FPS, W, H, W, H)),
                     os.path.join(td, "f_%04d.png")], check=True)
     frames = sorted(os.listdir(td))
     print("%d frames @ %dfps" % (len(frames), FPS))
