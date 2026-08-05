@@ -3708,20 +3708,14 @@ int main(void)
 #define PASS_OPEN_ROLL 67
 #endif
 #define PASS_OPEN_TICKS 6
-/* dial circle (screen-space fit of the title art's dial): centre/radius in
-   world units at z=800, focal 190. phi=96 reproduces the tuned select spot. */
-#ifndef RING_CX
-#define RING_CX (-141)
+/* lazy-susan radii (world units): RX spreads adjacent items wide (the PS1's
+   neighbours sit at ~24%/78% of screen width); RZ recedes the far side to
+   z~1220 so distance supplies the shrink-and-rise. */
+#ifndef RING_RX
+#define RING_RX 430
 #endif
-#ifndef RING_CY
-/* 124: the circle centre now projects onto the ART's dial centre (137,117
-   in 320x240) - at 40 the ring rode ~20px high and the top items sat over
-   the TOMB RAIDER logo (reference video: items hug the dial arc, selected
-   one right above its label). */
-#define RING_CY 124
-#endif
-#ifndef RING_RAD
-#define RING_RAD 230
+#ifndef RING_RZ
+#define RING_RZ 260
 #endif
                       /* THE RING (2026-07-29): three items - 0 Game
                          (passport), 1 Controls, 2 Lara's Home. Sound is
@@ -3754,29 +3748,27 @@ int main(void)
                       { int dd = ((ringT - ringR + 128) & 255) - 128;
                         ringR = (ringR + ((dd > 0) ? ((dd+3)>>2)
                                                    : -(((-dd)+3)>>2))) & 255; }
-                      spin = (spin - 4) & 1023;   /* CLOCKWISE (user 2026-08-04) */
+                      spin = (spin + 3) & 1023;   /* reference 11-03-33: ~3s/turn,
+                                             direction re-matched */
                       for (it2 = 0; it2 < RING_N; it2++) {
                           /* angular distance of this item from the FRONT, as
                              0 (selected) .. 256 (opposite side of the ring) */
                           int th = ((it2*256)/RING_N - ringR) & 255;
                           int f  = (th < 128 ? th : 256 - th) * 2;
-                          /* ON THE RING (user 2026-08-04: "more of a ring"):
-                             items sit on a circle over the dial art. phi=96
-                             (135 deg = dial lower-right, the reference's
-                             select spot) lands exactly on the tuned
-                             (PASS_X, PASS_Y); z pops 800->700 at the front. */
+                          /* LAZY SUSAN (reference video 11-03-33, 2026-08-05):
+                             the PS1 ring is a FLAT CAROUSEL in depth, not a
+                             vertical wheel - all items share world height;
+                             perspective alone makes far items smaller and
+                             higher on screen (they drift up toward the dial
+                             centre exactly as in the reference). Selected sits
+                             at the tuned front spot; adjacent spread wide. */
                           int ths = (((it2*256)/RING_N - ringR + 128) & 255) - 128;
-                          int phi = (96 + ths) & 255;
                           const int16_t *m = mp2[it2];
                           if (f > 256) f = 256;
-                          px[it2] = RING_CX + (int)((RING_RAD * SIN(phi)) >> 16);
-                          py[it2] = RING_CY - (int)((RING_RAD * COS(phi)) >> 16);
-                          /* DEPTH ring (reference): far-side items recede -
-                             smaller, tucked inside the arc, clear of the logo.
-                             front 700, neighbours ~1000, far side ~1300.
-                             (250 was invisible: 5 items never exceed f=204,
-                             so the whole ring lived in a 12% depth band.) */
-                          pz[it2] = 700 + ((f * 750) >> 8);
+                          px[it2] = PASS_X + (int)((RING_RX * SIN(ths)) >> 16);
+                          py[it2] = PASS_Y;
+                          pz[it2] = 700 + (int)((RING_RZ *
+                                    (65536 - COS(ths))) >> 16);
                           /* the ORIGINAL spins the selected item a full 360
                              clockwise, showing front AND back (user reference
                              2026-08-04). Unselected items hold still. */
