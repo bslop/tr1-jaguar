@@ -44,6 +44,7 @@ V0=np.array(Vs); VT=np.array(VTs)
 F=[[[a[0],b[0],c[0]],[a[1],b[1],c[1]]] for a,b,c in Ftmp]
 print("obj: %dv %d tris"%(len(V0),len(F)))
 
+tex=Image.open(os.environ["JAGPAD_TEX"]).convert("RGB")
 tpx=np.asarray(tex); th,tw,_=tpx.shape
 B=np.stack([V0[:,0], -V0[:,1], -V0[:,2]],1)
 
