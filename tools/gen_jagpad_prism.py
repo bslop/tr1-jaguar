@@ -83,7 +83,57 @@ def plate(back):
         zbs[upd]=z[upd]
     return img,(zb<1e8)
 
+STYLE=os.environ.get("PAD_STYLE","flat")
 f,fm=plate(False); b,bm=plate(True)
+if STYLE=="flat":
+    # CLEAN DRAWN PLATES (user 2026-08-04: "charcoal, C/B/A red, match the
+    # dpad and pause/option, call it a day"): flat regions read perfectly at
+    # ring scale and are immune to texture-step wobble. Drawn 4x, box down.
+    from PIL import ImageDraw as _ID
+    S4=4; W4=1024
+    CHAR=(46,46,50); CHARD=(34,34,38); CHARL=(64,64,70)
+    RED=(196,32,28); KEY=(88,88,94); KEYD=(26,26,30)
+    fim=Image.new("RGB",(W4,W4),(0,0,0))
+    dr=_ID.Draw(fim)
+    # body fill comes from the MASK later; just draw the face art full-bleed
+    dr.rectangle([0,0,W4,W4],fill=CHAR)
+    dr.rectangle([0,0,W4,int(W4*0.16)],fill=CHARL)          # top bevel
+    # dpad upper-left: cross
+    cx,cy,arm,thk=int(W4*0.22),int(W4*0.30),int(W4*0.115),int(W4*0.062)
+    dr.rectangle([cx-arm,cy-thk,cx+arm,cy+thk],fill=KEYD)
+    dr.rectangle([cx-thk,cy-arm,cx+thk,cy+arm],fill=KEYD)
+    dr.rectangle([cx-thk+6,cy-thk+6,cx+thk-6,cy+thk-6],fill=(52,52,58))
+    # C B A red discs diagonal upper-right (C highest-left, A lowest-right)
+    r4=int(W4*0.052)
+    for k,(bx,by) in enumerate([(0.60,0.235),(0.71,0.30),(0.82,0.365)]):
+        x,y=int(W4*bx),int(W4*by)
+        dr.ellipse([x-r4,y-r4,x+r4,y+r4],fill=RED)
+        dr.ellipse([x-r4,y-r4,x+r4,y-r4+r4],outline=(230,90,80))
+    # pause / option pills centre
+    for k,px4 in enumerate([0.40,0.50]):
+        x,y=int(W4*px4),int(W4*0.30)
+        dr.rounded_rectangle([x-int(W4*0.030),y-int(W4*0.014),
+                              x+int(W4*0.030),y+int(W4*0.014)],
+                             radius=int(W4*0.012),fill=KEYD,outline=CHARL)
+    # keypad lower half: 3x4 grey keys on a dark bed
+    bx0,by0,bx1,by1=int(W4*0.16),int(W4*0.46),int(W4*0.84),int(W4*0.94)
+    dr.rounded_rectangle([bx0,by0,bx1,by1],radius=int(W4*0.03),fill=KEYD)
+    kw=(bx1-bx0)/3.0; kh=(by1-by0)/4.0
+    for r5 in range(4):
+        for c5 in range(3):
+            x0=int(bx0+c5*kw+kw*0.16); x1=int(bx0+(c5+1)*kw-kw*0.16)
+            y0=int(by0+r5*kh+kh*0.20); y1=int(by0+(r5+1)*kh-kh*0.20)
+            dr.rounded_rectangle([x0,y0,x1,y1],radius=6,fill=KEY)
+    fim=fim.resize((RES,RES),Image.BOX)
+    f=np.asarray(fim).copy(); f[~fm]=0
+    # back: charcoal + darker inset panel (label plate)
+    bim=Image.new("RGB",(W4,W4),CHARD)
+    db=_ID.Draw(bim)
+    db.rounded_rectangle([int(W4*0.28),int(W4*0.22),int(W4*0.72),int(W4*0.78)],
+                         radius=int(W4*0.04),fill=(40,40,44),outline=CHARL)
+    db.rectangle([int(W4*0.33),int(W4*0.30),int(W4*0.67),int(W4*0.40)],fill=KEY)
+    bim=bim.resize((RES,RES),Image.BOX)
+    b=np.asarray(bim).copy(); b[~bm]=0
 def down(img):
     return np.asarray(Image.fromarray(img).resize((256,256),Image.BOX))
 fmask=np.asarray(Image.fromarray((fm*255).astype(np.uint8)).resize((256,256),Image.BOX))>127
