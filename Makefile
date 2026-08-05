@@ -1153,6 +1153,11 @@ ifdef CTRLOPEN
 CFLAGS   += -DCTRLOPEN=$(CTRLOPEN)
 CXXFLAGS += -DCTRLOPEN=$(CTRLOPEN)
 endif
+# TITLESEL=P: auto-rotate the title ring to page P after 90 frames (captures)
+ifdef TITLESEL
+CFLAGS   += -DTITLESEL=$(TITLESEL)
+CXXFLAGS += -DTITLESEL=$(TITLESEL)
+endif
 
 # LARA_FOOT1/2=N: footfall frames as EIGHTHS of the run/walk cycle. The
 # footstep SFX is phase-locked to the animation (it used to fire off a

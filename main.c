@@ -3798,6 +3798,14 @@ int main(void)
                  Opening it late makes the transition itself the evidence. */
               { static int _co = 0; if (++_co == (CTRLOPEN) && !copen) copen = 1; }
 #endif
+#ifdef TITLESEL
+              /* TITLESEL=P: rotate the ring to page P after 90 title frames -
+                 unattended captures of any SELECTED item (the title loop is
+                 physical-pad-only, so the GD remote input cannot drive it). */
+              { static int _ts = 0;
+                if (++_ts == 90) { page = (TITLESEL) % RING_N;
+                                   ringT = (page * 256) / RING_N; } }
+#endif
               if (copen) {
                   /* Controls page: B returns to the ring, as "Go Back" says. */
                   if (edge & PAD_B) { copen = 0; sfx_play(1, SFX_MENU_SPIN); }
