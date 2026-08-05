@@ -85,6 +85,15 @@ photo_geom:
 	.globl photo_atlas
 photo_atlas:
 	.incbin "photo_atlas.bin"
+| INV_SOUND (model 96, TITLE.PSX) - the Sound ring item (task: 4th launch item)
+	.balign 8
+	.globl sound_geom
+sound_geom:
+	.incbin "sound_geom.bin"
+	.balign 8
+	.globl sound_atlas
+sound_atlas:
+	.incbin "sound_atlas.bin"
 	.balign 8
 	.globl font_load
 font_load:

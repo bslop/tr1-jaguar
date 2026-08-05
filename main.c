@@ -3290,6 +3290,8 @@ int main(void)
           /* INV_CONTROLS (model 97) - the "Controls" ring item. */
           extern const uint8_t  ctrl_geom[], ctrl_atlas[];
           extern const uint8_t  photo_geom[], photo_atlas[];
+          /* INV_SOUND (model 96) - the Sound ring item. */
+          extern const uint8_t  sound_geom[], sound_atlas[];
           static uint32_t tcam[8] __attribute__((aligned(16)));
           /* AUTHENTIC RING (OpenLara inventory.h:1706): items on a circle,
              selected at front, other across the ring (farther + higher);
@@ -3300,12 +3302,12 @@ int main(void)
              16 + 52*8 + 100*TREC = 3432 bytes. At the old 2304 it tripped the
              clamp below and rendered with ZERO faces - an invisible item, not
              an error. */
-          static uint8_t rblob[4][10560] __attribute__((aligned(8)));
+          static uint8_t rblob[5][10560] __attribute__((aligned(8)));
 #else
-          static uint8_t rblob[4][4096] __attribute__((aligned(8)));
+          static uint8_t rblob[5][4096] __attribute__((aligned(8)));
 #endif
-          const uint8_t *rsrc[4]; const uint8_t *ratl[4];
-          int rvcnt[4], rblen[4];
+          const uint8_t *rsrc[5]; const uint8_t *ratl[5];
+          int rvcnt[5], rblen[5];
           /* PASSPORT OPEN: 0 = on the ring, 1..PASS_OPEN_TICKS = opening,
              PASS_OPEN_TICKS = fully open (the page view). */
           int popen = 0;
@@ -3345,10 +3347,11 @@ int main(void)
              ring item. (Sound is deferred - user 2026-07-29.) */
           rsrc[0]=pass_geom;  ratl[0]=pass_atlas;
           rsrc[1]=ctrl_geom;  ratl[1]=ctrl_atlas;
-          rsrc[2]=photo_geom; ratl[2]=photo_atlas;
-          rsrc[3]=pass2_geom; ratl[3]=pass2_atlas;
+          rsrc[2]=sound_geom; ratl[2]=sound_atlas;
+          rsrc[3]=photo_geom; ratl[3]=photo_atlas;
+          rsrc[4]=pass2_geom; ratl[4]=pass2_atlas;
           { int it2;
-            for (it2=0; it2<4; it2++) {
+            for (it2=0; it2<5; it2++) {
               const uint8_t *sb=rsrc[it2];
               int nv=(sb[0]<<8)|sb[1], nq=(sb[2]<<8)|sb[3], nt=(sb[4]<<8)|sb[5];
 #ifndef STAGEDIET
@@ -3497,7 +3500,7 @@ int main(void)
    Previous values (-39, 319, 700) put it a third too far away. */
 /* THE RING: 0 = Game (passport), 1 = Controls, 2 = Lara's Home.
    Sound is deferred to last (user 2026-07-29) and is NOT on the ring yet. */
-#define RING_N 3
+#define RING_N 4
 /* Controls item orientation - NOT yet tuned against the reference. Use the
    offline projection search (rank by hull area) the way the passport was. */
 #ifndef CTRL_YAW
@@ -3544,7 +3547,14 @@ int main(void)
    maximal when it faces the camera, so ranking by hull area picks the right
    one. Same class of mistake as scoring a bbox instead of principal extents. */
 #ifndef PASS_OPEN_YAW
-#define PASS_OPEN_YAW 218
+/* 2026-08-04: bake order changed to PITCH-first (d26dcd4) which INVALIDATED
+   the 07-29 tuned open pose (218/240/48, old YAW-first order) - the spread
+   came in rolled ~40 deg. These are the EXACT ZYX re-decomposition of that
+   verified rotation matrix under the new order (Rz67*Ry222*Rx231 == old
+   Rz48*Rx240*Ry218, max element err 0.012). Yaw is written -34 (== 222 mod
+   256) so the open lerp takes the SHORT arc - the long sweep read as
+   "opens sideways" (user 2026-08-04). */
+#define PASS_OPEN_YAW (-34)
 #endif
 /* The CLOSED ring booklet keeps roll 0: 32/-32/224 were all tried offline and
    every one looked WORSE than what ships (it lies flatter, not more upright).
@@ -3581,13 +3591,24 @@ int main(void)
 #define PASS_PITCH 256
 #endif
 #ifndef PASS_OPEN_PITCH
-#define PASS_OPEN_PITCH 240
+#define PASS_OPEN_PITCH 231
 #endif
 #ifndef PASS_ROLL
 #define PASS_ROLL 0
 #endif
+/* Sound cassette (model 96): same lying-authored convention as the others -
+   stand it up with pitch, no yaw/roll until tuned against the reference. */
+#ifndef SND_YAW
+#define SND_YAW 0
+#endif
+#ifndef SND_PITCH
+#define SND_PITCH 64
+#endif
+#ifndef SND_ROLL
+#define SND_ROLL 0
+#endif
 #ifndef PASS_OPEN_ROLL
-#define PASS_OPEN_ROLL 0
+#define PASS_OPEN_ROLL 67
 #endif
 #define PASS_OPEN_TICKS 6
                       /* THE RING (2026-07-29): three items - 0 Game
@@ -3608,15 +3629,18 @@ int main(void)
                            spot; its own orientation is CTRL_YAW/PITCH/ROLL. Not
                            yet tuned against the reference. */
                         { PASS_X, PASS_Y, PASS_Z, CTRL_YAW,  -215, 148, 800, 24  },
+                        /* Sound - INV_SOUND (96), the cassette player. */
+                        { PASS_X, PASS_Y, PASS_Z, SND_YAW,   -170,  40, 800, 24  },
                         /* Lara's Home - the polaroid. */
                         { PASS_X, PASS_Y, PASS_Z, 0,          -25, -30, 800, 24  },
                       };
                       static const int16_t mrot[RING_N][2] = {   /* pitch, roll */
                         { PASS_PITCH, PASS_ROLL },
                         { CTRL_PITCH, CTRL_ROLL },
+                        { SND_PITCH, SND_ROLL },
                         { 0, 0 },
                       };
-                      int it2, ord2, zi[4], px[4], py[4], pz[4], yw[4], rl[4], pt[4];
+                      int it2, ord2, zi[5], px[5], py[5], pz[5], yw[5], rl[5], pt[5];
                       int rord[RING_N];
                       /* ring rotation takes the SHORT way round the circle */
                       { int dd = ((ringT - ringR + 128) & 255) - 128;
@@ -3686,8 +3710,8 @@ int main(void)
                      original shows the item's name bottom-centre and a
                      "Select" prompt bottom-left. Jaguar wording, TR font. */
                   if (!copen && !popen) {
-                      static const char *const RLBL[3] =
-                          { "New Game", "Controls", "Laras Home" };
+                      static const char *const RLBL[4] =
+                          { "New Game", "Controls", "Sound", "Laras Home" };
                       const char *lb = RLBL[page < 3 ? page : 0];
                       int ln = 0; while (lb[ln]) ln++;
                       menu_text((fbpix *)tfb, RENDER_W, 240,
@@ -3797,7 +3821,10 @@ int main(void)
                                    sfx_play(1, SFX_MENU_SHOW); }
                   else if (page == 1) { copen = 1;     /* Controls page opens */
                                         sfx_play(1, SFX_MENU_SHOW); }
-                  else if (page == 2) { g_useset = 1;  /* Lara's Home */
+                  else if (page == 2) { /* Sound page: not built yet - just
+                                             acknowledge (volume bars later) */
+                                        sfx_play(1, SFX_MENU_SHOW); }
+                  else if (page == 3) { g_useset = 1;  /* Lara's Home */
                                         sfx_play(1, SFX_MENU_SHOW); break; }
               }
           }

@@ -31,6 +31,14 @@ OUTDIR  = os.environ.get("TR_OUTDIR", _REPO)
 SRC_W, SRC_H = 384, 256          # native size of the decompressed disc image
 DST_W, DST_H = 320, 240          # Jaguar hi-res title buffer
 
+# RESERVED TAIL (2026-08-04): the title art is warm golds/browns with no mid
+# greys, which turned the scanned Jaguar-pad ring item GOLD when its texture
+# quantized against title_pal.  Quantize the art to 245 colours and hold the
+# tail back: 245..254 = neutral grey ramp for the 3D ring items (pad body,
+# polaroid border), 255 = black (vert records pack colour 255 - keep it).
+ART_COLORS = 245
+GREY_RAMP  = [25 + i * 23 for i in range(10)]        # 25..232
+
 
 def jag16(r5, g5, b5):
     """PSX 5-bit channels -> Jaguar RGB16 (R<<11 | B<<6 | G<<1); matches
@@ -55,6 +63,9 @@ def emit(img_q, name):
     assert len(idx) == DST_W * DST_H, len(idx)
     pal = img_q.getpalette() or []
     pal += [0] * (256 * 3 - len(pal))
+    for i, g in enumerate(GREY_RAMP):                 # reserved tail
+        pal[(ART_COLORS + i) * 3 : (ART_COLORS + i) * 3 + 3] = [g, g, g]
+    pal[255 * 3 : 256 * 3] = [0, 0, 0]
     out_pal = bytearray()
     for i in range(256):
         r, g, b = pal[i * 3], pal[i * 3 + 1], pal[i * 3 + 2]
@@ -79,7 +90,7 @@ def convert(raw_name, out_name):
                          % (raw_name, len(raw), need, SRC_W, SRC_H))
     src = bgr555_to_rgb888(raw, SRC_W, SRC_H)
     src = src.resize((DST_W, DST_H), Image.LANCZOS)
-    q = src.quantize(colors=256, method=Image.Quantize.MEDIANCUT,
+    q = src.quantize(colors=ART_COLORS, method=Image.Quantize.MEDIANCUT,
                      dither=Image.Dither.NONE)
     emit(q, out_name)
     print("  %-12s <- %s (RNC %dx%d -> %dx%d, 256 colours)"
