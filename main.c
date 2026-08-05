@@ -3321,6 +3321,8 @@ int main(void)
           int copen = 0;
           /* SOUND PAGE state, mirroring copen. */
           int sopen = 0, srow = 0;
+          int mkick = 0;      /* unmute: re-prime the music voice (the queue
+                                 alone cannot restart a fully-idle voice) */
           int ringR = 0, ringT = 0;    /* current/target ring angle (1024) */
           int spin = 0;
           int page = 0, shown = -1, armed = 0;
@@ -3417,7 +3419,26 @@ int main(void)
                  other IMMEDIATELY (audio first), then refill the drained
                  one from SD (~8KB = 0.74s of headroom per swap). EOF =
                  close+reopen: the theme loops. */
-              if (mh >= 0 && g_sfx_ok && g_musvol) {
+              if (mh >= 0 && g_sfx_ok && g_musvol && mkick) {
+                  /* UNMUTE: both buffers drained during the mute - re-prime
+                     exactly like boot (fill two, kick voice 0, queue one). */
+                  int n0;
+                  mkick = 0;
+                  n0 = mleft < (int)sizeof(mbuf[0]) ? mleft : (int)sizeof(mbuf[0]);
+                  mlq[0] = 0; mlq[1] = 0;
+                  if (n0 && gd_fread((unsigned)mh, mbuf[0], (unsigned)n0, GD_FREAD_CPU) == 0)
+                      { mlq[0] = n0; mleft -= n0; }
+                  n0 = mleft < (int)sizeof(mbuf[0]) ? mleft : (int)sizeof(mbuf[0]);
+                  if (n0 && gd_fread((unsigned)mh, mbuf[1], (unsigned)n0, GD_FREAD_CPU) == 0)
+                      { mlq[1] = n0; mleft -= n0; }
+                  if (mlq[0]) {
+                      extern void jerry_sfx_queue(const void*, uint32_t);
+                      jerry_sfx(0, mbuf[0], (uint32_t)mlq[0], 0);
+                      if (mlq[1]) jerry_sfx_queue(mbuf[1], (uint32_t)mlq[1]);
+                      mplay = 1;
+                  }
+              }
+              else if (mh >= 0 && g_sfx_ok && g_musvol) {
                   /* gapless service: the pump promoted the queued buffer
                      (NCNT==0) -> refill the dead one and re-queue it. */
                   volatile uint32_t *ncnt = (volatile uint32_t *)0xF1C378u;
@@ -3865,7 +3886,9 @@ int main(void)
                   else if (edge & PAD_DOWN) { srow = 1; }
                   else if ((edge & PAD_LEFT)  && *vp > 0)  { (*vp)--;
                       sfx_play(1, SFX_MENU_SPIN); }
-                  else if ((edge & PAD_RIGHT) && *vp < 10) { (*vp)++;
+                  else if ((edge & PAD_RIGHT) && *vp < 10) {
+                      if (*vp == 0 && !srow) mkick = 1;   /* music unmute */
+                      (*vp)++;
                       sfx_play(1, SFX_MENU_SPIN); }
               }
               else if (popen && popen < PASS_OPEN_TICKS) popen++;   /* run the opening */
