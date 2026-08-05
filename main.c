@@ -3325,9 +3325,17 @@ int main(void)
           int sopen = 0, srow = 0;
           int mkick = 0;      /* unmute: re-prime the music voice (the queue
                                  alone cannot restart a fully-idle voice) */
+#ifdef TITLESEL
+          int ringR = ((TITLESEL) * 256) / 5, ringT = ((TITLESEL) * 256) / 5;
+#else
           int ringR = 0, ringT = 0;    /* current/target ring angle (1024) */
+#endif
           int spin = 0;
+#ifdef TITLESEL
+          int page = (TITLESEL), shown = -1, armed = 0;
+#else
           int page = 0, shown = -1, armed = 0;
+#endif
           uint32_t praw = 0, stable = 0, sprev = 0;
 #ifndef NO_GAMEDRIVE
           /* TITLE MUSIC: stream MUSIC.PCM (raw s8 @11025) from the SD
@@ -3719,8 +3727,10 @@ int main(void)
                           py[it2] = RING_CY - (int)((RING_RAD * COS(phi)) >> 16);
                           /* DEPTH ring (reference): far-side items recede -
                              smaller, tucked inside the arc, clear of the logo.
-                             front 700 -> opposite side 950. */
-                          pz[it2] = 700 + ((f * 250) >> 8);
+                             front 700, neighbours ~1000, far side ~1300.
+                             (250 was invisible: 5 items never exceed f=204,
+                             so the whole ring lived in a 12% depth band.) */
+                          pz[it2] = 700 + ((f * 750) >> 8);
                           /* the ORIGINAL spins the selected item a full 360
                              clockwise, showing front AND back (user reference
                              2026-08-04). Unselected items hold still. */
@@ -3904,14 +3914,6 @@ int main(void)
                  lottery", because it never renders a good frame either way.
                  Opening it late makes the transition itself the evidence. */
               { static int _co = 0; if (++_co == (CTRLOPEN) && !copen) copen = 1; }
-#endif
-#ifdef TITLESEL
-              /* TITLESEL=P: rotate the ring to page P after 90 title frames -
-                 unattended captures of any SELECTED item (the title loop is
-                 physical-pad-only, so the GD remote input cannot drive it). */
-              { static int _ts = 0;
-                if (++_ts == 90) { page = (TITLESEL) % RING_N;
-                                   ringT = (page * 256) / RING_N; } }
 #endif
               if (copen) {
                   /* Controls page: B returns to the ring, as "Go Back" says. */
