@@ -3775,6 +3775,14 @@ int main(void)
                                 rord[b2] = rord[b2-1];
                             rord[b2] = k2;
                         } }
+                      /* ☠️ PIPELINE RACE (2026-08-04): with PIPELINE=1 Tom can
+                         still be READING last frame's rblob[] when the 68k
+                         re-bakes this frame's verts into the same buffers -
+                         torn tris whose missing set CHANGES per frame (the
+                         "carved out" pad; 166 tris = longest bake+read ever
+                         staged, so it tore worst). The menu can afford one
+                         sync per frame. */
+                      { extern int gpu_sync(void); gpu_sync(); }
                       for (ord2 = 0; ord2 < (popen ? 1 : RING_N); ord2++) {
                         it2 = popen ? RING_N : rord[ord2];
                         { title_bake(rsrc[it2], rblob[it2], rvcnt[it2],
