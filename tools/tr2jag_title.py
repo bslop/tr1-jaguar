@@ -178,14 +178,19 @@ def main():
         if sx+t['w']>AW: sy+=sh; sx=0; sh=0
         pos.append((sx,sy)); sx+=t['w']; sh=max(sh,t['h'])
     ah=sy+sh
-    # nearest-colour map into the EXISTING title palette
+    # nearest-colour map into the EXISTING title palette.
+    # ONLY the ART entries (0..244): gen_titlebg.py reserves 245..254 as a
+    # neutral grey ramp for the 3D ring items and 255 as black - letting PSX
+    # art snap to those turned the passport's gold page-edge GREY
+    # (user 2026-08-04: "the picture on the front of the passport is messed up").
+    ART_COLORS = 245
     tp=open(os.path.join(OUT,'title_pal.bin'),'rb').read()
     tpal=[struct.unpack_from(">H",tp,i*2)[0] for i in range(256)]
     def unpack16(c): return ((c>>11)&31,(c>>1)&31,(c>>6)&31)
     tprgb=[unpack16(c) for c in tpal]
     def nearest(r5,g5,b5):
         bd=1<<30; bi=0
-        for i,(rr,gg,bb) in enumerate(tprgb):
+        for i,(rr,gg,bb) in enumerate(tprgb[:ART_COLORS]):
             d=(r5-rr)**2+(g5-gg)**2+(b5-bb)**2
             if d<bd: bd=d; bi=i
         return bi

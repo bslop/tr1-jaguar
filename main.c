@@ -3296,6 +3296,8 @@ int main(void)
           extern const uint8_t  photo_geom[], photo_atlas[];
           /* INV_SOUND (model 96) - the Sound ring item. */
           extern const uint8_t  sound_geom[], sound_atlas[];
+          /* type 95 - "Screen Adjust" on the PSX title ring (the sunglasses). */
+          extern const uint8_t  detail_geom[], detail_atlas[];
           static uint32_t tcam[8] __attribute__((aligned(16)));
           /* AUTHENTIC RING (OpenLara inventory.h:1706): items on a circle,
              selected at front, other across the ring (farther + higher);
@@ -3306,12 +3308,12 @@ int main(void)
              16 + 52*8 + 100*TREC = 3432 bytes. At the old 2304 it tripped the
              clamp below and rendered with ZERO faces - an invisible item, not
              an error. */
-          static uint8_t rblob[5][10560] __attribute__((aligned(8)));
+          static uint8_t rblob[6][10560] __attribute__((aligned(8)));
 #else
-          static uint8_t rblob[5][4096] __attribute__((aligned(8)));
+          static uint8_t rblob[6][4096] __attribute__((aligned(8)));
 #endif
-          const uint8_t *rsrc[5]; const uint8_t *ratl[5];
-          int rvcnt[5], rblen[5];
+          const uint8_t *rsrc[6]; const uint8_t *ratl[6];
+          int rvcnt[6], rblen[6];
           /* PASSPORT OPEN: 0 = on the ring, 1..PASS_OPEN_TICKS = opening,
              PASS_OPEN_TICKS = fully open (the page view). */
           int popen = 0;
@@ -3353,13 +3355,17 @@ int main(void)
           /* RING ORDER: 0 = Game (passport), 1 = Controls, 2 = Lara's Home.
              Slot 3 is the OPENED passport - staged like the rest but not a
              ring item. (Sound is deferred - user 2026-07-29.) */
-          rsrc[0]=pass_geom;  ratl[0]=pass_atlas;
-          rsrc[1]=ctrl_geom;  ratl[1]=ctrl_atlas;
-          rsrc[2]=sound_geom; ratl[2]=sound_atlas;
-          rsrc[3]=photo_geom; ratl[3]=photo_atlas;
-          rsrc[4]=pass2_geom; ratl[4]=pass2_atlas;
+          /* PSX title ring order (reference video 17-22-54): RIGHT of Game
+             is Screen Adjust, LEFT is Lara's Home; Sound and Controls fill
+             the far side. Slot RING_N = the opened passport spread. */
+          rsrc[0]=pass_geom;   ratl[0]=pass_atlas;
+          rsrc[1]=detail_geom; ratl[1]=detail_atlas;
+          rsrc[2]=sound_geom;  ratl[2]=sound_atlas;
+          rsrc[3]=ctrl_geom;   ratl[3]=ctrl_atlas;
+          rsrc[4]=photo_geom;  ratl[4]=photo_atlas;
+          rsrc[5]=pass2_geom;  ratl[5]=pass2_atlas;
           { int it2;
-            for (it2=0; it2<5; it2++) {
+            for (it2=0; it2<6; it2++) {
               const uint8_t *sb=rsrc[it2];
               int nv=(sb[0]<<8)|sb[1], nq=(sb[2]<<8)|sb[3], nt=(sb[4]<<8)|sb[5];
 #ifndef STAGEDIET
@@ -3527,7 +3533,7 @@ int main(void)
    Previous values (-39, 319, 700) put it a third too far away. */
 /* THE RING: 0 = Game (passport), 1 = Controls, 2 = Lara's Home.
    Sound is deferred to last (user 2026-07-29) and is NOT on the ring yet. */
-#define RING_N 4
+#define RING_N 5
 /* Controls item orientation - NOT yet tuned against the reference. Use the
    offline projection search (rank by hull area) the way the passport was. */
 #ifndef CTRL_YAW
@@ -3623,6 +3629,16 @@ int main(void)
 #ifndef PASS_ROLL
 #define PASS_ROLL 0
 #endif
+/* Screen Adjust sunglasses (model 95): lying-authored, stand with pitch. */
+#ifndef SA_YAW
+#define SA_YAW 0
+#endif
+#ifndef SA_PITCH
+#define SA_PITCH 224
+#endif
+#ifndef SA_ROLL
+#define SA_ROLL 0
+#endif
 /* Sound cassette (model 96): same lying-authored convention as the others -
    stand it up with pitch, no yaw/roll until tuned against the reference. */
 #ifndef SND_YAW
@@ -3658,27 +3674,23 @@ int main(void)
                          side. Only the selected placement was ever tuned
                          against the reference; the other two spots are the
                          ring positions the original sweeps through. */
+                      /* positions come from the dial circle now; these rows
+                         carry only the FACING anchors {selyaw, unselyaw}. */
                       static const int16_t mp2[RING_N][8] = {
-                        /* Game - the passport. Tuned against the original's
-                           title screen: booklet 24.4%% of frame height, centred
-                           (46.6%%, 79.8%%). See PASS_X/Y/Z above. */
-                        { PASS_X, PASS_Y, PASS_Z, PASS_YAW,  -119, -72, 800, 24  },
-                        /* Controls - INV_CONTROLS (97). Shares the front-of-ring
-                           spot; its own orientation is CTRL_YAW/PITCH/ROLL. Not
-                           yet tuned against the reference. */
-                        { PASS_X, PASS_Y, PASS_Z, CTRL_YAW,  -215, 148, 800, 24  },
-                        /* Sound - INV_SOUND (96), the cassette player. */
-                        { PASS_X, PASS_Y, PASS_Z, SND_YAW,   -170,  40, 800, 24  },
-                        /* Lara's Home - the polaroid. */
-                        { PASS_X, PASS_Y, PASS_Z, 0,          -25, -30, 800, 24  },
+                        { PASS_X, PASS_Y, PASS_Z, PASS_YAW,  0, 0, 0, 24  },
+                        { PASS_X, PASS_Y, PASS_Z, SA_YAW,    0, 0, 0, 24  },
+                        { PASS_X, PASS_Y, PASS_Z, SND_YAW,   0, 0, 0, 24  },
+                        { PASS_X, PASS_Y, PASS_Z, CTRL_YAW,  0, 0, 0, 24  },
+                        { PASS_X, PASS_Y, PASS_Z, 0,         0, 0, 0, 24  },
                       };
                       static const int16_t mrot[RING_N][2] = {   /* pitch, roll */
                         { PASS_PITCH, PASS_ROLL },
-                        { CTRL_PITCH, CTRL_ROLL },
+                        { SA_PITCH, SA_ROLL },
                         { SND_PITCH, SND_ROLL },
+                        { CTRL_PITCH, CTRL_ROLL },
                         { 0, 0 },
                       };
-                      int it2, ord2, zi[5], px[5], py[5], pz[5], yw[5], rl[5], pt[5];
+                      int it2, ord2, zi[6], px[6], py[6], pz[6], yw[6], rl[6], pt[6];
                       int rord[RING_N];
                       /* ring rotation takes the SHORT way round the circle */
                       { int dd = ((ringT - ringR + 128) & 255) - 128;
@@ -3755,8 +3767,9 @@ int main(void)
                      original shows the item's name bottom-centre and a
                      "Select" prompt bottom-left. Jaguar wording, TR font. */
                   if (!copen && !sopen && !popen) {
-                      static const char *const RLBL[4] =
-                          { "New Game", "Controls", "Sound", "Laras Home" };
+                      static const char *const RLBL[5] =
+                          { "Game", "Screen Adjust", "Sound", "Controls",
+                            "Laras Home" };
                       const char *lb = RLBL[page < 3 ? page : 0];
                       int ln = 0; while (lb[ln]) ln++;
                       menu_text((fbpix *)tfb, RENDER_W, 240,
@@ -3926,11 +3939,13 @@ int main(void)
               else if (!copen && !sopen && (edge & PAD_A)) {
                   if (page == 0) { popen = 1;          /* the passport OPENS */
                                    sfx_play(1, SFX_MENU_SHOW); }
-                  else if (page == 1) { copen = 1;     /* Controls page opens */
+                  else if (page == 1) { /* Screen Adjust: page later */
                                         sfx_play(1, SFX_MENU_SHOW); }
                   else if (page == 2) { sopen = 1; srow = 0;   /* Sound page */
                                         sfx_play(1, SFX_MENU_SHOW); }
-                  else if (page == 3) { g_useset = 1;  /* Lara's Home */
+                  else if (page == 3) { copen = 1;     /* Controls */
+                                        sfx_play(1, SFX_MENU_SHOW); }
+                  else if (page == 4) { g_useset = 1;  /* Lara's Home */
                                         sfx_play(1, SFX_MENU_SHOW); break; }
               }
           }

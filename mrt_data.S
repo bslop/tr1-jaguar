@@ -94,6 +94,15 @@ sound_geom:
 	.globl sound_atlas
 sound_atlas:
 	.incbin "sound_atlas.bin"
+| type 95 "Screen Adjust" (PSX title sunglasses)
+	.balign 8
+	.globl detail_geom
+detail_geom:
+	.incbin "detail_geom.bin"
+	.balign 8
+	.globl detail_atlas
+detail_atlas:
+	.incbin "detail_atlas.bin"
 	.balign 8
 	.globl font_load
 font_load:
