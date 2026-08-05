@@ -57,8 +57,12 @@ for y in range(FH):
 EX = BX+FW+4
 
 # ---- geometry: same thin box, per-face UVs, SINGLE-sided ----
+# POLA_SCALE: the model-73 card (62x76 units) reads as a featureless white
+# chip at ring distance next to the 156-unit pad - grow it to polaroid weight.
+SCALE = float(os.environ.get("POLA_SCALE", "1.5"))
 o = 16
 V = [struct.unpack(">hhhH", gb[o+i*8:o+i*8+8])[:3] for i in range(nv)]
+V = [(int(x*SCALE), int(y*SCALE), int(z*2)) for (x, y, z) in V]
 # faces of the original model 73 box (first 6 = original winding):
 #   front(z-1): (2,6,5,1)  back(z+1): (7,3,0,4)  and 4 edges
 def uvq(x0, y0, x1, y1):
