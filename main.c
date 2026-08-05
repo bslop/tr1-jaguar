@@ -3629,7 +3629,7 @@ int main(void)
 #define SND_YAW 0
 #endif
 #ifndef SND_PITCH
-#define SND_PITCH 64
+#define SND_PITCH 192
 #endif
 #ifndef SND_ROLL
 #define SND_ROLL 0
@@ -3638,6 +3638,17 @@ int main(void)
 #define PASS_OPEN_ROLL 67
 #endif
 #define PASS_OPEN_TICKS 6
+/* dial circle (screen-space fit of the title art's dial): centre/radius in
+   world units at z=800, focal 190. phi=96 reproduces the tuned select spot. */
+#ifndef RING_CX
+#define RING_CX (-141)
+#endif
+#ifndef RING_CY
+#define RING_CY 40
+#endif
+#ifndef RING_RAD
+#define RING_RAD 230
+#endif
                       /* THE RING (2026-07-29): three items - 0 Game
                          (passport), 1 Controls, 2 Lara's Home. Sound is
                          deferred. Each row is {selx,sely,selz,selyaw,
@@ -3673,17 +3684,24 @@ int main(void)
                       { int dd = ((ringT - ringR + 128) & 255) - 128;
                         ringR = (ringR + ((dd > 0) ? ((dd+3)>>2)
                                                    : -(((-dd)+3)>>2))) & 255; }
-                      spin = (spin + 4) & 1023;
+                      spin = (spin - 4) & 1023;   /* CLOCKWISE (user 2026-08-04) */
                       for (it2 = 0; it2 < RING_N; it2++) {
                           /* angular distance of this item from the FRONT, as
                              0 (selected) .. 256 (opposite side of the ring) */
                           int th = ((it2*256)/RING_N - ringR) & 255;
                           int f  = (th < 128 ? th : 256 - th) * 2;
+                          /* ON THE RING (user 2026-08-04: "more of a ring"):
+                             items sit on a circle over the dial art. phi=96
+                             (135 deg = dial lower-right, the reference's
+                             select spot) lands exactly on the tuned
+                             (PASS_X, PASS_Y); z pops 800->700 at the front. */
+                          int ths = (((it2*256)/RING_N - ringR + 128) & 255) - 128;
+                          int phi = (96 + ths) & 255;
                           const int16_t *m = mp2[it2];
                           if (f > 256) f = 256;
-                          px[it2] = m[0] + ((m[4]-m[0])*f>>8);
-                          py[it2] = m[1] + ((m[5]-m[1])*f>>8);
-                          pz[it2] = m[2] + ((m[6]-m[2])*f>>8);
+                          px[it2] = RING_CX + (int)((RING_RAD * SIN(phi)) >> 16);
+                          py[it2] = RING_CY - (int)((RING_RAD * COS(phi)) >> 16);
+                          pz[it2] = 800 - (((256 - f) * 100) >> 8);
                           /* the ORIGINAL spins the selected item a full 360
                              clockwise, showing front AND back (user reference
                              2026-08-04). Unselected items hold still. */
