@@ -2838,18 +2838,18 @@ static void title_bake(const uint8_t *sb, uint8_t *db, int nv,
         int x=(int16_t)((vp[0]<<8)|vp[1]);
         int y=(int16_t)((vp[2]<<8)|vp[3]);
         int z=(int16_t)((vp[4]<<8)|vp[5]);
-        int lx2 = (x*cy2 + z*sy2)>>16;
-        int lz2 = (z*cy2 - x*sy2)>>16;
-        int ly2 = y;
+        /* ORDER CHANGE (2026-08-04, reference spin): PITCH FIRST stands the
+           lying-authored model, THEN yaw spins it about the now-vertical
+           axis - so the ring's continuous spin rotates items UPRIGHT like
+           the original, instead of wobbling them diagonally. */
+        int ly2 = y, lz0 = z;
         uint8_t *dp;
         int rx2, ry2, rz2;
-        /* PITCH about X, applied after the yaw. These inventory models are
-           authored LYING DOWN: yaw only spins them on the table and roll only
-           turns the flat shape in the image plane, so neither can stand one
-           up. This is the degree of freedom that was missing. */
-        if (pitch) { int t2 = (ly2*cp2 - lz2*sp2)>>16;
-                     lz2 = (ly2*sp2 + lz2*cp2)>>16;
+        if (pitch) { int t2 = (ly2*cp2 - lz0*sp2)>>16;
+                     lz0 = (ly2*sp2 + lz0*cp2)>>16;
                      ly2 = t2; }
+        int lx2 = (x*cy2 + lz0*sy2)>>16;
+        int lz2 = (lz0*cy2 - x*sy2)>>16;
         /* ROLL in the image plane. These PSX inventory models are authored
            lying over and the ring bake only ever applied YAW - which is why
            yaw turned the passport EDGE-ON instead of standing it up.
@@ -3571,14 +3571,14 @@ int main(void)
    COS(6)/SIN(6)) or its predictions do not match the kernel; calibrate it
    against real measured renders before trusting a search over it. */
 #ifndef PASS_YAW
-#define PASS_YAW 118
+#define PASS_YAW 0
 #endif
 /* 118 = 246 flipped 180 deg about Y. The user spotted that the ring was
    showing the BACK of the passport: the silhouette is identical either way, so
    the orientation search could not tell them apart - only the TEXTURE does.
    The back is a plain dark panel; the front carries the crest and lettering. */
 #ifndef PASS_PITCH
-#define PASS_PITCH 252
+#define PASS_PITCH 256
 #endif
 #ifndef PASS_OPEN_PITCH
 #define PASS_OPEN_PITCH 240
@@ -3587,7 +3587,7 @@ int main(void)
 #define PASS_ROLL 0
 #endif
 #ifndef PASS_OPEN_ROLL
-#define PASS_OPEN_ROLL 48
+#define PASS_OPEN_ROLL 0
 #endif
 #define PASS_OPEN_TICKS 6
                       /* THE RING (2026-07-29): three items - 0 Game
