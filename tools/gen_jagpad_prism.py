@@ -91,8 +91,8 @@ if STYLE=="flat":
     # ring scale and are immune to texture-step wobble. Drawn 4x, box down.
     from PIL import ImageDraw as _ID
     S4=4; W4=1024
-    CHAR=(46,46,50); CHARD=(34,34,38); CHARL=(64,64,70)
-    RED=(196,32,28); KEY=(88,88,94); KEYD=(26,26,30)
+    CHAR=(112,112,118); CHARD=(84,84,90); CHARL=(150,150,158)
+    RED=(210,40,34); KEY=(150,150,156); KEYD=(48,48,54)
     fim=Image.new("RGB",(W4,W4),(0,0,0))
     dr=_ID.Draw(fim)
     # body fill comes from the MASK later; just draw the face art full-bleed
@@ -102,7 +102,7 @@ if STYLE=="flat":
     cx,cy,arm,thk=int(W4*0.22),int(W4*0.30),int(W4*0.115),int(W4*0.062)
     dr.rectangle([cx-arm,cy-thk,cx+arm,cy+thk],fill=KEYD)
     dr.rectangle([cx-thk,cy-arm,cx+thk,cy+arm],fill=KEYD)
-    dr.rectangle([cx-thk+6,cy-thk+6,cx+thk-6,cy+thk-6],fill=(52,52,58))
+    dr.rectangle([cx-thk+6,cy-thk+6,cx+thk-6,cy+thk-6],fill=(74,74,82))
     # C B A red discs diagonal upper-right (C highest-left, A lowest-right)
     r4=int(W4*0.052)
     for k,(bx,by) in enumerate([(0.60,0.235),(0.71,0.30),(0.82,0.365)]):
@@ -130,7 +130,7 @@ if STYLE=="flat":
     bim=Image.new("RGB",(W4,W4),CHARD)
     db=_ID.Draw(bim)
     db.rounded_rectangle([int(W4*0.28),int(W4*0.22),int(W4*0.72),int(W4*0.78)],
-                         radius=int(W4*0.04),fill=(40,40,44),outline=CHARL)
+                         radius=int(W4*0.04),fill=(96,96,102),outline=CHARL)
     db.rectangle([int(W4*0.33),int(W4*0.30),int(W4*0.67),int(W4*0.40)],fill=KEY)
     bim=bim.resize((RES,RES),Image.BOX)
     b=np.asarray(bim).copy(); b[~bm]=0
@@ -312,7 +312,7 @@ for y in range(PW):
     for x in range(PW):
         r,g,b=fq[y,x]; atlas[y*256+x]=q(r,g,b)
         r,g,b=bq[y,x]; atlas[y*256+128+x]=q(r,g,b)
-RIM=q(45,45,48)
+RIM=q(78,78,84)
 print('rim idx',RIM,'rgb',prgb[RIM])
 for y in range(AH-8,AH):
     for x in range(0,8): atlas[y*256+x]=RIM
