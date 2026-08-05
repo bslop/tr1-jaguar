@@ -95,20 +95,28 @@ def encode_vq():
         fr = [np.asarray(Image.open(os.path.join(td, f)).convert("RGB"),
                          dtype=np.float32) for f in names]
         print("%d frames @ %dfps (VQ %dx%d)" % (len(fr), FPS, W2, H2))
+        NCOL = int(os.environ.get("JV_VQCOLS", "128"))
         mont = Image.fromarray(np.concatenate(
-            [f.astype(np.uint8) for f in fr[::max(1, len(fr)//12)]], axis=0))
-        pimg = mont.quantize(colors=64)
-        pal = np.array(pimg.getpalette()[:64*3], dtype=np.float32).reshape(64, 3)
+            [f.astype(np.uint8) for f in fr[::max(1, len(fr)//24)]], axis=0))
+        pimg = mont.quantize(colors=NCOL)
+        pal = np.array(pimg.getpalette()[:NCOL*3], dtype=np.float32).reshape(NCOL, 3)
         idxf = [np.asarray(Image.fromarray(f.astype(np.uint8)).quantize(
                     palette=pimg, dither=Image.Dither.NONE), dtype=np.uint8)
                 for f in fr]
         def blocks(a):
             return a.reshape(H2//4, 4, W2//4, 4).transpose(0, 2, 1, 3).reshape(-1, 16)
-        allb = np.concatenate([blocks(a) for a in idxf[::4]], axis=0)
+        allb = np.concatenate([blocks(a) for a in idxf[::2]], axis=0)
         vec = pal[allb].reshape(len(allb), -1)
         rng = np.random.default_rng(7)
-        cent = vec[rng.choice(len(vec), K, replace=False)]
-        for _ in range(8):
+        # k-means++ seeding: spread centroids by distance, not luck
+        cent = np.empty((K, vec.shape[1]), dtype=np.float32)
+        cent[0] = vec[rng.integers(len(vec))]
+        d2min = ((vec - cent[0])**2).sum(1)
+        for k in range(1, K):
+            p = d2min / d2min.sum()
+            cent[k] = vec[rng.choice(len(vec), p=p)]
+            d2min = np.minimum(d2min, ((vec - cent[k])**2).sum(1))
+        for _ in range(14):
             assign = np.empty(len(vec), dtype=np.int32)
             for i in range(0, len(vec), 8192):
                 dd = ((vec[i:i+8192, None, :] - cent[None, :, :])**2).sum(2)
@@ -163,7 +171,7 @@ def encode_vq():
             o.write(b"JV04")
             o.write(struct.pack(">HHHH4x", W2, H2, FPS, len(enc2)))
             for i in range(256):
-                if i < 64:
+                if i < NCOL:
                     o.write(struct.pack(">H", jag16(int(pal[i][0]), int(pal[i][1]), int(pal[i][2]))))
                 else:
                     o.write(struct.pack(">H", 0))

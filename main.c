@@ -3441,6 +3441,7 @@ int main(void)
                 fbB = (uint8_t *)video_backbuffer();
                 have = 0; pos = 0;
                 t0 = frame_count;
+                { int acc = 0, abuf = 0, astarted = 0;
                 for (fi = 0; fi < vnf; fi++) {
                     uint32_t L, AL;
                     int need = 8;
@@ -3470,26 +3471,37 @@ int main(void)
                     }
                     if (fi >= vnf) break;
                     pos += 8;
-                    /* audio chunk -> DSP voice-0 gapless queue (music's
-                       engine; mbuf is idle until the title primes it) */
+                    /* audio -> DSP voice 0, BATCHED ~4KB per buffer (the
+                       music engine's granularity): per-frame chunks left
+                       only ~150ms of queue cover, and the ~125ms sector
+                       refills clipped it - the sparse pops the user heard
+                       (waveform-dated to refill cadence, 2026-08-05).
+                       Deep buffers ride out any refill. First batch goes
+                       early (~2 chunks) so the whoosh isn't late. */
                     if (AL) {
                         if (g_sfx_ok) {
-                            int8_t *ab = mbuf[fi & 1];
-                            const uint32_t *as2 = (const uint32_t *)(vb + pos);
-                            uint32_t *ad = (uint32_t *)ab;
-                            uint32_t k2;
-                            for (k2 = 0; k2 < AL >> 2; k2++) ad[k2] = as2[k2];
-                            if (fi == 0) {
-                                jerry_sfx(0, ab, AL, 0);
-                            } else {
-                                volatile uint32_t *ncnt =
-                                    (volatile uint32_t *)0xF1C378u;
-                                uint32_t w2;
-                                for (w2 = 0; w2 < 200000u && *ncnt; w2++)
-                                    ;
-                                { extern void jerry_sfx_queue(const void*, uint32_t);
-                                  jerry_sfx_queue(ab, AL); }
+                            int thr = astarted ? (4096 - (int)AL) : 1400;
+                            if (acc > thr) {
+                                if (!astarted) {
+                                    jerry_sfx(0, mbuf[abuf], (uint32_t)acc, 0);
+                                    astarted = 1;
+                                } else {
+                                    volatile uint32_t *ncnt =
+                                        (volatile uint32_t *)0xF1C378u;
+                                    uint32_t w2;
+                                    for (w2 = 0; w2 < 200000u && *ncnt; w2++)
+                                        ;
+                                    { extern void jerry_sfx_queue(const void*, uint32_t);
+                                      jerry_sfx_queue(mbuf[abuf], (uint32_t)acc); }
+                                }
+                                abuf ^= 1; acc = 0;
                             }
+                            { int8_t *ab = mbuf[abuf] + acc;
+                              const uint32_t *as2 = (const uint32_t *)(vb + pos);
+                              uint32_t *ad = (uint32_t *)ab;
+                              uint32_t k2;
+                              for (k2 = 0; k2 < AL >> 2; k2++) ad[k2] = as2[k2];
+                              acc += (int)AL; }
                         }
                         pos += (int)AL;
                     }
@@ -3530,6 +3542,18 @@ int main(void)
                     { uint8_t *tswap = fbA; fbA = fbB; fbB = tswap; }
                     if (joypad_read() & (PAD_A | PAD_B | PAD_C)) break;
                 }
+                /* flush the last partial audio batch */
+                if (g_sfx_ok && acc) {
+                    if (!astarted) jerry_sfx(0, mbuf[abuf], (uint32_t)acc, 0);
+                    else {
+                        volatile uint32_t *ncnt = (volatile uint32_t *)0xF1C378u;
+                        uint32_t w2;
+                        for (w2 = 0; w2 < 200000u && *ncnt; w2++)
+                            ;
+                        { extern void jerry_sfx_queue(const void*, uint32_t);
+                          jerry_sfx_queue(mbuf[abuf], (uint32_t)acc); }
+                    }
+                } }
                 gd_fclose((unsigned)vh);
             }
             if (gpu_ok)
