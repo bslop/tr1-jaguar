@@ -25,6 +25,7 @@ if not J or not os.path.exists(J):
     print("JAGPAD_JSON not found:", J); sys.exit(1)
 d = json.load(open(J))
 VB = d["verts"]; FACES = d["faces"]
+SINGLE = os.environ.get("JAGPAD_SINGLE","0")=="1"
 
 # ---- scale: uniform, sized by HEIGHT (real pad is tall; cap 180 units) ----
 ys = [v[1] for v in VB]; xs = [v[0] for v in VB]; zs = [v[2] for v in VB]
@@ -114,6 +115,14 @@ def face_ar(vi):
         ar+=x0*y1-x1*y0
     return ar
 flipped=0
+if SINGLE:
+    # one connected Blender-normal-consistent mesh: single global A/B via
+    # total rest-pose projected area
+    tot=sum(face_ar(FACES[fi][0]) for fi in range(len(FACES)))
+    if tot<0:
+        for vi,_ in FACES: vi.reverse()
+        flipped=1
+    comp_faces={}
 for root,fl in comp_faces.items():
     if comp_closed(fl):
         # orient by the LARGEST front-facing candidate: sum ar over all
@@ -138,9 +147,10 @@ print("components flipped to positive volume:", flipped)
 # ---- emit: closed bodies FIRST, decals LAST (kernel = data order, no
 # z-test: the shell painted over its own decals when created after them) ----
 decal_set=set()
-for root,fl in comp_faces.items():
-    if not comp_closed(fl):
-        for fi in fl: decal_set.add(fi)
+if not SINGLE:
+    for root,fl in comp_faces.items():
+        if not comp_closed(fl):
+            for fi in fl: decal_set.add(fi)
 order=[fi for fi in range(len(FACES)) if fi not in decal_set]+      [fi for fi in range(len(FACES)) if fi in decal_set]
 quads=[]; tris=[]
 CELLMAP={0:None,1:cells[3],2:cells[4],3:cells[5],4:cells[6],5:cells[7],6:cells[8]}
