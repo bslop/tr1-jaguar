@@ -3604,7 +3604,7 @@ int main(void)
 #define PASS_X 163
 #endif
 #ifndef PASS_Y
-#define PASS_Y 520
+#define PASS_Y 478
 #endif
 #ifndef PASS_Z
 #define PASS_Z 719
@@ -3715,7 +3715,7 @@ int main(void)
 #define RING_CX2 2
 #endif
 #ifndef RING_CY2
-#define RING_CY2 523
+#define RING_CY2 481
 #endif
 #ifndef RING_RX
 #define RING_RX 948
@@ -3886,9 +3886,9 @@ int main(void)
                       const char *lb = RLBL[page];
                       int ln = 0; while (lb[ln]) ln++;
                       menu_text((fbpix *)tfb, RENDER_W, 240,
-                                lb, (320 - ln*8)/2, 213, 2, 2, 0);   /* row matched to the reference */
+                                lb, (320 - ln*8)/2, 200, 2, 2, 0);   /* 213 collided with the art's baked TM line */
                       menu_text((fbpix *)tfb, RENDER_W, 240,
-                                "A Select", 10, 213, 2, 2, 0);
+                                "A Select", 10, 200, 2, 2, 0);
                   }
                   /* CONTROLS PAGE (2026-08-01) - an OVERLAY on the dimmed
                      title, which is exactly what the original does: the logo,
