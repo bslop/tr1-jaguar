@@ -1080,12 +1080,16 @@ extern const uint8_t sfx_bank[];
 extern void jerry_sfx(int, const void*, uint32_t, uint32_t);
 static int g_sfx_ok;
 #define SFX_STEP_RATE 45211u    /* 11025Hz -> ~16kHz mixer, 16.16 */
+/* SOUND PAGE (2026-08-04): 0 mutes the class entirely; DSP per-sample gain
+   is a follow-up, so mid slider positions are visual-only for now. */
+static int g_musvol = 10, g_sfxvol = 10;
 static void sfx_play(int voice, int id)
 {
     const uint8_t *b = sfx_bank;
     int n = (b[0]<<8)|b[1];
     uint32_t off, len;
     if (!g_sfx_ok || id < 0 || id >= n) return;
+    if (!g_sfxvol) return;
     off = ((uint32_t)b[4+id*8]<<24)|((uint32_t)b[5+id*8]<<16)
         | ((uint32_t)b[6+id*8]<<8)|b[7+id*8];
     len = ((uint32_t)b[8+id*8]<<24)|((uint32_t)b[9+id*8]<<16)
@@ -3315,6 +3319,8 @@ int main(void)
              CTRLOPEN=1 boots straight into it so the layout can be checked
              offline in jagemu without driving the menu. */
           int copen = 0;
+          /* SOUND PAGE state, mirroring copen. */
+          int sopen = 0, srow = 0;
           int ringR = 0, ringT = 0;    /* current/target ring angle (1024) */
           int spin = 0;
           int page = 0, shown = -1, armed = 0;
@@ -3411,7 +3417,7 @@ int main(void)
                  other IMMEDIATELY (audio first), then refill the drained
                  one from SD (~8KB = 0.74s of headroom per swap). EOF =
                  close+reopen: the theme loops. */
-              if (mh >= 0 && g_sfx_ok) {
+              if (mh >= 0 && g_sfx_ok && g_musvol) {
                   /* gapless service: the pump promoted the queued buffer
                      (NCNT==0) -> refill the dead one and re-queue it. */
                   volatile uint32_t *ncnt = (volatile uint32_t *)0xF1C378u;
@@ -3709,7 +3715,7 @@ int main(void)
                   /* RING LABEL + SELECT PROMPT (reference 2026-08-04): the
                      original shows the item's name bottom-centre and a
                      "Select" prompt bottom-left. Jaguar wording, TR font. */
-                  if (!copen && !popen) {
+                  if (!copen && !sopen && !popen) {
                       static const char *const RLBL[4] =
                           { "New Game", "Controls", "Sound", "Laras Home" };
                       const char *lb = RLBL[page < 3 ? page : 0];
@@ -3782,6 +3788,48 @@ int main(void)
                                 mid - menu_text_width("Controls", DVX) / 2,
                                 LHc - gh - 2, DVX, DVY, 255);
                   }
+                  if (sopen) {
+                      volatile uint16_t *cl = (volatile uint16_t *)0xF00400u;
+                      const int LHs = RENDER_H;
+#if defined(LOWRES) && !defined(HALFRES)
+                      const int DVY = 2;
+#else
+                      const int DVY = 1;
+#endif
+                      const int DVX = 2;
+                      int mid = RENDER_W / 2, gh = 16 / DVY, ty, ri, bi;
+                      uint8_t *cfb = (uint8_t *)tfb;
+                      cl[254] = 0x0000; cl[255] = 0xFA34;   /* black / TR gold */
+                      menu_dim(cfb, RENDER_W, LHs, 254);
+                      ty = gh / 2;
+                      menu_text(cfb, RENDER_W, LHs, "Sound",
+                                mid - menu_text_width("Sound", DVX) / 2,
+                                ty, DVX, DVY, 255);
+                      ty += gh + gh / 2;
+                      for (ri = 0; ri < 2; ri++) {
+                          const char *lb2 = ri ? "Effects" : "Music";
+                          int vol = ri ? g_sfxvol : g_musvol;
+                          int bx = mid - 20, by = ty + 2, yy2, xx2;
+                          menu_text(cfb, RENDER_W, LHs, lb2,
+                                    mid - 30 - menu_text_width(lb2, DVX),
+                                    ty, DVX, DVY, 255);
+                          if (ri == srow)      /* selection arrow */
+                              menu_text(cfb, RENDER_W, LHs, ">",
+                                        mid - 42 - menu_text_width(lb2, DVX),
+                                        ty, DVX, DVY, 255);
+                          /* 10-cell slider bar, filled to vol */
+                          for (bi = 0; bi < 10; bi++)
+                              for (yy2 = 0; yy2 < gh - 2; yy2++)
+                                  for (xx2 = 0; xx2 < 5; xx2++)
+                                      if (bi < vol || yy2 == 0 || yy2 == gh-3)
+                                          cfb[(by + yy2) * RENDER_W
+                                              + bx + bi * 7 + xx2] = 255;
+                          ty += gh + gh / 2;
+                      }
+                      menu_text(cfb, RENDER_W, LHs, "Go Back",
+                                RENDER_W - 6 - menu_text_width("Go Back", DVX),
+                                LHs - 2 * gh - 4, DVX, DVY, 255);
+                  }
                   video_flip();
                   video_wait_vblank();
               }
@@ -3810,6 +3858,16 @@ int main(void)
                   /* Controls page: B returns to the ring, as "Go Back" says. */
                   if (edge & PAD_B) { copen = 0; sfx_play(1, SFX_MENU_SPIN); }
               }
+              else if (sopen) {
+                  int *vp = srow ? &g_sfxvol : &g_musvol;
+                  if (edge & PAD_B) { sopen = 0; sfx_play(1, SFX_MENU_SPIN); }
+                  else if (edge & PAD_UP)   { srow = 0; }
+                  else if (edge & PAD_DOWN) { srow = 1; }
+                  else if ((edge & PAD_LEFT)  && *vp > 0)  { (*vp)--;
+                      sfx_play(1, SFX_MENU_SPIN); }
+                  else if ((edge & PAD_RIGHT) && *vp < 10) { (*vp)++;
+                      sfx_play(1, SFX_MENU_SPIN); }
+              }
               else if (popen && popen < PASS_OPEN_TICKS) popen++;   /* run the opening */
               if (!copen && popen) {
                   /* PAGE VIEW: A confirms and starts, B goes back to the ring
@@ -3818,19 +3876,18 @@ int main(void)
                   else if ((edge & PAD_A) && popen >= PASS_OPEN_TICKS) {
                       g_useset = 0; sfx_play(1, SFX_MENU_SHOW); break; }
               }
-              else if (!copen && (edge & (PAD_LEFT|PAD_RIGHT))) {
+              else if (!copen && !sopen && (edge & (PAD_LEFT|PAD_RIGHT))) {
                   page = (edge & PAD_RIGHT) ? (page + 1) : (page + RING_N - 1);
                   if (page >= RING_N) page -= RING_N;
                   ringT = (page * 256) / RING_N;
                   sfx_play(1, SFX_MENU_SPIN);
               }
-              else if (!copen && (edge & PAD_A)) {
+              else if (!copen && !sopen && (edge & PAD_A)) {
                   if (page == 0) { popen = 1;          /* the passport OPENS */
                                    sfx_play(1, SFX_MENU_SHOW); }
                   else if (page == 1) { copen = 1;     /* Controls page opens */
                                         sfx_play(1, SFX_MENU_SHOW); }
-                  else if (page == 2) { /* Sound page: not built yet - just
-                                             acknowledge (volume bars later) */
+                  else if (page == 2) { sopen = 1; srow = 0;   /* Sound page */
                                         sfx_play(1, SFX_MENU_SHOW); }
                   else if (page == 3) { g_useset = 1;  /* Lara's Home */
                                         sfx_play(1, SFX_MENU_SHOW); break; }
