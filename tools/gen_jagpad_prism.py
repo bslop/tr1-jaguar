@@ -125,7 +125,19 @@ if STYLE=="flat":
             y0=int(by0+r5*kh+kh*0.20); y1=int(by0+(r5+1)*kh-kh*0.20)
             dr.rounded_rectangle([x0,y0,x1,y1],radius=6,fill=KEY)
     fim=fim.resize((RES,RES),Image.BOX)
-    f=np.asarray(fim).copy(); f[~fm]=0
+    f=np.asarray(fim).copy()
+    # dilate colours OUTSIDE the mask so boundary-quad UV overshoot samples
+    # body colour, not black (the black top-fringe on silicon)
+    def dilate_fill(img,mask):
+        out=img.copy(); m=mask.copy()
+        for _ in range(12):
+            if m.all(): break
+            for dy,dx in ((1,0),(-1,0),(0,1),(0,-1)):
+                sh=np.roll(m,(dy,dx),(0,1)); src=np.roll(out,(dy,dx),(0,1))
+                take=(~m)&sh
+                out[take]=src[take]; m=m|take
+        return out
+    f=dilate_fill(f,fm.copy())
     # back: charcoal + darker inset panel (label plate)
     bim=Image.new("RGB",(W4,W4),CHARD)
     db=_ID.Draw(bim)
@@ -133,7 +145,8 @@ if STYLE=="flat":
                          radius=int(W4*0.04),fill=(96,96,102),outline=CHARL)
     db.rectangle([int(W4*0.33),int(W4*0.30),int(W4*0.67),int(W4*0.40)],fill=KEY)
     bim=bim.resize((RES,RES),Image.BOX)
-    b=np.asarray(bim).copy(); b[~bm]=0
+    b=np.asarray(bim).copy()
+    b=dilate_fill(b,bm.copy())
 def down(img):
     return np.asarray(Image.fromarray(img).resize((256,256),Image.BOX))
 fmask=np.asarray(Image.fromarray((fm*255).astype(np.uint8)).resize((256,256),Image.BOX))>127
@@ -191,7 +204,7 @@ P2=[to_blob(p) for p in poly]
 # T-junctions, NO slivers. Midpoint tessellation of ear-clip fans made
 # sliver chains whose INTEGER screen area flips sign mid-spin = fat wedge
 # holes on silicon (the "yellow streaks" = dial art through the gaps).
-CELL=int(os.environ.get("PAD_CELL","34"))
+CELL=int(os.environ.get("PAD_CELL","40"))
 # hull as CCW (pixel space y-down: enforce by signed area)
 sa=sum(P2[i][0]*P2[(i+1)%N][1]-P2[(i+1)%N][0]*P2[i][1] for i in range(N))
 H=P2[:] if sa>0 else P2[::-1]
@@ -224,9 +237,9 @@ def vid(pt):
         vmap[k]=len(capv); capv.append(k)
     return vmap[k]
 cap=[]
-yy=gy0
+yy=gy0-CELL//2
 while yy<gy1:
-    xx=gx0
+    xx=gx0-CELL//2
     while xx<gx1:
         poly=clip_cell(xx,yy,min(xx+CELL,gx1),min(yy+CELL,gy1))
         if len(poly)>=3:
