@@ -1,69 +1,61 @@
-; gpu_jvdec.gas - JV02 boot-FMV frame decoder + horizontal doubler on Tom.
+; gpu_jvdec.gas - JV04 boot-FMV VECTOR-QUANTIZATION decoder on Tom.
 ;
-; WHY (user: "Stop using the 68000 ... Do it in jrisc on Tom. The way it
-; should be."): the 68k is the lowest-priority bus master; its byte-granular
-; decode measured 205-256ms/frame under OP contention (VIDPROF bars,
-; 2026-08-05) - 2x the whole 8fps frame budget. Tom runs the same loop from
-; zero-wait SRAM with 32-bit stores.
+; (v2 - replaces the JV02 RLE engine. User: "I'd like to have the original
+; videos from the disc" - VQ carries NATIVE 320x240 inside the ~37KB/s
+; GameDrive envelope: 4x4-pixel blocks resolved against a per-clip
+; 256-entry codebook; temporal skip tokens carry unchanged blocks.)
 ;
-; JV02 tokens (tools/tr2jag_video.py):
-;   t < 100   colour run  : next byte repeated t+2 times      (2..101)
-;   t < 128   SKIP run    : advance (t-99)*4 bytes            (4..112)
-;             (stage persists across frames = temporal delta)
-;   else      literal     : copy next t-127 bytes             (1..128)
+; Stream tokens over the 80x60 block grid:
+;   t < 128  -> copy t+1 blocks: that many codebook-index bytes follow
+;   t >= 128 -> skip t-127 blocks (previous frame persists on screen)
+;
+; Every copied block is written to BOTH framebuffers (fbA and fbB), so the
+; display ping-pong stays coherent without band bookkeeping: frame 0 is a
+; full copy, and every change lands in both buffers thereafter.
 ;
 ; params $F03F00:
-;   +0  payload src (DRAM)      +4  payload len
-;   +8  stage base (4-aligned)  +12 fb base (320B stride, 120 rows)
-;   +16 prev band top row       +20 prev band bottom row
-;   +24 OUT written top row (120 if none)
-;   +28 OUT written bottom row (-1 if none)
-;   +32 OUT done magic          +36 OUT hello magic
+;   +0 token src (DRAM)      +4  token bytes
+;   +8 codebook base (4KB)   +12 fbA    +16 fbB
+;   +32 OUT done magic       +36 OUT hello magic
 ;
-; Decodes into the stage, then horizontally doubles the UNION of this
-; frame's written row band and the prev band from the stage into the
-; 320-wide fb (one u32 store = two doubled pixels).
-;
-; Discipline: 2 nops after loads before use; short forward skips use jr
-; (in range), far/hot targets live in registers; every jr/jump shadowed
-; by 2 nops (delay slot + hazard).
-;
-; TEST=1 (jas -d TEST=1): skip the params block, run on embedded data so
-; jtest can golden the kernel offline (capture TSTG/TFB regions).
+; Discipline: 2 nops after loads; far/hot branch targets in registers;
+; short forward skips jr. TEST=1: DRAM build (org $4000) with embedded
+; codebook+payload, fbA/fbB at $20000/$40000 for jtest capture.
 
 PARAMS      .equ    $F03F00
 MAGIC_HELLO .equ    $0A3D0001
 MAGIC_DONE  .equ    $0A3DD05E
 
-TSTG        .equ    $18000
-TFB         .equ    $20000
+TFBA        .equ    $20000
+TFBB        .equ    $40000
 
 	.gpu
+.if TEST
+	.org	$4000
+.else
 	.org	$F03000
+.endif
 
 start:
 .if TEST
-	movei	#tpay,r4		; src = embedded payload
+	movei	#tpay,r4		; src
 	movei	#tpayend,r5
 	sub	r4,r5			; len
-	movei	#TSTG,r6
-	movei	#TFB,r15
-	moveq	#0,r26			; prev band = full (fresh buffers)
-	movei	#119,r27
+	movei	#tcb,r6			; codebook
+	movei	#TFBA,r7		; fbA
+	movei	#TFBB,r8		; fbB
 .else
 	movei	#PARAMS,r1
 	nop
 	load	(r1),r4			; src
 	addq	#4,r1
-	load	(r1),r5			; remaining payload bytes
+	load	(r1),r5			; len
 	addq	#4,r1
-	load	(r1),r6			; stage base
+	load	(r1),r6			; codebook base
 	addq	#4,r1
-	load	(r1),r15		; fb base
+	load	(r1),r7			; fbA
 	addq	#4,r1
-	load	(r1),r26		; prev band top
-	addq	#4,r1
-	load	(r1),r27		; prev band bottom
+	load	(r1),r8			; fbB
 	nop
 	nop
 	movei	#PARAMS+36,r0
@@ -71,29 +63,23 @@ start:
 	store	r2,(r0)
 .endif
 
-	move	r6,r7			; r7  = dst
-	movei	#19200,r8
-	add	r6,r8			; r8  = dend
-	move	r8,r13			; r13 = wlo (empty = dend)
-	move	r6,r14			; r14 = whi (empty = base)
-
-	movei	#100,r16		; token class bound
-	movei	#.tok,r17		; hot loop head
-	movei	#.adone,r18		; decode done
-	movei	#.t_skip,r19
-	movei	#.t_lit,r20
-	movei	#.rhead,r21
-	movei	#.runbody,r22
-	movei	#.lloop,r23
-	movei	#.stored,r24
+	moveq	#0,r12			; bx = block col (0..79)
+	movei	#4800,r13		; blocks remaining
+	movei	#.tok,r18
+	movei	#.done,r19
+	movei	#.skip,r20
+	movei	#.cloop,r21
+	movei	#.adv,r22		; shared block-advance helper
+	movei	#320,r23
+	movei	#960,r24		; row stride to line +3
 
 .tok:
 	cmpq	#0,r5
-	jump	EQ,(r18)		; payload exhausted -> adone
+	jump	EQ,(r19)		; payload exhausted -> done
 	nop
 	nop
-	cmp	r7,r8			; dend - dst
-	jump	EQ,(r18)		; stage full -> adone
+	cmpq	#0,r13
+	jump	EQ,(r19)		; all blocks covered -> done
 	nop
 	nop
 	loadb	(r4),r9			; token
@@ -101,296 +87,108 @@ start:
 	subq	#1,r5
 	nop
 	nop
-	cmp	r16,r9			; r9 - 100
-	jump	MI,(r22)		; < 100 -> colour run
-	nop
-	nop
 	movei	#128,r0
 	cmp	r0,r9
-	jump	MI,(r19)		; 100..127 -> skip
+	jump	PL,(r20)		; t >= 128 -> skip run
 	nop
 	nop
-	jump	T,(r20)			; else literal
-	nop
-	nop
+	move	r9,r11
+	addq	#1,r11			; n = t+1 copies
 
-; ---- colour run: n = tok+2, value = next byte --------------------------
-.runbody:
-	move	r9,r12
-	addq	#2,r12			; n = tok + 2
+.cloop:
+	cmpq	#0,r11
+	jump	EQ,(r18)		; run done -> next token
+	nop
+	nop
+	cmpq	#0,r13
+	jump	EQ,(r19)
+	nop
+	nop
 	cmpq	#0,r5
-	jump	EQ,(r18)		; truncated stream guard
+	jump	EQ,(r19)		; stream guard
 	nop
 	nop
-	loadb	(r4),r10		; v
+	loadb	(r4),r10		; codebook index
 	addq	#1,r4
 	subq	#1,r5
 	nop
 	nop
-	move	r8,r0
-	sub	r7,r0			; room = dend - dst
-	cmp	r0,r12			; n - room
-	jr	MI,.rnc			; n < room -> keep n
+	shlq	#4,r10			; *16
+	add	r6,r10			; entry base
+	load	(r10),r14		; row 0 (4 px)
+	addq	#4,r10
+	load	(r10),r15		; row 1
+	addq	#4,r10
+	load	(r10),r16		; row 2
+	addq	#4,r10
+	load	(r10),r17		; row 3
 	nop
 	nop
-	move	r0,r12			; clamp
-.rnc:
-	cmp	r13,r7			; dst - wlo
-	jr	PL,.rvv			; dst >= wlo -> keep wlo
-	nop
-	nop
-	move	r7,r13
-.rvv:
-	move	r10,r11			; vv = v:v:v:v
-	shlq	#8,r11
-	or	r10,r11
-	move	r11,r2
-	shlq	#16,r2
-	or	r2,r11
-
-.rhead:
-	cmpq	#0,r12
-	jump	EQ,(r24)		; n exhausted -> stored
-	nop
-	nop
+	; write the block to fbA
 	move	r7,r0
-	movei	#3,r2
-	and	r2,r0
-	cmpq	#0,r0
-	jr	EQ,.rbody4		; dst aligned -> long body
-	nop
-	nop
-	storeb	r10,(r7)
-	addq	#1,r7
-	subq	#1,r12
-	jump	T,(r21)			; back to .rhead
-	nop
-	nop
-
-.rbody4:
-	cmpq	#4,r12			; n - 4
-	jr	MI,.runtail		; n < 4 -> tail
-	nop
-	nop
-	store	r11,(r7)
-	addq	#4,r7
-	subq	#4,r12
-	jr	T,.rbody4
-	nop
-	nop
-
-.runtail:
-	cmpq	#0,r12
-	jump	EQ,(r24)
-	nop
-	nop
-	storeb	r10,(r7)
-	addq	#1,r7
-	subq	#1,r12
-	jr	T,.runtail
-	nop
-	nop
-
-; ---- skip run: dst advances, previous frame persists -------------------
-.t_skip:
-	move	r9,r12
-	movei	#99,r0
-	sub	r0,r12			; 1..28
-	shlq	#2,r12			; *4
+	store	r14,(r0)
+	add	r23,r0
+	store	r15,(r0)
+	add	r23,r0
+	store	r16,(r0)
+	add	r23,r0
+	store	r17,(r0)
+	; and to fbB
 	move	r8,r0
-	sub	r7,r0
-	cmp	r0,r12
-	jr	MI,.skok
-	nop
-	nop
-	move	r0,r12
-.skok:
-	add	r12,r7
-	jump	T,(r17)			; next token
-	nop
-	nop
-
-; ---- literal: copy n bytes from stream ---------------------------------
-.t_lit:
-	move	r9,r12
-	movei	#127,r0
-	sub	r0,r12			; n = tok-127 (1..128)
-	move	r8,r0
-	sub	r7,r0
-	cmp	r0,r12
-	jr	MI,.lc
-	nop
-	nop
-	move	r0,r12
-.lc:
-	cmp	r13,r7
-	jr	PL,.lloop
-	nop
-	nop
-	move	r7,r13
-.lloop:
-	cmpq	#0,r12
-	jump	EQ,(r24)
-	nop
-	nop
-	cmpq	#0,r5
-	jump	EQ,(r18)		; stream guard
-	nop
-	nop
-	loadb	(r4),r10
-	addq	#1,r4
-	subq	#1,r5
-	nop
-	nop
-	storeb	r10,(r7)
-	addq	#1,r7
-	subq	#1,r12
-	jump	T,(r23)			; back to .lloop
-	nop
-	nop
-
-.stored:
-	cmp	r14,r7			; dst - whi
-	jump	MI,(r17)		; dst < whi -> next token
-	nop
-	nop
-	move	r7,r14
-	jump	T,(r17)
-	nop
-	nop
-
-; ---- decode done: band rows + union + doubling -------------------------
-.adone:
-	movei	#120,r28		; lo default (nothing written)
-	movei	#-1,r29			; hi default
-	movei	#.bandok,r0
-	cmp	r14,r13			; wlo - whi
-	jump	PL,(r0)			; wlo >= whi -> nothing written
-	nop
-	nop
-	move	r13,r0
-	sub	r6,r0			; off0
-	shrq	#5,r0
-	movei	#52429,r2
-	mult	r2,r0
-	shrq	#18,r0			; /5 -> row = off/160
-	move	r0,r28			; lo
-	move	r14,r0
-	subq	#1,r0
-	sub	r6,r0			; off1
-	shrq	#5,r0
-	mult	r2,r0
-	shrq	#18,r0
-	move	r0,r29			; hi
-.bandok:
-	cmp	r26,r28			; lo - u0p
-	jr	PL,.u0ok		; lo >= u0p -> keep u0p
-	nop
-	nop
-	move	r28,r26
-.u0ok:
-	cmp	r29,r27			; u1p - hi
-	jr	PL,.u1ok		; u1p >= hi -> keep u1p
-	nop
-	nop
-	move	r29,r27
-.u1ok:
-	movei	#119,r0
-	cmp	r0,r27			; u1 - 119
-	jr	MI,.c1			; u1 < 119 -> keep
-	nop
-	nop
-	move	r0,r27
-.c1:
-	cmpq	#0,r26
-	jr	PL,.c2
-	nop
-	nop
-	moveq	#0,r26
-.c2:
-	movei	#.wdone,r16
-	cmp	r26,r27			; u1 - u0
-	jump	MI,(r16)		; u1 < u0 -> nothing to double
-	nop
-	nop
-
-	; ---- double rows u0..u1: stage row (160B) -> fb row (320B) ----
-	move	r26,r25			; y = u0
-	movei	#.drow,r16
-	movei	#.dpix,r22
-	movei	#$FF,r30
-.drow:
-	move	r25,r0
-	shlq	#7,r0
-	move	r25,r2
-	shlq	#5,r2
-	add	r2,r0			; y*160
-	add	r6,r0
-	move	r0,r9			; sr
-	move	r25,r0
-	shlq	#8,r0
-	move	r25,r2
-	shlq	#6,r2
-	add	r2,r0			; y*320
-	add	r15,r0
-	move	r0,r10			; d
-	movei	#40,r11			; 40 x 4 src bytes
-.dpix:
-	load	(r9),r2			; b0 b1 b2 b3 (big-endian)
-	addq	#4,r9
-	nop
-	nop
-	move	r2,r3
-	shrq	#24,r3			; b0
-	move	r3,r12
-	shlq	#8,r12
-	or	r3,r12			; b0:b0
-	move	r2,r3
-	shrq	#16,r3
-	and	r30,r3			; b1
-	move	r3,r0
-	shlq	#8,r0
-	or	r3,r0			; b1:b1
-	shlq	#16,r12
-	or	r0,r12
-	store	r12,(r10)		; b0 b0 b1 b1
-	addq	#4,r10
-	move	r2,r3
-	shrq	#8,r3
-	and	r30,r3			; b2
-	move	r3,r12
-	shlq	#8,r12
-	or	r3,r12
-	move	r2,r3
-	and	r30,r3			; b3
-	move	r3,r0
-	shlq	#8,r0
-	or	r3,r0
-	shlq	#16,r12
-	or	r0,r12
-	store	r12,(r10)		; b2 b2 b3 b3
-	addq	#4,r10
+	store	r14,(r0)
+	add	r23,r0
+	store	r15,(r0)
+	add	r23,r0
+	store	r16,(r0)
+	add	r23,r0
+	store	r17,(r0)
 	subq	#1,r11
-	jump	NE,(r22)		; back to .dpix
-	nop
-	nop
-	addq	#1,r25
-	cmp	r25,r27			; u1 - y
-	jump	PL,(r16)		; y <= u1 -> next row
+	movei	#.cloop,r2
+	jump	T,(r22)			; advance one block, return to (r2)
 	nop
 	nop
 
-.wdone:
+.skip:
+	move	r9,r11
+	movei	#127,r0
+	sub	r0,r11			; n = t-127
+.sloop:
+	cmpq	#0,r11
+	jump	EQ,(r18)
+	nop
+	nop
+	cmpq	#0,r13
+	jump	EQ,(r19)
+	nop
+	nop
+	subq	#1,r11
+	movei	#.sloop,r2
+	jump	T,(r22)			; advance one block, return to (r2)
+	nop
+	nop
+
+; ---- advance one block: dst += 4; end of block row -> next 4 lines ----
+.adv:
+	addq	#4,r7
+	addq	#4,r8
+	subq	#1,r13
+	addq	#1,r12
+	movei	#80,r0
+	cmp	r0,r12			; bx - 80
+	jump	MI,(r2)			; still in the row -> back to caller
+	nop
+	nop
+	moveq	#0,r12
+	add	r24,r7			; skip lines +1..+3 (already +320 via 80*4)
+	add	r24,r8
+	jump	T,(r2)
+	nop
+	nop
+
+.done:
 .if TEST
-	movei	#TFB-8,r1		; test result block just below TFB
-	store	r28,(r1)
-	addq	#4,r1
-	store	r29,(r1)
+	nop
 .else
-	movei	#PARAMS+24,r1
-	store	r28,(r1)
-	addq	#4,r1
-	store	r29,(r1)
 	movei	#PARAMS+32,r1
 	movei	#MAGIC_DONE,r0
 	store	r0,(r1)
@@ -404,9 +202,9 @@ start:
 	nop
 
 .if TEST
-	; payload rides in SRAM right after the code (flat binary: an .org
-	; jump would not be loaded by the bare-kernel harness)
 	.align	4
+tcb:
+	.incbin	"jvtest_cb.bin"
 tpay:
 	.incbin	"jvtest_payload.bin"
 tpayend:

@@ -3396,44 +3396,33 @@ int main(void)
              played ~6x slow at 2 calls/frame), so the stream is pulled in
              ~24KB chunks into a rolling buffer and frames are parsed out
              of it - one BIOS call per several frames. */
-          { extern void video_set_disp240(int);
-            extern volatile uint32_t frame_count;
-            uint8_t *vb  = (uint8_t *)rblob;         /* stream buffer     */
-            uint8_t *stg = (uint8_t *)rblob + 31488; /* 160x120 stage     */
+          { extern volatile uint32_t frame_count;
+            uint8_t *vb  = (uint8_t *)rblob;         /* stream buffer      */
+            uint8_t *cbk = (uint8_t *)rblob + 31488; /* 4KB VQ codebook    */
             int vc;
-            /* The console BOOTS in disp240 (g_disp240=1) - switch to the
-               120-line SCALED game mode for playback (half the OP fetch,
-               VSCALE does the vertical doubling); the title's own
-               disp240(1) switch right after restores it. */
-            video_set_disp240(0);
+            /* JV04 (user: "the original videos from the disc"): NATIVE
+               320x240 vector quantization - 4x4 blocks against a per-clip
+               256-entry codebook, temporal skip tokens. Plays in the boot
+               disp240 mode as-is. Tom copies codebook blocks into BOTH
+               framebuffers (ping-pong coherent); the 68k streams sectors,
+               queues audio chunks on the DSP, paces and flips. */
             if (gpu_ok)
-                gpu_jvdec_load();   /* Tom decodes; kernel_select(1) below
-                                       restores the renderer after */
-            /* Plays in the 120-line SCALED mode (OP VSCALE doubles
-               vertically - proven game path; horizontal OP scaling is
-               BANNED, it starves the bus). The 68k doubles horizontally
-               only, and only for the CHANGED row band (temporal deltas):
-               the backbuffer ping-pongs, so each frame repaints the union
-               of its own band and the previous frame's. */
+                gpu_jvdec_load();
             for (vc = 0; vc < 2; vc++) {
                 int vh = -1, mi2, vw, vhh, vfps, vnf, fi, remain, have, pos;
-                int plo = 0, phi = 120;              /* prev frame's band */
+                uint8_t *fbA, *fbB;
                 uint32_t t0;
                 for (mi2 = 0; mi2 < 2 && vh < 0; mi2++)
                     vh = gd_fopen(vc ? (mi2 ? "/CORE.JV" : "CORE.JV")
                                      : (mi2 ? "/EIDOS.JV" : "EIDOS.JV"),
                                   GD_FOPEN_READ | GD_FOPEN_OPEN_EXISTING);
                 if (vh < 0) continue;
-                /* SECTOR DISCIPLINE: the GD BIOS FREAD is only proven for
-                   sector-aligned, sector-sized reads (the music path). The
-                   528-byte header read desynced the stream and wedged the
-                   drive on silicon (2026-08-05) - header block is padded
-                   to 1024 and the converter pads the file tail to a 512
-                   multiple, so every read below is 512-granular. */
+                /* SECTOR DISCIPLINE (silicon laws, 2026-08-05): 512-granular
+                   reads at 512 positions only; 4-aligned destinations. */
                 remain = gd_fsize((unsigned)vh);
-                if (remain < 1024 || (remain & 511) ||
+                if (remain < 1024 + 4096 || (remain & 511) ||
                     gd_fread((unsigned)vh, vb, 1024, GD_FREAD_CPU) != 0 ||
-                    vb[0] != 'J' || vb[1] != 'V' || vb[3] != '3') {
+                    vb[0] != 'J' || vb[1] != 'V' || vb[3] != '4') {
                     gd_fclose((unsigned)vh); continue;
                 }
                 remain -= 1024;
@@ -3441,27 +3430,20 @@ int main(void)
                 vhh  = (vb[6] << 8) | vb[7];
                 vfps = (vb[8] << 8) | vb[9];
                 vnf  = (vb[10] << 8) | vb[11];
-                if (vw != 160 || vhh != 120 || vfps <= 0) vnf = 0;
+                if (vw != 320 || vhh != 240 || vfps <= 0) vnf = 0;
                 video_set_clut((const uint16_t *)(vb + 16));
+                if (gd_fread((unsigned)vh, cbk, 4096, GD_FREAD_CPU) != 0) {
+                    gd_fclose((unsigned)vh); continue;
+                }
+                remain -= 4096;
+                fbA = (uint8_t *)video_backbuffer();
+                video_flip();
+                fbB = (uint8_t *)video_backbuffer();
                 have = 0; pos = 0;
                 t0 = frame_count;
                 for (fi = 0; fi < vnf; fi++) {
                     uint32_t L, AL;
-                    uint8_t *s, *e, *dst, *dend;
-                    int y2, x2, need = 8, lo, hi, u0, u1;
-                    uint8_t *wlo, *whi;              /* written byte extent */
-#ifdef VIDPROF
-                    volatile uint16_t *vcp = (volatile uint16_t *)0xF00006u;
-                    uint32_t tRd = 0, tDe = 0, tDb0 = 0, tA;
-#define VPT() (frame_count * 263u + ((*vcp) >> 1))
-#endif
-                    /* records are 4-padded in the file, so pos stays a
-                       multiple of 4 and every FREAD destination below is
-                       aligned - an odd destination address-errors the 68k
-                       inside the BIOS copy (frozen mid-clip, 2026-08-05) */
-#ifdef VIDPROF
-                    tA = VPT();
-#endif
+                    int need = 8;
                     for (;;) {
                         if (have - pos >= need) {
                             if (need > 8) break;
@@ -3479,11 +3461,7 @@ int main(void)
                             for (k2 = 0; k2 < mv; k2++) vb[k2] = vb[pos + k2];
                             have = mv; pos = 0; }
                         { int want = (31488 - have) & ~511;   /* sector-sized */
-                          /* 24576 cap: v3 sustained ~37KB/s here; raising
-                             the cap to 31232 collapsed calls to ~11KB/s -
-                             something past ~24KB/call falls off a cliff
-                             inside the GD BIOS. Stay in the proven zone. */
-                          if (want > 24576) want = 24576;
+                          if (want > 24576) want = 24576;     /* >24KB cliffs */
                           if (want > remain) want = remain;
                           if (want <= 0) { fi = vnf; break; }
                           if (gd_fread((unsigned)vh, vb + have, (unsigned)want,
@@ -3491,18 +3469,9 @@ int main(void)
                           have += want; remain -= want; }
                     }
                     if (fi >= vnf) break;
-#ifdef VIDPROF
-                    tRd = VPT() - tA; tA = VPT();
-#endif
                     pos += 8;
-                    /* AUDIO (user 2026-08-05: 'Add the audio to the
-                       videos'): the disc XA track rides in each record as
-                       s8@11025 chunks; hand them to the DSP voice-0
-                       gapless queue (the music streamer's engine). mbuf
-                       is idle until the title music primes - reuse it as
-                       the double buffer. Wait briefly for the queue slot:
-                       chunks are 124.8ms, frames 125ms, so it frees in
-                       time; the bound keeps a dead DSP from hanging us. */
+                    /* audio chunk -> DSP voice-0 gapless queue (music's
+                       engine; mbuf is idle until the title primes it) */
                     if (AL) {
                         if (g_sfx_ok) {
                             int8_t *ab = mbuf[fi & 1];
@@ -3524,94 +3493,41 @@ int main(void)
                         }
                         pos += (int)AL;
                     }
-                    s = vb + pos; e = s + L; pos += (int)((L + 3u) & ~3u);
-                    /* user 2026-08-05: "Stop using the 68000. Do it in
-                       jrisc on Tom." - the whole frame (JV02 decode +
-                       horizontal double) runs in gpu_jvdec.gas; the 68k
-                       only streams chunks and flips. Fallback below keeps
-                       GPU-less runs alive. */
-                    if (gpu_ok) {
-                        int lo2 = 120, hi2 = -1;
-                        int fu0 = (fi < 2) ? 0 : plo,
-                            fu1 = (fi < 2) ? 119 : phi;
-                        if (gpu_jvdec_frame(s, (unsigned)L, stg,
-                                            video_backbuffer(),
-                                            fu0, fu1, &lo2, &hi2)) {
-                            lo = lo2; hi = hi2;
-                            goto vshow;
-                        }
-                    }
-                    /* ---- 68k fallback: decode + double ---- */
-                    dst = stg; dend = stg + 160 * 120;
-                    wlo = dend; whi = stg;           /* empty extent */
-                    while (s < e && dst < dend) {
-                        int tk = *s++;
-                        if (tk < 100) {
-                            int n = tk + 2; uint8_t v = *s++;
-                            if (n > (int)(dend - dst)) n = dend - dst;
-                            if (dst < wlo) wlo = dst;
-                            while (n && ((uint32_t)dst & 3)) { *dst++ = v; n--; }
-                            { uint32_t vv = ((uint32_t)v << 24) | ((uint32_t)v << 16)
-                                          | ((uint32_t)v << 8) | v;
-                              while (n >= 4) { *(uint32_t *)dst = vv; dst += 4; n -= 4; } }
-                            while (n--) *dst++ = v;
-                            if (dst > whi) whi = dst;
-                        } else if (tk < 128) {
-                            int n = (tk - 99) * 4;
-                            if (n > (int)(dend - dst)) n = dend - dst;
-                            dst += n;
-                        } else {
-                            int n = tk - 127;
-                            if (n > (int)(dend - dst)) n = dend - dst;
-                            if (dst < wlo) wlo = dst;
-                            if ((((uint32_t)dst ^ (uint32_t)s) & 1) == 0) {
-                                if (n && ((uint32_t)dst & 1)) { *dst++ = *s++; n--; }
-                                while (n >= 2) { *(uint16_t *)dst = *(const uint16_t *)s;
-                                                 dst += 2; s += 2; n -= 2; }
-                            }
-                            while (n--) *dst++ = *s++;
-                            if (dst > whi) whi = dst;
-                        }
-                    }
-                    if (wlo < whi) { lo = (int)(wlo - stg) / 160;
-                                     hi = (int)(whi - 1 - stg) / 160; }
-                    else           { lo = 120; hi = 0; }   /* nothing new */
-                    u0 = (lo < plo) ? lo : plo;
-                    u1 = (hi > phi) ? hi : phi;
-                    if (fi < 2) { u0 = 0; u1 = 119; }   /* fresh buffers */
-                    if (u1 > 119) u1 = 119;
-                    { uint8_t *fb = (uint8_t *)video_backbuffer();
-                      for (y2 = u0; y2 <= u1; y2++) {
-                          uint8_t  *sr = stg + y2 * 160;
-                          uint32_t *d0 = (uint32_t *)(fb + y2 * 320);
-                          for (x2 = 0; x2 < 160; x2 += 2) {
-                              uint32_t a2b = ((uint32_t)sr[x2] * 0x0101u) << 16;
-                              d0[x2 >> 1] = a2b | ((uint32_t)sr[x2+1] * 0x0101u);
+                    { uint8_t *tk = vb + pos;
+                      pos += (int)((L + 3u) & ~3u);
+                      if (!gpu_ok ||
+                          !gpu_jvdec_frame(tk, L, cbk, fbA, fbB)) {
+                          /* 68k fallback: same block walk */
+                          uint8_t *s = tk, *e = tk + L;
+                          uint8_t *dA = fbA, *dB = fbB;
+                          int bx = 0, left = 4800;
+                          while (s < e && left > 0) {
+                              int t2 = *s++;
+                              int n2 = (t2 < 128) ? t2 + 1 : t2 - 127;
+                              while (n2-- && left > 0) {
+                                  if (t2 < 128) {
+                                      const uint32_t *cbe;
+                                      uint32_t *w0;
+                                      if (s >= e) { left = 0; break; }
+                                      cbe = (const uint32_t *)(cbk + ((uint32_t)*s++ << 4));
+                                      w0 = (uint32_t *)dA;
+                                      w0[0] = cbe[0]; w0[80] = cbe[1];
+                                      w0[160] = cbe[2]; w0[240] = cbe[3];
+                                      w0 = (uint32_t *)dB;
+                                      w0[0] = cbe[0]; w0[80] = cbe[1];
+                                      w0[160] = cbe[2]; w0[240] = cbe[3];
+                                  }
+                                  dA += 4; dB += 4; left--;
+                                  if (++bx == 80) {
+                                      bx = 0; dA += 960; dB += 960;
+                                  }
+                              }
                           }
                       } }
-vshow:
-                    plo = lo; phi = hi;
-#ifdef VIDPROF
-                    /* per-stage cost bars in scanline-ticks (fc*263+line):
-                       row0 read, row1 decode, row2 double, row3 flip+wait.
-                       1px = 16 lines ~ 1.02ms. Read them off a capture. */
-                    { extern volatile uint32_t frame_count;
-                      volatile uint16_t *vcreg = (volatile uint16_t *)0xF00006u;
-                      uint32_t tn = frame_count * 263u + (*vcreg >> 1);
-                      uint8_t *fb2 = (uint8_t *)video_backbuffer();
-                      int b0 = (int)((tRd) >> 4), b1 = (int)((tDe) >> 4),
-                          b2 = (int)((tn - tDb0) >> 4), bx;
-                      if (b0 > 319) b0 = 319; if (b1 > 319) b1 = 319;
-                      if (b2 > 319) b2 = 319;
-                      for (bx = 0; bx < 320; bx++) {
-                          fb2[0*320+bx] = bx < b0 ? 6 : 0;
-                          fb2[1*320+bx] = bx < b1 ? 6 : 0;
-                          fb2[2*320+bx] = bx < b2 ? 6 : 0;
-                      } }
-#endif
                     while ((int)(frame_count - t0) < ((fi + 1) * 60) / vfps)
                         ;
                     video_flip();
+                    { uint8_t *tswap = fbA; fbA = fbB; fbB = tswap; }
                     if (joypad_read() & (PAD_A | PAD_B | PAD_C)) break;
                 }
                 gd_fclose((unsigned)vh);
