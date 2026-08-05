@@ -173,10 +173,15 @@ def tarea(a,b,c):
 def split(tris0):
     out=[]
     stack=list(tris0)
+    MAXE2=float(os.environ.get("PAD_MAXEDGE","80"))**2
     while stack:
         t=stack.pop()
         a,b,c=t
-        if tarea(capv[a],capv[b],capv[c])<=TARGET:
+        e2=max((capv[t[i]][0]-capv[t[(i+1)%3]][0])**2+(capv[t[i]][1]-capv[t[(i+1)%3]][1])**2 for i in range(3))
+        # split on EITHER big area OR a long edge: ear-clip leaves perimeter
+        # SLIVERS (tiny area, huge UV span) and those are the affine-streak
+        # generators - the kernel's du/dx overshoots off the atlas
+        if tarea(capv[a],capv[b],capv[c])<=TARGET and e2<=MAXE2:
             out.append(t); continue
         # longest edge
         e=[(a,b,c),(b,c,a),(c,a,b)]
@@ -205,7 +210,11 @@ def nearest(r,g,b):
         d=(r-rr)**2+(g-gg)**2+(b-bb)**2
         if d<best: best,bi=d,i
     return bi
-PW=120
+# PW: plate texel width. The item is ~35px on screen - 120 texels was 4x
+# minified, and the kernel's edge law (gpu_geotex.gas:1983: +-1px edge error
+# = +-du TEXELS) turns minification into streaks. ~1:1 texels:pixels keeps
+# per-tri UV spans under the safe bound with the 96-tri geometry.
+PW=int(os.environ.get("PAD_PW","48"))
 fsm=Image.fromarray(fimg).resize((PW,PW),Image.BOX)
 bsm=Image.fromarray(bimg).resize((PW,PW),Image.BOX)
 AH=PW+8
