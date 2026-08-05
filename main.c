@@ -3396,11 +3396,17 @@ int main(void)
              played ~6x slow at 2 calls/frame), so the stream is pulled in
              ~24KB chunks into a rolling buffer and frames are parsed out
              of it - one BIOS call per several frames. */
-          { extern volatile uint32_t frame_count;
+          { extern void video_set_disp240(int);
+            extern volatile uint32_t frame_count;
             uint8_t *vb  = (uint8_t *)rblob;         /* stream buffer     */
             uint8_t *stg = (uint8_t *)rblob + 31488; /* 160x120 stage     */
             int vc;
-            /* Plays in the boot 120-line SCALED mode (OP VSCALE doubles
+            /* The console BOOTS in disp240 (g_disp240=1) - switch to the
+               120-line SCALED game mode for playback (half the OP fetch,
+               VSCALE does the vertical doubling); the title's own
+               disp240(1) switch right after restores it. */
+            video_set_disp240(0);
+            /* Plays in the 120-line SCALED mode (OP VSCALE doubles
                vertically - proven game path; horizontal OP scaling is
                BANNED, it starves the bus). The 68k doubles horizontally
                only, and only for the CHANGED row band (temporal deltas):
