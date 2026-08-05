@@ -103,16 +103,18 @@ void gpu_jvdec_done(void)
     *(volatile uint32_t *)(G_PARAMS + 24) = 0;
 }
 
-int gpu_jvdec_frame(const void *src, uint32_t len, const void *cb,
-                    void *fbA, void *fbB)
+int gpu_jvdec_frame(const void *prevTok, uint32_t prevLen,
+                    const void *curTok, uint32_t curLen,
+                    const void *cb, void *fb)
 {
     uint32_t i;
     G_CTRL = 0;
-    *(volatile uint32_t *)(G_PARAMS + 0)  = (uint32_t)src;
-    *(volatile uint32_t *)(G_PARAMS + 4)  = len;
-    *(volatile uint32_t *)(G_PARAMS + 8)  = (uint32_t)cb;
-    *(volatile uint32_t *)(G_PARAMS + 12) = (uint32_t)fbA;
-    *(volatile uint32_t *)(G_PARAMS + 16) = (uint32_t)fbB;
+    *(volatile uint32_t *)(G_PARAMS + 0)  = (uint32_t)prevTok;
+    *(volatile uint32_t *)(G_PARAMS + 4)  = prevLen;
+    *(volatile uint32_t *)(G_PARAMS + 8)  = (uint32_t)curTok;
+    *(volatile uint32_t *)(G_PARAMS + 12) = curLen;
+    *(volatile uint32_t *)(G_PARAMS + 16) = (uint32_t)cb;
+    *(volatile uint32_t *)(G_PARAMS + 20) = (uint32_t)fb;
     *(volatile uint32_t *)(G_PARAMS + 32) = 0;
     G_PC = G_SRAM;
     G_CTRL = 1;

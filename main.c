@@ -3399,6 +3399,7 @@ int main(void)
           { extern volatile uint32_t frame_count;
             uint8_t *vb  = (uint8_t *)rblob;         /* stream buffer      */
             uint8_t *cbk = (uint8_t *)rblob + 31488; /* 4KB VQ codebook    */
+            uint8_t *ptk = (uint8_t *)rblob + 35584; /* prev-frame tokens  */
             int vc;
             /* JV04 (user: "the original videos from the disc"): NATIVE
                320x240 vector quantization - 4x4 blocks against a per-clip
@@ -3410,8 +3411,7 @@ int main(void)
                 gpu_jvdec_load();
             for (vc = 0; vc < 2; vc++) {
                 int vh = -1, mi2, vw, vhh, vfps, vnf, fi, remain, have, pos;
-                uint8_t *fbA, *fbB;
-                uint32_t t0;
+                uint32_t t0, plen = 0;
                 for (mi2 = 0; mi2 < 2 && vh < 0; mi2++)
                     vh = gd_fopen(vc ? (mi2 ? "/CORE.JV" : "CORE.JV")
                                      : (mi2 ? "/EIDOS.JV" : "EIDOS.JV"),
@@ -3436,9 +3436,6 @@ int main(void)
                     gd_fclose((unsigned)vh); continue;
                 }
                 remain -= 4096;
-                fbA = (uint8_t *)video_backbuffer();
-                video_flip();
-                fbB = (uint8_t *)video_backbuffer();
                 have = 0; pos = 0;
                 t0 = frame_count;
                 { int acc = 0, abuf = 0, astarted = 0;
@@ -3506,40 +3503,52 @@ int main(void)
                         pos += (int)AL;
                     }
                     { uint8_t *tk = vb + pos;
+                      uint8_t *bb = (uint8_t *)video_backbuffer();
+                      int gok;
                       pos += (int)((L + 3u) & ~3u);
-                      if (!gpu_ok ||
-                          !gpu_jvdec_frame(tk, L, cbk, fbA, fbB)) {
-                          /* 68k fallback: same block walk */
-                          uint8_t *s = tk, *e = tk + L;
-                          uint8_t *dA = fbA, *dB = fbB;
-                          int bx = 0, left = 4800;
-                          while (s < e && left > 0) {
-                              int t2 = *s++;
-                              int n2 = (t2 < 128) ? t2 + 1 : t2 - 127;
-                              while (n2-- && left > 0) {
-                                  if (t2 < 128) {
-                                      const uint32_t *cbe;
-                                      uint32_t *w0;
-                                      if (s >= e) { left = 0; break; }
-                                      cbe = (const uint32_t *)(cbk + ((uint32_t)*s++ << 4));
-                                      w0 = (uint32_t *)dA;
-                                      w0[0] = cbe[0]; w0[80] = cbe[1];
-                                      w0[160] = cbe[2]; w0[240] = cbe[3];
-                                      w0 = (uint32_t *)dB;
-                                      w0[0] = cbe[0]; w0[80] = cbe[1];
-                                      w0[160] = cbe[2]; w0[240] = cbe[3];
-                                  }
-                                  dA += 4; dB += 4; left--;
-                                  if (++bx == 80) {
-                                      bx = 0; dA += 960; dB += 960;
+                      /* BACK BUFFER ONLY (user: 'a lot of flashes' - the
+                         old both-buffers write hit the DISPLAYED buffer
+                         mid-scan). The back buffer is two frames stale,
+                         so apply the PREVIOUS frame's tokens first, then
+                         this frame's; the display only ever shows
+                         completed frames. */
+                      gok = gpu_ok &&
+                            gpu_jvdec_frame(ptk, plen, tk, L, cbk, bb);
+                      if (!gok) {
+                          int pass;
+                          for (pass = 0; pass < 2; pass++) {
+                              uint8_t *s = pass ? tk : ptk;
+                              uint8_t *e = s + (pass ? L : plen);
+                              uint8_t *dA = bb;
+                              int bx = 0, left = 4800;
+                              while (s < e && left > 0) {
+                                  int t2 = *s++;
+                                  int n2 = (t2 < 128) ? t2 + 1 : t2 - 127;
+                                  while (n2-- && left > 0) {
+                                      if (t2 < 128) {
+                                          const uint32_t *cbe;
+                                          uint32_t *w0;
+                                          if (s >= e) { left = 0; break; }
+                                          cbe = (const uint32_t *)(cbk + ((uint32_t)*s++ << 4));
+                                          w0 = (uint32_t *)dA;
+                                          w0[0] = cbe[0]; w0[80] = cbe[1];
+                                          w0[160] = cbe[2]; w0[240] = cbe[3];
+                                      }
+                                      dA += 4; left--;
+                                      if (++bx == 80) { bx = 0; dA += 960; }
                                   }
                               }
                           }
-                      } }
+                      }
+                      /* stash this frame's tokens for the next buffer */
+                      { uint32_t k2, nw = ((L + 3u) & ~3u) >> 2;
+                        const uint32_t *ts = (const uint32_t *)tk;
+                        uint32_t *td = (uint32_t *)ptk;
+                        for (k2 = 0; k2 < nw; k2++) td[k2] = ts[k2]; }
+                      plen = L; }
                     while ((int)(frame_count - t0) < ((fi + 1) * 60) / vfps)
                         ;
                     video_flip();
-                    { uint8_t *tswap = fbA; fbA = fbB; fbB = tswap; }
                     if (joypad_read() & (PAD_A | PAD_B | PAD_C)) break;
                 }
                 /* flush the last partial audio batch */

@@ -14,9 +14,12 @@
 ; full copy, and every change lands in both buffers thereafter.
 ;
 ; params $F03F00:
-;   +0 token src (DRAM)      +4  token bytes
-;   +8 codebook base (4KB)   +12 fbA    +16 fbB
-;   +32 OUT done magic       +36 OUT hello magic
+;   +0 PREV token src  +4 PREV bytes   (frame N-1, re-applied: the back
+;                                       buffer is two frames stale)
+;   +8 CUR  token src  +12 CUR bytes
+;   +16 codebook base  +20 fb (BACK buffer ONLY - writing the displayed
+;                              buffer mid-scan flashed on the CRT)
+;   +32 OUT done magic +36 OUT hello magic
 ;
 ; Discipline: 2 nops after loads; far/hot branch targets in registers;
 ; short forward skips jr. TEST=1: DRAM build (org $4000) with embedded
@@ -38,24 +41,28 @@ TFBB        .equ    $40000
 
 start:
 .if TEST
-	movei	#tpay,r4		; src
-	movei	#tpayend,r5
-	sub	r4,r5			; len
+	movei	#tpay,r26		; PREV pass = the same payload
+	movei	#tpayend,r27
+	sub	r26,r27
+	movei	#tpay2,r28		; CUR pass
+	movei	#tpay2end,r29
+	sub	r28,r29
 	movei	#tcb,r6			; codebook
-	movei	#TFBA,r7		; fbA
-	movei	#TFBB,r8		; fbB
+	movei	#TFBA,r30		; fb
 .else
 	movei	#PARAMS,r1
 	nop
-	load	(r1),r4			; src
+	load	(r1),r26		; prev src
 	addq	#4,r1
-	load	(r1),r5			; len
+	load	(r1),r27		; prev len
+	addq	#4,r1
+	load	(r1),r28		; cur src
+	addq	#4,r1
+	load	(r1),r29		; cur len
 	addq	#4,r1
 	load	(r1),r6			; codebook base
 	addq	#4,r1
-	load	(r1),r7			; fbA
-	addq	#4,r1
-	load	(r1),r8			; fbB
+	load	(r1),r30		; fb (back buffer only)
 	nop
 	nop
 	movei	#PARAMS+36,r0
@@ -63,6 +70,24 @@ start:
 	store	r2,(r0)
 .endif
 
+	moveq	#0,r25			; pass 0 = prev, 1 = cur
+	movei	#.passtop,r31
+
+.passtop:
+	cmpq	#0,r25
+	jr	NE,.p_cur
+	nop
+	nop
+	move	r26,r4			; pass 0: prev tokens
+	move	r27,r5
+	jr	T,.p_go
+	nop
+	nop
+.p_cur:
+	move	r28,r4			; pass 1: current tokens
+	move	r29,r5
+.p_go:
+	move	r30,r7			; fb walk restarts each pass
 	moveq	#0,r12			; bx = block col (0..79)
 	movei	#4800,r13		; blocks remaining
 	movei	#.tok,r18
@@ -124,17 +149,8 @@ start:
 	load	(r10),r17		; row 3
 	nop
 	nop
-	; write the block to fbA
+	; write the block (back buffer only)
 	move	r7,r0
-	store	r14,(r0)
-	add	r23,r0
-	store	r15,(r0)
-	add	r23,r0
-	store	r16,(r0)
-	add	r23,r0
-	store	r17,(r0)
-	; and to fbB
-	move	r8,r0
 	store	r14,(r0)
 	add	r23,r0
 	store	r15,(r0)
@@ -170,7 +186,6 @@ start:
 ; ---- advance one block: dst += 4; end of block row -> next 4 lines ----
 .adv:
 	addq	#4,r7
-	addq	#4,r8
 	subq	#1,r13
 	addq	#1,r12
 	movei	#80,r0
@@ -180,12 +195,20 @@ start:
 	nop
 	moveq	#0,r12
 	add	r24,r7			; skip lines +1..+3 (already +320 via 80*4)
-	add	r24,r8
 	jump	T,(r2)
 	nop
 	nop
 
 .done:
+	cmpq	#0,r25
+	jr	NE,.alldone
+	nop
+	nop
+	moveq	#1,r25			; second pass: current frame
+	jump	T,(r31)
+	nop
+	nop
+.alldone:
 .if TEST
 	nop
 .else
@@ -208,5 +231,10 @@ tcb:
 tpay:
 	.incbin	"jvtest_payload.bin"
 tpayend:
+	.long	0
+	.align	4
+tpay2:
+	.incbin	"jvtest_payload2.bin"
+tpay2end:
 	.long	0
 .endif

@@ -43,8 +43,9 @@ void gpu_textured_kick(const uint32_t *list, uint32_t count, void *fb,
  * the room blob + camera block + atlas. room = room0_tex.bin. */
 void gpu_jvdec_load(void);
 void gpu_jvdec_done(void);
-int  gpu_jvdec_frame(const void *src, unsigned len, const void *cb,
-                     void *fbA, void *fbB);
+int  gpu_jvdec_frame(const void *prevTok, unsigned prevLen,
+                     const void *curTok, unsigned curLen,
+                     const void *cb, void *fb);
 void gpu_geotex_setclip(int x0, int x1, int y0, int y1);
 void gpu_geotex_dispatch(const uint32_t *list, void *fb, const void *camblk,
                          const void *atlas, uint32_t atlas_width);
