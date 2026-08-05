@@ -3436,13 +3436,17 @@ int main(void)
                     uint8_t *s, *e, *dst, *dend;
                     int y2, x2, need = 4;
                     /* ensure the length word, then the whole payload */
+                    /* records are 4-padded in the file, so pos stays a
+                       multiple of 4 and every FREAD destination below is
+                       aligned - an odd destination address-errors the 68k
+                       inside the BIOS copy (frozen mid-clip, 2026-08-05) */
                     for (;;) {
                         if (have - pos >= need) {
                             if (need > 4) break;
                             L = ((uint32_t)vb[pos] << 24) | ((uint32_t)vb[pos+1] << 16)
                               | ((uint32_t)vb[pos+2] << 8) | vb[pos+3];
                             if (L == 0 || L > 24576u) { fi = vnf; break; }
-                            need = 4 + (int)L;
+                            need = 4 + (int)((L + 3u) & ~3u);
                             if (have - pos >= need) break;
                         }
                         if (pos) { int mv = have - pos, k2;
@@ -3459,7 +3463,7 @@ int main(void)
                     if (fi >= vnf) break;
                     pos += 4;
                     /* RLE-decode the 160x120 frame into the stage */
-                    s = vb + pos; e = s + L; pos += (int)L;
+                    s = vb + pos; e = s + L; pos += (int)((L + 3u) & ~3u);
                     dst = stg; dend = stg + 160 * 120;
                     while (s < e && dst < dend) {
                         int tk = *s++;

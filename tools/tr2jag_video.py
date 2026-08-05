@@ -94,8 +94,14 @@ with tempfile.TemporaryDirectory() as td:
                 o.write(struct.pack(">H", 0))
         o.write(b"\0" * (1024 - 16 - 512))
         for p in enc:
+            # records padded to 4 bytes (length field = TRUE length): the
+            # player's rolling buffer then stays 4-aligned through
+            # compaction, so every FREAD destination is aligned - an odd
+            # destination address-errors the 68k inside the BIOS copy
+            # (the frozen mid-clip frame, 2026-08-05).
             o.write(struct.pack(">I", len(p)))
             o.write(p)
+            o.write(b"\0" * ((4 - len(p) % 4) % 4))
         o.write(b"\0" * ((512 - o.tell() % 512) % 512))
     print("wrote %s: %d frames, %d colours, %dB total" %
           (OUT, len(enc), colors, os.path.getsize(OUT)))
