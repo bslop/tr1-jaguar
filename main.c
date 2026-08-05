@@ -3601,13 +3601,13 @@ int main(void)
 #endif
 
 #ifndef PASS_X
-#define PASS_X 22
+#define PASS_X 178
 #endif
 #ifndef PASS_Y
-#define PASS_Y 203
+#define PASS_Y 309
 #endif
 #ifndef PASS_Z
-#define PASS_Z 700
+#define PASS_Z 719
 #endif
 /* The OPEN spread (model 71). Reference: it fills the middle of the screen,
    ~60%% of frame height, centred (45%%, 75%%), running off the bottom edge. */
@@ -3708,14 +3708,26 @@ int main(void)
 #define PASS_OPEN_ROLL 67
 #endif
 #define PASS_OPEN_TICKS 6
-/* lazy-susan radii (world units): RX spreads adjacent items wide (the PS1's
-   neighbours sit at ~24%/78% of screen width); RZ recedes the far side to
-   z~1220 so distance supplies the shrink-and-rise. */
+/* lazy-susan constants: least-squares fit to reference 11-03-33 item
+   centroids. Sel world pos comes out (178,309,719) - PASS_X/Y/Z below match
+   so the passport-open lerp starts where the item actually sits. */
+#ifndef RING_CX2
+#define RING_CX2 17
+#endif
+#ifndef RING_CY2
+#define RING_CY2 312
+#endif
 #ifndef RING_RX
-#define RING_RX 430
+#define RING_RX 948
 #endif
 #ifndef RING_RZ
-#define RING_RZ 260
+#define RING_RZ 1409
+#endif
+#ifndef RING_TY
+#define RING_TY 171
+#endif
+#ifndef RING_TH0
+#define RING_TH0 7
 #endif
                       /* THE RING (2026-07-29): three items - 0 Game
                          (passport), 1 Controls, 2 Lara's Home. Sound is
@@ -3763,12 +3775,19 @@ int main(void)
                              centre exactly as in the reference). Selected sits
                              at the tuned front spot; adjacent spread wide. */
                           int ths = (((it2*256)/RING_N - ringR + 128) & 255) - 128;
+                          int phi = ths + RING_TH0;
                           const int16_t *m = mp2[it2];
                           if (f > 256) f = 256;
-                          px[it2] = PASS_X + (int)((RING_RX * SIN(ths)) >> 16);
-                          py[it2] = PASS_Y;
+                          /* constants least-squares FITTED to the measured
+                             item centroids of reference 11-03-33 (four
+                             points, ~10px residual): big deep carousel,
+                             tilted plane (far side higher), selected ~10deg
+                             past front. */
+                          px[it2] = RING_CX2 + (int)((RING_RX * SIN(phi)) >> 16);
+                          py[it2] = RING_CY2 - (int)((RING_TY *
+                                    (65536 - COS(phi))) >> 16);
                           pz[it2] = 700 + (int)((RING_RZ *
-                                    (65536 - COS(ths))) >> 16);
+                                    (65536 - COS(phi))) >> 16);
                           /* the ORIGINAL spins the selected item a full 360
                              clockwise, showing front AND back (user reference
                              2026-08-04). Unselected items hold still. */
