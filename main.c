@@ -3985,7 +3985,7 @@ int main(void)
 #define PASS_OPEN_X 0
 #endif
 #ifndef PASS_OPEN_Y
-#define PASS_OPEN_Y 55
+#define PASS_OPEN_Y 32
 #endif
 #ifndef PASS_OPEN_Z
 #define PASS_OPEN_Z 205
