@@ -3521,6 +3521,9 @@ bootvid_entry:
                 remain -= 4096;
                 have = 0; pos = 0;
                 t0 = frame_count;
+                { int dprev = 0;                  /* last display tick: min-
+                                                     spacing scheduler, no
+                                                     catch-up bursts */
                 { uint32_t vpp = joypad_read();   /* pad held at clip entry
                                                      (e.g. the A that chose
                                                      Start Game) must not
@@ -3575,8 +3578,12 @@ bootvid_entry:
                        early (~2 chunks) so the whoosh isn't late. */
                     if (AL) {
                         if (g_sfx_ok) {
-                            /* close the slot when the next chunk won't fit */
-                            if (acc + (int)AL > 4096 && pend < 5) {
+                            /* close the slot when the next chunk won't
+                               fit; a saturated ring drops its OLDEST
+                               pending batch so fill never bleeds into a
+                               queued slot */
+                            if (acc + (int)AL > 4096) {
+                                if (pend >= 5) { rslot = (rslot + 1) % 6; pend--; }
                                 alen[wslot] = acc; pend++;
                                 wslot = (wslot + 1) % 6; acc = 0;
                             }
@@ -3641,28 +3648,30 @@ bootvid_entry:
                               gpu_jvdec_kick(ptk, 0, ptk, L, cbk, bb);
                               kicked = 1;
                           }
-                          /* top-up reads inside the pace window; the GPU
-                             reads ptk, so compacting vb is safe */
+                          /* WINDOW-SIZED top-up while the GPU decodes:
+                             sized to the fields left before this frame's
+                             slot (~2.8KB/field, one field of safety) so it
+                             ALWAYS runs - the fixed-6KB gate starved and
+                             the frame-top 24KB read (125ms) chopped 1-in-6
+                             frames (measured, cadence.mp4). */
                           { int dl = ((fi + 1) * 60) / vfps;
-                            for (;;) {
-                                int nowr = (int)(frame_count - t0);
-                                if (nowr >= dl) break;
-                                if (remain > 0 && have < 31488 - 512 &&
-                                    (dl - nowr) >= 3) {
+                            int nowr = (int)(frame_count - t0);
+                            int wfld = dl - nowr;
+                            if (remain > 0 && have < 31488 - 512 && wfld >= 2) {
+                                int want = (31488 - have) & ~511;
+                                int cap  = ((wfld - 1) * 2816) & ~511;
+                                if (want > cap)    want = cap;
+                                if (want > remain) want = remain;
+                                if (want > 0) {
                                     if (pos) { int mv = have - pos, k3;
                                         for (k3 = 0; k3 < mv; k3++)
                                             vb[k3] = vb[pos + k3];
                                         have = mv; pos = 0; }
-                                    { int want = (31488 - have) & ~511;
-                                      if (want > 6144)  want = 6144;
-                                      if (want > remain) want = remain;
-                                      if (want > 0 &&
-                                          gd_fread((unsigned)vh, vb + have,
-                                                   (unsigned)want,
-                                                   GD_FREAD_CPU) == 0) {
-                                          have += want; remain -= want;
-                                      } else remain = 0;
-                                    }
+                                    if (gd_fread((unsigned)vh, vb + have,
+                                                 (unsigned)want,
+                                                 GD_FREAD_CPU) == 0) {
+                                        have += want; remain -= want;
+                                    } else remain = 0;
                                 }
                             } }
                           if (kicked) gok = gpu_jvdec_wait();
@@ -3704,8 +3713,12 @@ bootvid_entry:
                           uint32_t *td = (uint32_t *)ptk;
                           for (k2 = 0; k2 < nw; k2++) td[k2] = ts[k2]; }
                       plen = L; }
-                    while ((int)(frame_count - t0) < ((fi + 1) * 60) / vfps)
-                        ;
+                    { int tgt = ((fi + 1) * 60) / vfps;
+                      if (tgt < dprev + 60 / vfps) tgt = dprev + 60 / vfps;
+                      while ((int)(frame_count - t0) < tgt)
+                          ;
+                      dprev = (int)(frame_count - t0);
+                      if (dprev < tgt) dprev = tgt; }
                     video_flip();
                     { uint32_t vp2 = joypad_read();
                       if (vp2 & ~vpp & (PAD_A | PAD_B | PAD_C)) break;
@@ -3736,7 +3749,7 @@ bootvid_entry:
                         }
                         rslot = (rslot + 1) % 6; pend--;
                     }
-                } } }
+                } } } }
                 gd_fclose((unsigned)vh);
             }
             if (gpu_ok)
