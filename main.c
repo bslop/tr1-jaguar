@@ -3467,17 +3467,22 @@ bootvid_entry:
                queues audio chunks on the DSP, paces and flips. */
             if (gpu_ok)
                 gpu_jvdec_load();
-            for (vc = introplay ? 2 : 0; vc < (introplay ? 3 : 2); vc++) {
+            for (vc = introplay ? 3 : 0; vc < (introplay ? 4 : 3); vc++) {
                 int vh = -1, mi2, vw, vhh, vfps, vnf, fi, remain, have, pos;
                 uint32_t t0, plen = 0;
                 /* boot flow (user 2026-08-05): EIDOS -> CORE -> the disc
                    intro cinematic (CAFE.FMV: snake eye / dig / cafe pitch)
                    -> title. A skips the current clip; A during the intro
                    lands on the main menu. */
+                /* clips: boot = EIDOS, CORE, INTRO (the cafe pitch - the
+                   PSX's attract intro); Start Game = CAVES.JV (SNOW.FMV,
+                   the guide on the snowy approach - the PSX's pre-Caves
+                   cinematic; user 2026-08-06: "there are two intros"). */
                 for (mi2 = 0; mi2 < 2 && vh < 0; mi2++)
                     vh = gd_fopen(vc == 0 ? (mi2 ? "/EIDOS.JV" : "EIDOS.JV")
                                 : vc == 1 ? (mi2 ? "/CORE.JV" : "CORE.JV")
-                                          : (mi2 ? "/INTRO.JV" : "INTRO.JV"),
+                                : vc == 2 ? (mi2 ? "/INTRO.JV" : "INTRO.JV")
+                                          : (mi2 ? "/CAVES.JV" : "CAVES.JV"),
                                   GD_FOPEN_READ | GD_FOPEN_OPEN_EXISTING);
                 if (vh < 0) continue;
                 /* SECTOR DISCIPLINE (silicon laws, 2026-08-05): 512-granular
@@ -3506,6 +3511,10 @@ bootvid_entry:
                 remain -= 4096;
                 have = 0; pos = 0;
                 t0 = frame_count;
+                { uint32_t vpp = joypad_read();   /* pad held at clip entry
+                                                     (e.g. the A that chose
+                                                     Start Game) must not
+                                                     skip - edges only */
                 { int acc = 0, abuf = 0, astarted = 0;
                   int havefirst = 0, firstbuf = 0, firstlen = 0;
                 { int kfonly = (vnf >> 16) & 1; vnf &= 0xFFFF;
@@ -3636,7 +3645,9 @@ bootvid_entry:
                     while ((int)(frame_count - t0) < ((fi + 1) * 60) / vfps)
                         ;
                     video_flip();
-                    if (joypad_read() & (PAD_A | PAD_B | PAD_C)) break;
+                    { uint32_t vp2 = joypad_read();
+                      if (vp2 & ~vpp & (PAD_A | PAD_B | PAD_C)) break;
+                      vpp = vp2; }
                 }
                 }
                 /* flush the last partial audio batch (and un-primed
@@ -3657,7 +3668,7 @@ bootvid_entry:
                         { extern void jerry_sfx_queue(const void*, uint32_t);
                           jerry_sfx_queue(mbuf[abuf], (uint32_t)acc); }
                     }
-                } }
+                } } }
                 gd_fclose((unsigned)vh);
             }
             if (gpu_ok)
