@@ -3465,9 +3465,19 @@ bootvid_entry:
                disp240 mode as-is. Tom copies codebook blocks into BOTH
                framebuffers (ping-pong coherent); the 68k streams sectors,
                queues audio chunks on the DSP, paces and flips. */
-            if (gpu_ok)
+            if (gpu_ok) {
+                /* Tom can be mid-frame when Start Game re-enters here -
+                   gpu_jvdec_load stops the GPU (G_CTRL=0) and loading
+                   over a live kernel wedges the kick protocol. Boot-time
+                   this sync is a no-op. */
+                extern int gpu_sync(void); gpu_sync();
                 gpu_jvdec_load();
+            }
+#ifdef NOBOOTCLIPS
+            for (vc = 3; vc < (introplay ? 4 : 3); vc++) {
+#else
             for (vc = introplay ? 3 : 0; vc < (introplay ? 4 : 3); vc++) {
+#endif
                 int vh = -1, mi2, vw, vhh, vfps, vnf, fi, remain, have, pos;
                 uint32_t t0, plen = 0;
                 /* boot flow (user 2026-08-05): EIDOS -> CORE -> the disc
@@ -4633,6 +4643,15 @@ bootvid_entry:
               { static int _ps = 0;
                 if (popen && ++_ps >= 30) { _ps = 0; prow ^= 1; } }
 #endif
+#ifdef PASSTART
+              /* rig-only: N frames after the book is open, press A - with
+                 the open default on the Start Game row this drives the
+                 full start flow (intro video, loading art, level) for
+                 hands-off capture. */
+              { static int _pa = 0;
+                if (popen >= PASS_OPEN_TICKS && _pa < (PASSTART) &&
+                    ++_pa == (PASSTART)) edge |= PAD_A; }
+#endif
               if (copen) {
                   /* Controls page: B returns to the ring, as "Go Back" says. */
                   if (edge & PAD_B) { copen = 0; sfx_play(1, SFX_MENU_SPIN); }
@@ -4666,7 +4685,14 @@ bootvid_entry:
 #if !defined(NO_GAMEDRIVE) && defined(BOOTVID)
                           /* the caves intro cinematic plays between the
                              menu and the level, like the PSX (user
-                             2026-08-06). A skips it, as at boot. */
+                             2026-08-06). A skips it, as at boot.
+                             ☠️ CLOSE THE MUSIC STREAM FIRST: the GD BIOS
+                             serves ONE open file - with MUSIC.PCM still
+                             open, the video open/reads fail silently and
+                             the flow skips straight to the level (the
+                             'video never plays' of 16:0x). Same law for
+                             the loading art below. */
+                          if (mh >= 0) { gd_fclose((unsigned)mh); mh = -1; }
                           introplay = 1; goto bootvid_entry;
 #else
                           break;
@@ -4719,6 +4745,10 @@ bootvid_entry:
           }
 #if !defined(NO_GAMEDRIVE) && defined(BOOTVID)
           bv_done: ;                   /* Start Game lands here after the intro */
+#endif
+#ifndef NO_GAMEDRIVE
+          /* one-open-file law: the loading art streams next */
+          if (mh >= 0) { gd_fclose((unsigned)mh); mh = -1; }
 #endif
           /* task #4: leave TITLE mode - game kernel + scaled 120-line display */
           { extern void video_set_disp240(int); extern void gpu_kernel_select(int);

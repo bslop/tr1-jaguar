@@ -1171,6 +1171,16 @@ ifdef PASSSWEEP
 CFLAGS   += -DPASSSWEEP=$(PASSSWEEP)
 CXXFLAGS += -DPASSSWEEP=$(PASSSWEEP)
 endif
+# PASSTART=N: press A on the open book N frames later (captures)
+ifdef PASSTART
+CFLAGS   += -DPASSTART=$(PASSTART)
+CXXFLAGS += -DPASSTART=$(PASSTART)
+endif
+# NOBOOTCLIPS=1: skip the boot logo chain (fast start-flow iteration)
+ifdef NOBOOTCLIPS
+CFLAGS   += -DNOBOOTCLIPS=$(NOBOOTCLIPS)
+CXXFLAGS += -DNOBOOTCLIPS=$(NOBOOTCLIPS)
+endif
 # PASSOPEN=N: boot then auto-open the passport after N title frames (captures)
 ifdef PASSOPEN
 CFLAGS   += -DPASSOPEN=$(PASSOPEN)
