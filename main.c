@@ -4779,14 +4779,17 @@ bootvid_entry:
             static uint8_t artbuf[15360] __attribute__((aligned(4)));
             int lh2 = -1, mi8, k8, ck;
             for (mi8 = 0; mi8 < 2 && lh2 < 0; mi8++)
-                lh2 = gd_fopen(g_useset ? (mi8 ? "/GYMLOAD.BIN" : "GYMLOAD.BIN")
-                                        : (mi8 ? "/CAVSLOAD.BIN" : "CAVSLOAD.BIN"),
+                lh2 = gd_fopen(g_useset ? (mi8 ? "/GYMLOAD.DAT" : "GYMLOAD.DAT")
+                                        : (mi8 ? "/CAVSLOAD.DAT" : "CAVSLOAD.DAT"),
                                GD_FOPEN_READ | GD_FOPEN_OPEN_EXISTING);
             if (lh2 >= 0) {
                 int okart = 1;
+                /* size-before-read, like every working GD reader */
+                if (gd_fsize((unsigned)lh2) != 76800) okart = 0;
                 for (ck = 0; ck < 5 && okart; ck++) {
                     if (gd_fread((unsigned)lh2, artbuf, 15360u,
-                                 GD_FREAD_CPU) != 0) { okart = 0; break; }
+                                 GD_FREAD_CPU) != 0) { okart = 0;
+                        break; }
                     for (py2 = 0; py2 < 48; py2++) {
                         int sy8 = ck*48 + py2;
                         int dy8 = sy8 * LH / 240;
