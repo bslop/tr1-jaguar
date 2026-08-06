@@ -3351,13 +3351,17 @@ int main(void)
           /* PASSPORT OPEN: 0 = on the ring, 1..PASS_OPEN_TICKS = opening,
              PASS_OPEN_TICKS = fully open (the page view). */
           int popen = 0, prow = 0;   /* open-passport row: 0 Start, 1 Back */
+          /* PAGE-FLIP (PSX ref 2026-08-06): the open book's LEAF (verts
+             8..11 of the composed pass2 blob, see gen_openbook.py) turns
+             about the spine when the row changes - panim eases toward
+             prow*128. The source blob lives in RAM so the 68k can rewrite
+             the leaf's model verts each frame before the bake. */
+          int panim = 0;
+          static uint8_t p2src[240] __attribute__((aligned(8)));
           /* CONTROLS PAGE state, mirroring popen: 0 = on the ring, 1 = open.
              CTRLOPEN=1 boots straight into it so the layout can be checked
              offline in jagemu without driving the menu. */
           int copen = 0;
-#ifdef PASSSWEEP
-          int g_psweep = 0;
-#endif
           /* SOUND PAGE state, mirroring copen. */
           int sopen = 0, srow = 0;
           int mkick = 0;      /* unmute: re-prime the music voice (the queue
@@ -3664,7 +3668,8 @@ int main(void)
           rsrc[2]=sound_geom;  ratl[2]=sound_atlas;
           rsrc[3]=ctrl_geom;   ratl[3]=ctrl_atlas;
           rsrc[4]=photo_geom;  ratl[4]=photo_atlas;
-          rsrc[5]=pass2_geom;  ratl[5]=pass2_atlas;
+          { int c7; for (c7 = 0; c7 < 232; c7++) p2src[c7] = pass2_geom[c7]; }
+          rsrc[5]=p2src;       ratl[5]=pass2_atlas;
           { int it2;
             for (it2=0; it2<6; it2++) {
               const uint8_t *sb=rsrc[it2];
@@ -4226,10 +4231,28 @@ int main(void)
                           pz[RING_N] = PASS_Z + ((PASS_OPEN_Z - PASS_Z)*f2 >> 8);
                           yw[RING_N] = (PASS_YAW + ((PASS_OPEN_YAW - PASS_YAW)*f2 >> 8)) & 1023;
                           zi[RING_N] = pz[RING_N];
+                          /* ease the leaf toward its row, then rewrite its
+                             four model verts: piecewise lerp lying-right ->
+                             standing -> lying-left about the spine hinge */
+                          { int tgt7 = prow * 128, i7, k7;
+                            static const int16_t LR[4][3] = {   /* lying right */
+                              {4,-60,6},{94,-60,-10},{94,60,-10},{4,60,6} };
+                            static const int16_t LU[4][3] = {   /* standing */
+                              {0,-60,6},{0,-60,-84},{0,60,-84},{0,60,6} };
+                            static const int16_t LL[4][3] = {   /* lying left */
+                              {-4,-60,6},{-94,-60,-10},{-94,60,-10},{-4,60,6} };
+                            if (panim < tgt7) { panim += 16; if (panim > tgt7) panim = tgt7; }
+                            else if (panim > tgt7) { panim -= 16; if (panim < tgt7) panim = tgt7; }
+                            for (i7 = 0; i7 < 4; i7++) {
+                                const int16_t *pa7; const int16_t *pb7; int t7;
+                                if (panim <= 64) { pa7 = LR[i7]; pb7 = LU[i7]; t7 = panim * 4; }
+                                else             { pa7 = LU[i7]; pb7 = LL[i7]; t7 = (panim - 64) * 4; }
+                                for (k7 = 0; k7 < 3; k7++) {
+                                    int v7 = pa7[k7] + (((pb7[k7] - pa7[k7]) * t7) >> 8);
+                                    p2src[16 + (8 + i7) * 8 + k7 * 2]     = (uint8_t)(v7 >> 8);
+                                    p2src[16 + (8 + i7) * 8 + k7 * 2 + 1] = (uint8_t)v7;
+                                } } }
                           rl[RING_N] = PASS_ROLL + ((PASS_OPEN_ROLL - PASS_ROLL)*f2 >> 8);
-#ifdef PASSSWEEP
-                          if (f2 == 256) rl[RING_N] = g_psweep * 32;
-#endif
                           pt[RING_N] = PASS_PITCH + ((PASS_OPEN_PITCH - PASS_PITCH)*f2 >> 8);
                       }
                       /* painter order: farthest first (no depth buffer) */
@@ -4415,12 +4438,6 @@ int main(void)
                      original shows the item's name bottom-centre and a
                      "Select" prompt bottom-left. Jaguar wording, TR font. */
                   if (popen >= PASS_OPEN_TICKS) {
-#ifdef PASSSWEEP
-                      { char sw[3]; sw[0]='P'; sw[1]=(char)('0'+g_psweep);
-                        sw[2]=0;
-                        menu_text((fbpix *)tfb, RENDER_W, 240, sw,
-                                  10, 20, 2, 2, 0); }
-#endif
                       /* open-book footer like the reference: Select prompt
                          left, active row bottom-centre */
                       static const char *const PROW[2] = { "Start Game", "Go Back" };
@@ -4583,14 +4600,14 @@ int main(void)
                  frames so the open-book pose can be captured hands-off
                  (same rationale as CTRLOPEN above). */
               { static int _po = 0;
-                if (++_po == (PASSOPEN) && !popen) { popen = 1; prow = 0; } }
+                if (++_po == (PASSOPEN) && !popen) { popen = 1; prow = 0; panim = 0; } }
 #endif
 #ifdef PASSSWEEP
               /* rig-only: while the book is open, step g_psweep every 30
                  frames; the draw code maps it to a pose candidate and the
                  index is drawn on screen so captures self-identify. */
               { static int _ps = 0;
-                if (popen && ++_ps >= 30) { _ps = 0; g_psweep = (g_psweep+1) & 7; } }
+                if (popen && ++_ps >= 30) { _ps = 0; prow ^= 1; } }
 #endif
               if (copen) {
                   /* Controls page: B returns to the ring, as "Go Back" says. */
@@ -4654,7 +4671,7 @@ int main(void)
                   sfx_play(1, SFX_MENU_SPIN);
               }
               else if (!copen && !sopen && (edge & PAD_A)) {
-                  if (page == 0) { popen = 1; prow = 0; /* the passport OPENS */
+                  if (page == 0) { popen = 1; prow = 0; panim = 0; /* the passport OPENS */
                                    sfx_play(1, SFX_MENU_SHOW); }
                   else if (page == 1) { /* Screen Adjust: page later */
                                         sfx_play(1, SFX_MENU_SHOW); }
