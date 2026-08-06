@@ -3357,6 +3357,7 @@ int main(void)
              prow*128. The source blob lives in RAM so the 68k can rewrite
              the leaf's model verts each frame before the bake. */
           int panim = 0;
+          int introplay = 0;
           static uint8_t p2src[240] __attribute__((aligned(8)));
           /* CONTROLS PAGE state, mirroring popen: 0 = on the ring, 1 = open.
              CTRLOPEN=1 boots straight into it so the layout can be checked
@@ -3433,6 +3434,13 @@ int main(void)
           g_useset = 0; goto menu_done;   /* test: boot straight into the caves */
 #endif
 #if !defined(NO_GAMEDRIVE) && defined(BOOTVID)
+          /* INTRO ON START GAME (2026-08-06): the PSX plays the intro
+             cinematic on New Game, not at boot - the boot chain is
+             EIDOS+CORE only now, and selecting Start Game jumps BACK
+             here with introplay=1 to stream INTRO.JV, then falls
+             through to the game (bv_done). */
+          introplay = 0;
+bootvid_entry:
           /* BOOT LOGOS (2026-08-05, user: "have this video load after the
              game is booted"): stream EIDOS.JV then CORE.JV (PS1 order) from
              the SD card and play them before the title. Frames are native
@@ -3459,7 +3467,7 @@ int main(void)
                queues audio chunks on the DSP, paces and flips. */
             if (gpu_ok)
                 gpu_jvdec_load();
-            for (vc = 0; vc < 3; vc++) {
+            for (vc = introplay ? 2 : 0; vc < (introplay ? 3 : 2); vc++) {
                 int vh = -1, mi2, vw, vhh, vfps, vnf, fi, remain, have, pos;
                 uint32_t t0, plen = 0;
                 /* boot flow (user 2026-08-05): EIDOS -> CORE -> the disc
@@ -3656,6 +3664,7 @@ int main(void)
                 gpu_jvdec_done();   /* restore the init-once kernel params
                                        (mailbox ptr) the video block used */
           }
+          if (introplay) goto bv_done;   /* Start Game: intro played, go */
 #endif
           /* RING ORDER: 0 = Game (passport), 1 = Controls, 2 = Lara's Home.
              Slot 3 is the OPENED passport - staged like the rest but not a
@@ -4638,7 +4647,16 @@ int main(void)
                   }
                   else if ((edge & PAD_A) && popen >= PASS_OPEN_TICKS) {
                       if (prow == 0) {
-                          g_useset = 0; sfx_play(1, SFX_MENU_SHOW); break; }
+                          g_useset = 0; sfx_play(1, SFX_MENU_SHOW);
+#if !defined(NO_GAMEDRIVE) && defined(BOOTVID)
+                          /* the caves intro cinematic plays between the
+                             menu and the level, like the PSX (user
+                             2026-08-06). A skips it, as at boot. */
+                          introplay = 1; goto bootvid_entry;
+#else
+                          break;
+#endif
+                      }
                       popen = 0; sfx_play(1, SFX_MENU_SPIN);
                   }
               }
@@ -4683,6 +4701,9 @@ int main(void)
                                         sfx_play(1, SFX_MENU_SHOW); break; }
               }
           }
+#if !defined(NO_GAMEDRIVE) && defined(BOOTVID)
+          bv_done: ;                   /* Start Game lands here after the intro */
+#endif
           /* task #4: leave TITLE mode - game kernel + scaled 120-line display */
           { extern void video_set_disp240(int); extern void gpu_kernel_select(int);
             video_set_disp240(0); gpu_kernel_select(0); }
