@@ -2827,6 +2827,18 @@ static void menu_dim(uint8_t *fb, int W, int H, uint8_t blackidx)
    register allocation across a 6,000-instruction function, and that is the
    trigger for the silicon boot hang in A10 (see OPEN_ISSUES.md; the sidestep
    needed exactly the same treatment).  Its own frame keeps main() alone. */
+/* SINTAB lookups at 1/16-unit angle precision (4096 per turn), linear
+   interpolation between adjacent table entries. The ring positions items
+   with these: at the front spot one whole SINTAB unit moves an item ~6
+   screen pixels, so the coarse table alone makes the carousel HOP. */
+static int sin16q(int a16)
+{
+    int a = (a16 >> 4) & 255, fr = a16 & 15;
+    int s0 = SIN(a), s1 = SINTAB[(a + 1) & 255];
+    return s0 + (((s1 - s0) * fr) >> 4);
+}
+static int cos16q(int a16) { return sin16q(a16 + 1024); }
+
 static void title_bake(const uint8_t *sb, uint8_t *db, int nv,
                        int yaw, int pitch, int roll, int tilt,
                        int px, int py, int pz)
@@ -3347,11 +3359,37 @@ int main(void)
           int sopen = 0, srow = 0;
           int mkick = 0;      /* unmute: re-prime the music voice (the queue
                                  alone cannot restart a fully-idle voice) */
+          /* ring angle in 1/16 SINTAB units (4096 per turn). Rotation is a
+             fixed-length SMOOTHSTEP slew from ringS over ringD (2026-08-06,
+             user: "make the ring movement smoother") - the old quarter-gap
+             exponential ease lurched on the first frame then crawled. */
 #ifdef TITLESEL
-          int ringR = ((TITLESEL) * 256) / 5, ringT = ((TITLESEL) * 256) / 5;
+          int ringA = (((TITLESEL) * 4096) / 5);
 #else
-          int ringR = 0, ringT = 0;    /* current/target ring angle (1024) */
+          int ringA = 0;
 #endif
+          int ringS = ringA, ringD = 0, ringK = 4;
+#define RING_SLEW_T 4                /* frames per one-item rotation */
+          /* DIRTY-RECT ring renderer (2026-08-06): the ring page was ~3fps
+             because all 449 staged faces redrew every frame on a per-face-
+             bound Tom. Only the MOVING items (front spinner; the swapping
+             pair during a slew) are re-rendered now - static items' pixels
+             persist in each of the two framebuffers, and the art behind a
+             mover is restored with a Blitter sub-rect copy before redraw.
+             fullpaint counts frames that must paint everything (both
+             buffers at entry, after a slew lands, after a panel closes). */
+#ifdef TITLESEL
+          int movers[4] = { (TITLESEL), 0, 0, 0 }; int nmov = 1;
+#else
+          int movers[4] = { 0, 0, 0, 0 }; int nmov = 1;
+#endif
+          int fullpaint = 3, panelPrev = 0;
+          int ringfbi = 0, ringfast = 0;
+          void *fbp3[3] = { 0, 0, 0 };  /* video is TRIPLE buffered (fb0-2) */
+          int mrx0[3] = {1,1,1}, mry0[3] = {1,1,1};
+          int mrx1[3] = {0,0,0}, mry1[3] = {0,0,0}; /* x0>x1 = nothing to restore */
+#define RING_LBL_Y0 196              /* ring label band, restored every frame */
+#define RING_LBL_H  28
           int spin = 0;
 #ifdef TITLESEL
           int page = (TITLESEL), shown = -1, armed = 0;
@@ -3364,7 +3402,7 @@ int main(void)
              card through a double buffer on voice 0 (footsteps own it
              in-game — no conflict). No seek in the GD BIOS: hold the
              handle, sequential reads, close+reopen to loop the theme. */
-          static int8_t mbuf[2][4096] __attribute__((aligned(4)));
+          static int8_t mbuf[2][12288] __attribute__((aligned(4)));
           /* 4KB = 0.37s per swap; halved from 8KB to protect the 68k STACK:
              sp starts at 0x200000 and grows DOWN into the top of BSS — the
              8KB buffers left only 208 BYTES of headroom (cold-boot crash,
@@ -3755,11 +3793,18 @@ int main(void)
               }
               else if (mh >= 0 && g_sfx_ok && g_musvol) {
                   /* gapless service: the pump promoted the queued buffer
-                     (NCNT==0) -> refill the dead one and re-queue it. */
+                     (NCNT==0) -> refill the dead one and re-queue it.
+                     CHUNKED (2026-08-06): the fill used to be one 8KB
+                     CPU-mode GD read - under the faster ring renderer's bus
+                     load that single call stalls the 68k for hundreds of ms,
+                     which read as PAD LAG, and starves the DSP's sample
+                     fetches, which read as CHOPPY MUSIC (both user). 2KB
+                     per frame keeps every stall short; the queue headroom
+                     is 0.74s and the spread fill finishes in ~4 frames. */
                   volatile uint32_t *ncnt = (volatile uint32_t *)0xF1C378u;
-                  if (*ncnt == 0) {
-                      extern void jerry_sfx_queue(const void*, uint32_t);
-                      int dead = mplay ^ 1, n;
+                  static int mfo = -1;               /* fill offset, -1 idle */
+                  static int mfdead = 0, mfgoal = 0;
+                  if (mfo < 0 && *ncnt == 0) {
                       if (mleft <= 0) {              /* EOF: reopen to loop */
                           int mi;
                           gd_fclose((unsigned)mh); mh = -1;
@@ -3768,12 +3813,25 @@ int main(void)
                               GD_FOPEN_READ | GD_FOPEN_OPEN_EXISTING);
                           mleft = mh >= 0 ? msz : 0;
                       }
-                      n = mleft < (int)sizeof(mbuf[0]) ? mleft : (int)sizeof(mbuf[0]);
-                      mlq[dead] = 0;
-                      if (mh >= 0 && n &&
-                          gd_fread((unsigned)mh, mbuf[dead], (unsigned)n, GD_FREAD_CPU) == 0)
-                          { mlq[dead] = n; mleft -= n; }
-                      if (mlq[dead]) { jerry_sfx_queue(mbuf[dead], (uint32_t)mlq[dead]); mplay = dead; }
+                      mfdead = mplay ^ 1;
+                      mfgoal = mleft < (int)sizeof(mbuf[0]) ? mleft
+                                                            : (int)sizeof(mbuf[0]);
+                      mlq[mfdead] = 0;
+                      mfo = (mh >= 0 && mfgoal > 0) ? 0 : -1;
+                  }
+                  if (mfo >= 0) {
+                      int step = mfgoal - mfo;
+                      if (step > 4096) step = 4096;
+                      if (gd_fread((unsigned)mh, mbuf[mfdead] + mfo,
+                                   (unsigned)step, GD_FREAD_CPU) == 0) {
+                          mfo += step;
+                          if (mfo >= mfgoal) {
+                              extern void jerry_sfx_queue(const void*, uint32_t);
+                              mlq[mfdead] = mfgoal; mleft -= mfgoal;
+                              jerry_sfx_queue(mbuf[mfdead], (uint32_t)mfgoal);
+                              mplay = mfdead; mfo = -1;
+                          }
+                      } else mfo = -1;               /* read fault: retry swap */
                   }
               }
 #endif
@@ -3789,6 +3847,12 @@ int main(void)
               }
               edge = stable & ~sprev;
               sprev = stable;
+#ifdef RINGDEMO
+              /* rig-only: no remote pad injection exists, so tap RIGHT on a
+                 timer to exercise the ring slew for capture. Never ship. */
+              { static int rdt = 0;
+                if (++rdt >= (RINGDEMO)) { rdt = 0; edge |= PAD_RIGHT; } }
+#endif
               /* LIVE FRAME (3D passport spins over the art): repaint the
                  page art every frame (doubles as the clear), orbit-camera
                  the passport blob through the normal geotex kernel, flip. */
@@ -3814,10 +3878,43 @@ int main(void)
                      68k — revisit with a Blitter composite, task #29.) */
                   /* task #4: the title displays plain-240 now - copy the
                      320x240 art 1:1 (it was decimated to 120 before). */
-                  blit_copy(simg, tfb, 240);
+#define TITLE_ART_H 240
 #else
-                  blit_copy(simg, tfb, RENDER_H);   /* was a 76800-iteration 68k byte loop */
+#define TITLE_ART_H RENDER_H
 #endif
+                  /* panel pages re-dim every frame, so pixel persistence is
+                     impossible there - they keep the full repaint. The ring
+                     page repaints fully only on fullpaint frames; otherwise
+                     it restores the art behind last frame's movers (this
+                     buffer = 2 logical frames ago) plus the label band, and
+                     the statics' pixels simply survive. */
+                  { int fbi2 = -1, fi3;
+                    int fastring2;
+                    for (fi3 = 0; fi3 < 3; fi3++)
+                        if (tfb == (fbpix *)fbp3[fi3]) fbi2 = fi3;
+                    if (fbi2 < 0) {
+                        for (fi3 = 0; fi3 < 3 && fbi2 < 0; fi3++)
+                            if (!fbp3[fi3]) { fbp3[fi3] = (void *)tfb; fbi2 = fi3; }
+                        if (fbi2 < 0) { fbp3[0] = (void *)tfb; fbi2 = 0;
+                                        fullpaint = 3; }
+                    }
+                    ringfbi = fbi2;
+                    /* a panel just closed: the ring page under it is stale */
+                    { int pn2 = (popen || copen || sopen) ? 1 : 0;
+                      if (panelPrev && !pn2) fullpaint = 3;
+                      panelPrev = pn2; }
+                    fastring2 = gpu_ok && !popen && !copen && !sopen &&
+                                fullpaint == 0;
+                    if (!fastring2) {
+                        blit_copy(simg, tfb, TITLE_ART_H);
+                        if (fullpaint && !popen && !copen && !sopen)
+                            fullpaint--;
+                    }
+                    /* fast frames restore art sub-rects instead - but only
+                       AFTER gpu_sync below: the geotex kernel drives the
+                       Blitter from Tom, and a 68k Blitter poke mid-kernel
+                       would interleave register state. */
+                    ringfast = fastring2; }
                   shown = page;
                   /* the 3D passport (TITLE.PSX model 71), orbiting */
                   if (gpu_ok) {
@@ -4011,17 +4108,29 @@ int main(void)
                       };
                       int it2, ord2, zi[6], px[6], py[6], pz[6], yw[6], rl[6], pt[6];
                       int rord[RING_N];
-                      /* ring rotation takes the SHORT way round the circle */
-                      { int dd = ((ringT - ringR + 128) & 255) - 128;
-                        ringR = (ringR + ((dd > 0) ? ((dd+3)>>2)
-                                                   : -(((-dd)+3)>>2))) & 255; }
+                      /* fixed-length smoothstep slew: velocity ramps up AND
+                         down (bell curve), no first-frame lurch, no 1-unit
+                         tail crawl. s = 3f^2 - 2f^3 in 0..256. */
+                      if (ringK < RING_SLEW_T) {
+                          int f6 = (++ringK * 256) / RING_SLEW_T;
+                          int s6 = (f6 * f6 * (768 - 2*f6)) >> 16;
+                          ringA = (ringS + ((ringD * s6) >> 8)) & 4095;
+                          if (ringK == RING_SLEW_T) {
+                              /* landed: statics froze at their pre-slew spots
+                                 during the motion - repaint both buffers so
+                                 the whole ring settles onto the new angle */
+                              movers[0] = page; nmov = 1;
+                              fullpaint = 3;
+                          }
+                      }
                       spin = (spin + 3) & 1023;   /* reference 11-03-33: ~3s/turn,
                                              direction re-matched */
                       for (it2 = 0; it2 < RING_N; it2++) {
                           /* angular distance of this item from the FRONT, as
-                             0 (selected) .. 256 (opposite side of the ring) */
-                          int th = ((it2*256)/RING_N - ringR) & 255;
-                          int f  = (th < 128 ? th : 256 - th) * 2;
+                             0 (selected) .. 256 (opposite side of the ring),
+                             in 1/16-unit ring precision */
+                          int th16 = ((it2*4096)/RING_N - ringA) & 4095;
+                          int f  = (th16 < 2048 ? th16 : 4096 - th16) >> 3;
                           /* LAZY SUSAN (reference video 11-03-33, 2026-08-05):
                              the PS1 ring is a FLAT CAROUSEL in depth, not a
                              vertical wheel - all items share world height;
@@ -4029,8 +4138,8 @@ int main(void)
                              higher on screen (they drift up toward the dial
                              centre exactly as in the reference). Selected sits
                              at the tuned front spot; adjacent spread wide. */
-                          int ths = (((it2*256)/RING_N - ringR + 128) & 255) - 128;
-                          int phi = ths + RING_TH0;
+                          int ths = (((it2*4096)/RING_N - ringA + 2048) & 4095) - 2048;
+                          int phi = ths + (RING_TH0 << 4);
                           const int16_t *m = mp2[it2];
                           if (f > 256) f = 256;
                           /* constants least-squares FITTED to the measured
@@ -4038,11 +4147,11 @@ int main(void)
                              points, ~10px residual): big deep carousel,
                              tilted plane (far side higher), selected ~10deg
                              past front. */
-                          px[it2] = RING_CX2 + (int)((RING_RX * SIN(phi)) >> 16);
+                          px[it2] = RING_CX2 + (int)((RING_RX * sin16q(phi)) >> 16);
                           py[it2] = RING_CY2 - (int)((RING_TY *
-                                    (65536 - COS(phi))) >> 16);
+                                    (65536 - cos16q(phi))) >> 16);
                           pz[it2] = 700 + (int)((RING_RZ *
-                                    (65536 - COS(phi))) >> 16);
+                                    (65536 - cos16q(phi))) >> 16);
                           /* per-item PERSPECTIVE scale (x256): the bake
                              re-reads ROM verts every frame so staged-vert
                              scaling is dead - nearer pz does it, px/py
@@ -4118,8 +4227,27 @@ int main(void)
                          staged, so it tore worst). The menu can afford one
                          sync per frame. */
                       { extern int gpu_sync(void); gpu_sync(); }
+                      /* Tom idle: restore the art behind this buffer's last
+                         movers, and the label band (text redraws below) */
+                      if (ringfast) {
+                          if (mrx0[ringfbi] <= mrx1[ringfbi])
+                              blit_rect(simg, (void *)tfb,
+                                        mrx0[ringfbi], mry0[ringfbi],
+                                        mrx1[ringfbi] - mrx0[ringfbi] + 1,
+                                        mry1[ringfbi] - mry0[ringfbi] + 1);
+                          blit_rect(simg, (void *)tfb,
+                                    0, RING_LBL_Y0, RENDER_W, RING_LBL_H);
+                      }
+                      /* this frame's mover screen bbox, accumulated below */
+                      { int nbx0 = RENDER_W, nby0 = TITLE_ART_H;
+                        int nbx1 = -1, nby1 = -1;
                       for (ord2 = 0; ord2 < (popen ? 1 : RING_N); ord2++) {
+                        int ismov;
                         it2 = popen ? RING_N : rord[ord2];
+                        { int mi7; ismov = 0;
+                          for (mi7 = 0; mi7 < nmov; mi7++)
+                              if (movers[mi7] == it2) ismov = 1; }
+                        if (!popen && ringfast && !ismov) continue;
                         { /* 2/3 of the elevation: full compensation un-foreshortens
                              flat covers into a STRETCHED look (user) - the
                              PS1 keeps some perspective. */
@@ -4127,6 +4255,31 @@ int main(void)
                           title_bake(rsrc[it2], rblob[it2], rvcnt[it2],
                                      yw[it2], pt[it2], rl[it2], tl2,
                                      px[it2], py[it2], pz[it2]);
+                          /* mover screen extents via the kernel's projection
+                             (camera (0,-20,0), pitch 6, focal 190, centre
+                             160/120 - the kernel_sim contract). Midpoint
+                             verts are averages and never extend the hull,
+                             so the real verts suffice. */
+                          if (!popen && ismov) {
+                              const int16_t *pv7 =
+                                  (const int16_t *)(rblob[it2]+16);
+                              int v7, cp7 = COS(6), sp7 = SIN(6);
+                              for (v7 = 0; v7 < rvcnt[it2]; v7++) {
+                                  int X7 = pv7[v7*4+0];
+                                  int Y7 = pv7[v7*4+1] - 20;
+                                  int Z7 = pv7[v7*4+2];
+                                  int Y2 = (Y7*cp7 - Z7*sp7) >> 16;
+                                  int Z2 = (Y7*sp7 + Z7*cp7) >> 16;
+                                  int sx7, sy7;
+                                  if (Z2 < 16) Z2 = 16;
+                                  sx7 = 160 + (X7*190)/Z2;
+                                  sy7 = 120 + (Y2*190)/Z2;
+                                  if (sx7 < nbx0) nbx0 = sx7;
+                                  if (sx7 > nbx1) nbx1 = sx7;
+                                  if (sy7 < nby0) nby0 = sy7;
+                                  if (sy7 > nby1) nby1 = sy7;
+                              }
+                          }
                           /* midpoint fixup: appended 4th-corner verts =
                              average of their tri's baked v0/v2 (exact -
                              midpoints commute with the affine bake). */
@@ -4143,18 +4296,20 @@ int main(void)
                                 mp[3]=255;
                             } }
 #ifdef STAGEDIET
-                          /* PAINTER'S SORT for the walkman (2026-08-06): the
-                             kernel draws faces in DATA order with no depth
-                             test. Sound is the one CONCAVE, double-sided ring
-                             item (two cups + band), so any static order shows
-                             the far cup's black interior through the near cup
-                             at half the spin angles (user capture 07-47-27).
-                             Faces are uniform QREC records here, so re-order
-                             them back-to-front each frame. The permute is
-                             PHYSICAL, so between frames of a slow spin the
-                             records stay nearly sorted and the insertion
-                             pass is close to linear. */
-                          if (it2 == 2) {
+                          /* PAINTER'S SORT (2026-08-06): the kernel draws
+                             faces in DATA order with no depth test, so any
+                             concave or double-sided item shows its far side
+                             through its near side at half the spin angles -
+                             first seen on the walkman's cups (capture
+                             07-47-27), then the sunglasses' arms folding
+                             through the lenses. Every staged item is sorted
+                             back-to-front each frame now; movers are the
+                             only items baked per frame, so the cost stays
+                             one or two sorts. Records are uniform QREC here
+                             and the permute is PHYSICAL, so between frames
+                             of a slow spin the records stay nearly sorted
+                             and the insertion pass is close to linear. */
+                          {
                               int nf5 = rnq0[it2] + rnt0[it2];
                               static uint8_t fscr[160*QREC];
                               static int16_t fkey[160];
@@ -4199,6 +4354,21 @@ int main(void)
                           gpu_geotex(rblob[it2], tfb, tcam, ratl[it2], 256u);
                         }
                       }
+                      /* remember where this buffer's movers landed (pad for
+                         interpolation slack); restored before next reuse */
+                      if (!popen) {
+                          if (nbx1 >= nbx0) {
+                              nbx0 -= 8; nby0 -= 8; nbx1 += 8; nby1 += 8;
+                              if (nbx0 < 0) nbx0 = 0;
+                              if (nby0 < 0) nby0 = 0;
+                              if (nbx1 >= RENDER_W)     nbx1 = RENDER_W - 1;
+                              if (nby1 >= TITLE_ART_H)  nby1 = TITLE_ART_H - 1;
+                              mrx0[ringfbi] = nbx0; mry0[ringfbi] = nby0;
+                              mrx1[ringfbi] = nbx1; mry1[ringfbi] = nby1;
+                          } else {
+                              mrx0[ringfbi] = 1; mrx1[ringfbi] = 0;
+                          }
+                      } }
                   }
                   /* RING LABEL + SELECT PROMPT (reference 2026-08-04): the
                      original shows the item's name bottom-centre and a
@@ -4333,6 +4503,18 @@ int main(void)
                                 RENDER_W - 6 - menu_text_width("Go Back", DVX),
                                 LHs - 2 * gh - 4, DVX, DVY, 255);
                   }
+                  /* PACE to ~10fps (2026-08-06): the dirty-rect renderer let
+                     fast frames through at 12-15fps, which RAISED total
+                     Tom+Blitter bus throughput per second and starved the
+                     DSP's sample fetches - the user heard it as choppy
+                     music. 6 fields = a 100ms floor; slow frames (slews,
+                     landing repaints) already exceed it and pay nothing.
+                     BOUNDED: frame_count only advances if the vblank ISR
+                     lives (the A10 failure mode), so cap the spin. */
+                  { static uint32_t pacef = 0;
+                    uint32_t pg = 0;
+                    while (frame_count - pacef < 6 && ++pg < 400000u) ;
+                    pacef = frame_count; }
                   video_flip();
                   video_wait_vblank();
               }
@@ -4383,9 +4565,29 @@ int main(void)
                   }
               }
               else if (!copen && !sopen && (edge & (PAD_LEFT|PAD_RIGHT))) {
-                  page = (edge & PAD_RIGHT) ? (page + 1) : (page + RING_N - 1);
-                  if (page >= RING_N) page -= RING_N;
-                  ringT = (page * 256) / RING_N;
+                  { int prevp = page, mi6, have6;
+                    page = (edge & PAD_RIGHT) ? (page + 1) : (page + RING_N - 1);
+                    if (page >= RING_N) page -= RING_N;
+                    /* retarget the slew from wherever the ring is NOW, short
+                       way round; a tap mid-flight restarts the curve there */
+                    { int dd6 = ((((page * 4096) / RING_N) - ringA + 2048)
+                                 & 4095) - 2048;
+                      if (dd6) { ringS = ringA; ringD = dd6; ringK = 0; } }
+                    /* mover set: the outgoing front joins the incoming one.
+                       Mid-flight taps accumulate (an item mid-arc must keep
+                       animating or it would vanish); overflow falls back to
+                       full repaints for the whole slew. */
+                    if (nmov == 1 && movers[0] == prevp) {
+                        movers[0] = prevp; movers[1] = page; nmov = 2;
+                    } else {
+                        have6 = 0;
+                        for (mi6 = 0; mi6 < nmov; mi6++)
+                            if (movers[mi6] == page) have6 = 1;
+                        if (!have6) {
+                            if (nmov < 4) movers[nmov++] = page;
+                            else fullpaint = RING_SLEW_T;
+                        }
+                    } }
                   spin = 0;   /* the newly selected item greets FACE-ON,
                                  then starts its turn (reference behavior) */
                   sfx_play(1, SFX_MENU_SPIN);

@@ -113,6 +113,30 @@ void blit_copy(const void *src, void *dst, int h)
     blit_wait();
 }
 
+/* blit_rect: sub-rectangle Blitter copy between two RENDER_W-wide 8bpp
+ * images (same layout both sides). The title's dirty-rect repaint uses
+ * this to restore the art behind a moving ring item without erasing the
+ * statically-cached items around it (2026-08-06). Offsets ride in the
+ * PIXEL registers so the phrase-aligned buffer bases stay legal. */
+void blit_rect(const void *src, void *dst, int x0, int y0, int w, int h)
+{
+    uint32_t xreset = ((uint32_t)(-w)) & 0xFFFFu;
+    if (w <= 0 || h <= 0)
+        return;
+    blit_wait();
+    A1_BASE  = (uint32_t)src;
+    A1_FLAGS = BLIT_PIX8 | BLIT_WID320 | BLIT_XPIX;
+    A1_PIXEL = ((uint32_t)y0 << 16) | (uint32_t)(x0 & 0xFFFF);
+    A1_STEP  = (1u << 16) | xreset;
+    A2_BASE  = (uint32_t)dst;
+    A2_FLAGS = BLIT_PIX8 | BLIT_WID320 | BLIT_XPIX;
+    A2_PIXEL = ((uint32_t)y0 << 16) | (uint32_t)(x0 & 0xFFFF);
+    A2_STEP  = (1u << 16) | xreset;
+    B_COUNT  = ((uint32_t)h << 16) | (uint32_t)w;
+    B_CMD    = BLIT_CMD_COPY | BLIT_UPDA1 | BLIT_UPDA2;
+    blit_wait();
+}
+
 #ifdef HALFRES
 /* Line-double copy: src (RENDER_W x srch, 8bpp) -> dst (RENDER_W x 2*srch).
  * Each source row k is written to dst rows 2k and 2k+1 (two Blitter copy
