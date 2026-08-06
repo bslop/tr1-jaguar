@@ -30,7 +30,25 @@ WHITE = nearest(238, 230, 222)
 GREY  = nearest(150, 150, 150)
 DGREY = nearest(90, 90, 90)
 
-PICW, PICH = 68, 76                 # the mansion picture tr2jag_title packed
+# locate the mansion picture in the extractor's atlas via the RAW blob's
+# biggest-face UV rect (the repack moved it and the old hardcoded (0,0)
+# 68x76 blitted a wrong region - black square, 2026-08-05)
+def _faces(gb, nv, nq, nt):
+    o = 16 + nv*8
+    fs = []
+    for _ in range(nq):
+        vi = struct.unpack(">HHHH", gb[o:o+8]); o += 8
+        uv = [struct.unpack(">HH", gb[o+i*4:o+i*4+4]) for i in range(4)]; o += 16
+        fs.append((vi, uv))
+    return fs
+_fs = _faces(gb, nv, nq, nt)
+def _uvarea(uv):
+    us = [u for u, v in uv]; vs = [v for u, v in uv]
+    return (max(us)-min(us))*(max(vs)-min(vs)), min(us), min(vs), max(us), max(vs)
+_best = max((_uvarea(uv) for vi, uv in _fs))
+PICX, PICY = _best[1], _best[2]
+PICW, PICH = _best[3]-_best[1]+1, _best[4]-_best[2]+1
+print("picture located at (%d,%d) %dx%d" % (PICX, PICY, PICW, PICH))
 # polaroid proportions: 84x104 with 6px border, 20px bottom margin
 FW, FH = 84, 104
 BL, BT, BR, BB = 6, 6, 6, 20
@@ -46,13 +64,15 @@ for y in range(IH):
     sy = y*PICH//IH
     for x in range(IW):
         sx = x*PICW//IW
-        na[(BT+y)*NAW + BL+x] = atl[sy*aw + sx]
-# BACK at (FW+4, 0): grey panel, darker rim
+        na[(BT+y)*NAW + BL+x] = atl[(PICY+sy)*aw + PICX+sx]
+# BACK at (FW+4, 0): WHITE like the PS1 reference (22-22-21 screencast
+# shows a bright white card back through the spin; the grey panel read
+# as a different object), light-grey rim for edge definition
 BX = FW+4
 for y in range(FH):
     for x in range(FW):
         rim = (x < 2 or y < 2 or x >= FW-2 or y >= FH-2)
-        na[y*NAW + BX+x] = DGREY if rim else GREY
+        na[y*NAW + BX+x] = GREY if rim else WHITE
 # EDGE strip at (BX+FW+4, 0) 8x8 white (already white)
 EX = BX+FW+4
 
