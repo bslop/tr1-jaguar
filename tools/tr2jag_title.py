@@ -75,6 +75,22 @@ def main():
         r5=c&31; g5=(c>>5)&31; b5=(c>>10)&31; a=(c!=0)
         return r5,g5,b5,a
 
+    if os.environ.get("PASS_TEXDUMP","0")=="1":
+        import numpy as np
+        from PIL import Image
+        idxs=[int(x) for x in os.environ.get("PASS_TEXDUMP_IDS","267,268,269,270,271,272,273").split(",")]
+        for ti_ in idxs:
+            o=objtex[ti_]
+            us=[u for u,v in o['uv']]; vs=[v for u,v in o['uv']]
+            print("objtex",ti_,"tile",o['tile'],"clut",o['clut'],"uv",o['uv'])
+            w=max(us)-min(us)+1; h=max(vs)-min(vs)+1
+            img=np.zeros((h,w,3),dtype=np.uint8)
+            for yy in range(h):
+                for xx in range(w):
+                    r5,g5,b5,a=clut_rgb555(o['clut'],tile_nibble(o['tile'],min(us)+xx,min(vs)+yy))
+                    img[yy,xx]=(r5*255//31,g5*255//31,b5*255//31)
+            Image.fromarray(img).resize((w*3,h*3),Image.NEAREST).save(
+                "/tmp/claude-1000/-home-jvilla-Documents-Git-jag-openlara/12fd0329-f0f1-4f53-8c9c-19950aeaafeb/scratchpad/ot_%d.png"%ti_)
     # ---- find the passport ----
     pm=-1
     for i in range(mc):
@@ -115,6 +131,12 @@ def main():
                   for q in quads]
         tris  += [dict(v=list(reversed(t['v'])), tex=t['tex'], colored=t['colored'], rev=1)
                   for t in tris]
+    if os.environ.get("PASS_CENSUS","0")=="1":
+        from collections import Counter
+        cq=Counter((q['tex'],q['colored']) for q in quads)
+        ct=Counter((t['tex'],t['colored']) for t in tris)
+        print("QUAD tex census:",sorted(cq.items()))
+        print("TRI  tex census:",sorted(ct.items()))
     print("verts=%d quads=%d tris=%d" % (total_v,len(quads),len(tris)))
 
     # ---- pose baker (mirrors build_lara.bake) ----
@@ -162,11 +184,15 @@ def main():
             f['tex']=ft; f['colored']=False
     # ---- mini atlas: unique textures used, shelf-packed at width 256 ----
     used=sorted(set(f['tex'] for f in quads+tris if not f['colored']))
+    # objtex entries used ONLY by tris carry a junk 4th uv corner (often
+    # (0,0)): it poisoned the packing bbox to span the whole page (the
+    # walkman atlas swallowed the passport art) - use 3 corners for them.
+    tri_only=set(f['tex'] for f in tris if not f['colored']) -              set(f['tex'] for f in quads if not f['colored'])
     tiles=[]; grp={}
     for ti in used:
         o=objtex[ti]
-        us=[p[0] for p in o['uv']]; vs=[p[1] for p in o['uv']]
-        # passport textures are quads in the title file; keep 4-corner bbox
+        cs=o['uv'][:3] if ti in tri_only else o['uv']
+        us=[p[0] for p in cs]; vs=[p[1] for p in cs]
         umin,umax,vmin,vmax=min(us),max(us),min(vs),max(vs)
         w=(umax-umin)//TEXDIV+1; h=(vmax-vmin)//TEXDIV+1
         px=[]
@@ -240,18 +266,22 @@ def main():
     print("mini atlas: 256x%d, %d tiles, %d colours mapped, %d swatches" % (ah,len(tiles),len(ncache),len(col_used)))
 
     # ---- emit NPOSE blobs ----
-    def face_uv(f):
+    def face_uv(f, tri=False):
         if f['colored']:
             cx,cy=sw_of[f['tex']]
-            return [(cx+1,cy+1),(cx+SW-2,cy+1),(cx+SW-2,cy+SW-2),(cx+1,cy+SW-2)]
+            sw4=[(cx+1,cy+1),(cx+SW-2,cy+1),(cx+SW-2,cy+SW-2),(cx+1,cy+SW-2)]
+            return sw4[:3] if tri else sw4
         g,umin,vmin=grp[f['tex']]; ax,ay=pos[g]
         uv=[(ax+(u-umin)//TEXDIV,ay+(v-vmin)//TEXDIV)
             for (u,v) in objtex[f['tex']]['uv']]
-        # PSX MESH objtex stores quad UVs in ZIG-ZAG corner order
-        # (TL,TR,BL,BR) while the kernel walks the quad PERIMETER - the
-        # crossed mapping bowtied the passport cover into a mirrored
-        # diagonal mush ('the picture on the front is not right',
-        # sim-proven A/B 2026-08-05). Swap to perimeter for quads.
+        # PSX MESH objtex stores QUAD UVs in ZIG-ZAG corner order
+        # (TL,TR,BL,BR) while the kernel walks the perimeter - swap for
+        # quads (sim-proven, the passport cover 2026-08-05). TRIANGLE
+        # entries have 3 REAL corners + a junk 4th: the blanket swap
+        # moved the junk into slot 2 and [:3] cut the real corner - the
+        # walkman's gold-speckle spots. Tris: first three corners, raw.
+        if tri:
+            return uv[:3]
         if len(uv) == 4:
             uv = [uv[0], uv[1], uv[3], uv[2]]
         return uv
@@ -278,7 +308,7 @@ def main():
             for (u,v) in uv4: b+=struct.pack(">HH",u,v)
         for t in tris:
             b+=struct.pack(">HHH", *t['v'])
-            uv3=face_uv(t)[:3]
+            uv3=face_uv(t, tri=True)
             if t.get('rev'): uv3=list(reversed(uv3))
             for (u,v) in uv3: b+=struct.pack(">HH",u,v)
         while len(b)&7: b+=b'\0'
