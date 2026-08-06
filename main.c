@@ -3974,13 +3974,13 @@ int main(void)
      these     : top 40.3%  centre (41.2%, 71.8%)  width 56.6%  tilt -4.2 deg
    Both are clipped by the bottom edge, as the original is. */
 #ifndef PASS_OPEN_X
-#define PASS_OPEN_X (-13)
+#define PASS_OPEN_X 10
 #endif
 #ifndef PASS_OPEN_Y
-#define PASS_OPEN_Y 36
+#define PASS_OPEN_Y 35
 #endif
 #ifndef PASS_OPEN_Z
-#define PASS_OPEN_Z 161
+#define PASS_OPEN_Z 240
 #endif
 /* yaw 218 / pitch 240 / roll 48: a LEVEL, symmetric, face-on two-page spread
    with the centre fold, as in the reference.
@@ -3998,7 +3998,12 @@ int main(void)
    Rz48*Rx240*Ry218, max element err 0.012). Yaw is written -34 (== 222 mod
    256) so the open lerp takes the SHORT arc - the long sweep read as
    "opens sideways" (user 2026-08-04). */
-#define PASS_OPEN_YAW (-34)
+/* RE-POSED 2026-08-06 (user ref 11-42-22): the old -34/231/67 pose was
+   fitted while the spread rendered as a WHITE OUTLINE (single-sided
+   extraction culled the page faces) - it matched silhouette, not
+   content. With PASS_DOUBLE pages visible: 0/0/58 lays the book
+   landscape, spine vertical, stamps left / photo right, PSX tilt. */
+#define PASS_OPEN_YAW 0
 #endif
 /* The CLOSED ring booklet keeps roll 0: 32/-32/224 were all tried offline and
    every one looked WORSE than what ships (it lies flatter, not more upright).
@@ -4037,7 +4042,7 @@ int main(void)
 #define PASS_PITCH 256
 #endif
 #ifndef PASS_OPEN_PITCH
-#define PASS_OPEN_PITCH 231
+#define PASS_OPEN_PITCH 0
 #endif
 #ifndef PASS_ROLL
 #define PASS_ROLL 0
@@ -4067,7 +4072,7 @@ int main(void)
 #define SND_ROLL 0
 #endif
 #ifndef PASS_OPEN_ROLL
-#define PASS_OPEN_ROLL 67
+#define PASS_OPEN_ROLL 58
 #endif
 #define PASS_OPEN_TICKS 6
 /* lazy-susan constants: least-squares fit to reference 11-03-33 item
