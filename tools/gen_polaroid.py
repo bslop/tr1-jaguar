@@ -65,14 +65,15 @@ for y in range(IH):
     for x in range(IW):
         sx = x*PICW//IW
         na[(BT+y)*NAW + BL+x] = atl[(PICY+sy)*aw + PICX+sx]
-# BACK at (FW+4, 0): WHITE like the PS1 reference (22-22-21 screencast
-# shows a bright white card back through the spin; the grey panel read
-# as a different object), light-grey rim for edge definition
+# BACK at (FW+4, 0): BLACK - the PS1 reference's between-front spin
+# phases (ph_010..ph_041, 22-22-21) show a solid black card back; the
+# white EDGE faces supply the rim light exactly like the ref's bottom
+# edge. (First read called it white - that was front-glare frames.)
+BLACK = nearest(10, 10, 12)
 BX = FW+4
 for y in range(FH):
     for x in range(FW):
-        rim = (x < 2 or y < 2 or x >= FW-2 or y >= FH-2)
-        na[y*NAW + BX+x] = GREY if rim else WHITE
+        na[y*NAW + BX+x] = BLACK
 # EDGE strip at (BX+FW+4, 0) 8x8 white (already white)
 EX = BX+FW+4
 
