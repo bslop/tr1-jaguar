@@ -3338,7 +3338,7 @@ int main(void)
                                              post-bake midpoint fixup */
           /* PASSPORT OPEN: 0 = on the ring, 1..PASS_OPEN_TICKS = opening,
              PASS_OPEN_TICKS = fully open (the page view). */
-          int popen = 0;
+          int popen = 0, prow = 0;   /* open-passport row: 0 Start, 1 Back */
           /* CONTROLS PAGE state, mirroring popen: 0 = on the ring, 1 = open.
              CTRLOPEN=1 boots straight into it so the layout can be checked
              offline in jagemu without driving the menu. */
@@ -4146,6 +4146,17 @@ int main(void)
                   /* RING LABEL + SELECT PROMPT (reference 2026-08-04): the
                      original shows the item's name bottom-centre and a
                      "Select" prompt bottom-left. Jaguar wording, TR font. */
+                  if (popen >= PASS_OPEN_TICKS) {
+                      /* open-book footer like the reference: Select prompt
+                         left, active row bottom-centre */
+                      static const char *const PROW[2] = { "Start Game", "Go Back" };
+                      const char *lb = PROW[prow];
+                      int ln = 0; while (lb[ln]) ln++;
+                      menu_text((fbpix *)tfb, RENDER_W, 240,
+                                lb, (320 - ln*8)/2, 200, 2, 2, 0);
+                      menu_text((fbpix *)tfb, RENDER_W, 240,
+                                "A Select", 10, 200, 2, 2, 0);
+                  }
                   if (!copen && !sopen && !popen) {
                       static const char *const RLBL[5] =
                           { "Game", "Screen Adjust", "Sound", "Controls",
@@ -4299,11 +4310,20 @@ int main(void)
               }
               else if (popen && popen < PASS_OPEN_TICKS) popen++;   /* run the opening */
               if (!copen && popen) {
-                  /* PAGE VIEW: A confirms and starts, B goes back to the ring
-                     (the original labels these "Start Game" and "Go Back"). */
+                  /* PAGE VIEW (PS1 ref 22-28-59): rows navigated LEFT/RIGHT
+                     with the row label bottom-centre - Start Game / Go Back
+                     (no fake Load Game: there is no save system yet). A
+                     activates the row, B always closes. */
                   if (edge & PAD_B) { popen = 0; sfx_play(1, SFX_MENU_SPIN); }
+                  else if ((edge & (PAD_LEFT | PAD_RIGHT)) &&
+                           popen >= PASS_OPEN_TICKS) {
+                      prow ^= 1; sfx_play(1, SFX_MENU_SPIN);
+                  }
                   else if ((edge & PAD_A) && popen >= PASS_OPEN_TICKS) {
-                      g_useset = 0; sfx_play(1, SFX_MENU_SHOW); break; }
+                      if (prow == 0) {
+                          g_useset = 0; sfx_play(1, SFX_MENU_SHOW); break; }
+                      popen = 0; sfx_play(1, SFX_MENU_SPIN);
+                  }
               }
               else if (!copen && !sopen && (edge & (PAD_LEFT|PAD_RIGHT))) {
                   page = (edge & PAD_RIGHT) ? (page + 1) : (page + RING_N - 1);
@@ -4314,7 +4334,7 @@ int main(void)
                   sfx_play(1, SFX_MENU_SPIN);
               }
               else if (!copen && !sopen && (edge & PAD_A)) {
-                  if (page == 0) { popen = 1;          /* the passport OPENS */
+                  if (page == 0) { popen = 1; prow = 0; /* the passport OPENS */
                                    sfx_play(1, SFX_MENU_SHOW); }
                   else if (page == 1) { /* Screen Adjust: page later */
                                         sfx_play(1, SFX_MENU_SHOW); }
