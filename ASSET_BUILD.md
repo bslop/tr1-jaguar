@@ -107,6 +107,7 @@ PASS_PREFIX=photo PASS_TYPE=73 PASS_FORCE_TEX=265 PASS_DOUBLE=1 python3 tools/tr
 PASS_PREFIX=sound PASS_TYPE=96 PASS_POSES=1 PASS_DOUBLE=1 python3 tools/tr2jag_title.py
 PASS_PREFIX=detail PASS_TYPE=95 PASS_POSES=1 PASS_DOUBLE=1 PASS_GAIN=1.55 python3 tools/tr2jag_title.py
 python3 tools/gen_polaroid.py
+python3 tools/gen_openbook.py   # REWRITES pass2_geom: model 71 is a near-closed fan, cannot show a flat spread
 ```
 
 The sunglasses (detail, type 95) need PASS_GAIN=1.55 — the PS1's lit lens

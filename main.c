@@ -3355,6 +3355,9 @@ int main(void)
              CTRLOPEN=1 boots straight into it so the layout can be checked
              offline in jagemu without driving the menu. */
           int copen = 0;
+#ifdef PASSSWEEP
+          int g_psweep = 0;
+#endif
           /* SOUND PAGE state, mirroring copen. */
           int sopen = 0, srow = 0;
           int mkick = 0;      /* unmute: re-prime the music voice (the queue
@@ -3974,13 +3977,13 @@ int main(void)
      these     : top 40.3%  centre (41.2%, 71.8%)  width 56.6%  tilt -4.2 deg
    Both are clipped by the bottom edge, as the original is. */
 #ifndef PASS_OPEN_X
-#define PASS_OPEN_X 30
+#define PASS_OPEN_X 0
 #endif
 #ifndef PASS_OPEN_Y
-#define PASS_OPEN_Y 35
+#define PASS_OPEN_Y 55
 #endif
 #ifndef PASS_OPEN_Z
-#define PASS_OPEN_Z 240
+#define PASS_OPEN_Z 205
 #endif
 /* yaw 218 / pitch 240 / roll 48: a LEVEL, symmetric, face-on two-page spread
    with the centre fold, as in the reference.
@@ -4004,7 +4007,7 @@ int main(void)
    content. With PASS_DOUBLE pages visible: yaw 128 shows the leaf
    side the PSX shows (PLAIN pale pages - the stamps/photo spread is
    the other side, ref 12-23-17 vs 11-42-22), roll 64 = straight-on. */
-#define PASS_OPEN_YAW 128
+#define PASS_OPEN_YAW 0
 #endif
 /* The CLOSED ring booklet keeps roll 0: 32/-32/224 were all tried offline and
    every one looked WORSE than what ships (it lies flatter, not more upright).
@@ -4073,7 +4076,7 @@ int main(void)
 #define SND_ROLL 0
 #endif
 #ifndef PASS_OPEN_ROLL
-#define PASS_OPEN_ROLL 64
+#define PASS_OPEN_ROLL 0
 #endif
 #define PASS_OPEN_TICKS 6
 /* lazy-susan constants: least-squares fit to reference 11-03-33 item
@@ -4224,6 +4227,9 @@ int main(void)
                           yw[RING_N] = (PASS_YAW + ((PASS_OPEN_YAW - PASS_YAW)*f2 >> 8)) & 1023;
                           zi[RING_N] = pz[RING_N];
                           rl[RING_N] = PASS_ROLL + ((PASS_OPEN_ROLL - PASS_ROLL)*f2 >> 8);
+#ifdef PASSSWEEP
+                          if (f2 == 256) rl[RING_N] = g_psweep * 32;
+#endif
                           pt[RING_N] = PASS_PITCH + ((PASS_OPEN_PITCH - PASS_PITCH)*f2 >> 8);
                       }
                       /* painter order: farthest first (no depth buffer) */
@@ -4268,6 +4274,11 @@ int main(void)
                              flat covers into a STRETCHED look (user) - the
                              PS1 keeps some perspective. */
                           int tl2 = -((27*(py[it2]-20))/pz[it2]);
+                          /* the OPEN BOOK is presented flat-frontal (PSX);
+                             the elevation tilt is a ring-spot compensation
+                             and at the low open position it slews the book
+                             ~10 deg into a diamond (silicon capture) */
+                          if (popen && it2 == RING_N) tl2 = 0;
                           title_bake(rsrc[it2], rblob[it2], rvcnt[it2],
                                      yw[it2], pt[it2], rl[it2], tl2,
                                      px[it2], py[it2], pz[it2]);
@@ -4329,8 +4340,12 @@ int main(void)
                              walkman): the passport's near-coplanar covers
                              flickered when noisy centroid keys reordered
                              them (user capture 10-42-56) - approved items
-                             keep their authored order. */
-                          if (it2 == 1 || it2 == 2) {
+                             keep their authored order. The OPEN book
+                             (RING_N) is a fanned multi-leaf: its doubled
+                             white page-block face draws LAST in data order
+                             and painted over the textured pages - the
+                             white slab of captures 12-23-17/12-34-24. */
+                          if (it2 == 1 || it2 == 2 || it2 == RING_N) {
                               int nf5 = rnq0[it2] + rnt0[it2];
                               static uint8_t fscr[160*QREC];
                               static int16_t fkey[160];
@@ -4400,6 +4415,12 @@ int main(void)
                      original shows the item's name bottom-centre and a
                      "Select" prompt bottom-left. Jaguar wording, TR font. */
                   if (popen >= PASS_OPEN_TICKS) {
+#ifdef PASSSWEEP
+                      { char sw[3]; sw[0]='P'; sw[1]=(char)('0'+g_psweep);
+                        sw[2]=0;
+                        menu_text((fbpix *)tfb, RENDER_W, 240, sw,
+                                  10, 20, 2, 2, 0); }
+#endif
                       /* open-book footer like the reference: Select prompt
                          left, active row bottom-centre */
                       static const char *const PROW[2] = { "Start Game", "Go Back" };
@@ -4556,6 +4577,20 @@ int main(void)
                  lottery", because it never renders a good frame either way.
                  Opening it late makes the transition itself the evidence. */
               { static int _co = 0; if (++_co == (CTRLOPEN) && !copen) copen = 1; }
+#endif
+#ifdef PASSOPEN
+              /* PASSOPEN=N: rig-only - open the passport after N title
+                 frames so the open-book pose can be captured hands-off
+                 (same rationale as CTRLOPEN above). */
+              { static int _po = 0;
+                if (++_po == (PASSOPEN) && !popen) { popen = 1; prow = 0; } }
+#endif
+#ifdef PASSSWEEP
+              /* rig-only: while the book is open, step g_psweep every 30
+                 frames; the draw code maps it to a pose candidate and the
+                 index is drawn on screen so captures self-identify. */
+              { static int _ps = 0;
+                if (popen && ++_ps >= 30) { _ps = 0; g_psweep = (g_psweep+1) & 7; } }
 #endif
               if (copen) {
                   /* Controls page: B returns to the ring, as "Go Back" says. */

@@ -1166,6 +1166,16 @@ ifdef CTRLOPEN
 CFLAGS   += -DCTRLOPEN=$(CTRLOPEN)
 CXXFLAGS += -DCTRLOPEN=$(CTRLOPEN)
 endif
+# PASSSWEEP=1: cycle the open-book roll every 30 frames, index on screen
+ifdef PASSSWEEP
+CFLAGS   += -DPASSSWEEP=$(PASSSWEEP)
+CXXFLAGS += -DPASSSWEEP=$(PASSSWEEP)
+endif
+# PASSOPEN=N: boot then auto-open the passport after N title frames (captures)
+ifdef PASSOPEN
+CFLAGS   += -DPASSOPEN=$(PASSOPEN)
+CXXFLAGS += -DPASSOPEN=$(PASSOPEN)
+endif
 # TITLESEL=P: auto-rotate the title ring to page P after 90 frames (captures)
 ifdef TITLESEL
 CFLAGS   += -DTITLESEL=$(TITLESEL)
