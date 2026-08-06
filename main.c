@@ -4371,7 +4371,12 @@ int main(void)
                          interpolation slack); restored before next reuse */
                       if (!popen) {
                           if (nbx1 >= nbx0) {
-                              nbx0 -= 8; nby0 -= 8; nbx1 += 8; nby1 += 8;
+                              /* 16px: the 68k-side projection is the
+                                 kernel_sim approximation of the kernel's -
+                                 8px left a white ghost sliver at the
+                                 polaroid's bottom edge (user capture
+                                 11-04-11) */
+                              nbx0 -= 16; nby0 -= 16; nbx1 += 16; nby1 += 16;
                               if (nbx0 < 0) nbx0 = 0;
                               if (nby0 < 0) nby0 = 0;
                               if (nbx1 >= RENDER_W)     nbx1 = RENDER_W - 1;
