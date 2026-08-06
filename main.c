@@ -3444,6 +3444,7 @@ int main(void)
                 have = 0; pos = 0;
                 t0 = frame_count;
                 { int acc = 0, abuf = 0, astarted = 0;
+                  int havefirst = 0, firstbuf = 0, firstlen = 0;
                 { int kfonly = (vnf >> 16) & 1; vnf &= 0xFFFF;
                 for (fi = 0; fi < vnf; fi++) {
                     uint32_t L, AL;
@@ -3483,11 +3484,27 @@ int main(void)
                        early (~2 chunks) so the whoosh isn't late. */
                     if (AL) {
                         if (g_sfx_ok) {
-                            int thr = astarted ? (4096 - (int)AL) : 1400;
+                            /* PRIME LIKE THE MUSIC BOOT (user: 'a bit of a
+                               buzz when the video starts'): the old early
+                               start armed a 132ms first batch that drained
+                               before batch two was ready - start-up
+                               stutter. Fill BOTH buffers, then arm+queue
+                               together; the clips open near-silent so the
+                               ~370ms prime is inaudible. */
+                            int thr = astarted ? (4096 - (int)AL)
+                                               : (2048 - (int)AL);
                             if (acc > thr) {
                                 if (!astarted) {
-                                    jerry_sfx(0, mbuf[abuf], (uint32_t)acc, 0);
-                                    astarted = 1;
+                                    if (!havefirst) {
+                                        firstbuf = abuf; firstlen = acc;
+                                        havefirst = 1;
+                                    } else {
+                                        extern void jerry_sfx_queue(const void*, uint32_t);
+                                        jerry_sfx(0, mbuf[firstbuf],
+                                                  (uint32_t)firstlen, 0);
+                                        jerry_sfx_queue(mbuf[abuf], (uint32_t)acc);
+                                        astarted = 1;
+                                    }
                                 } else {
                                     volatile uint32_t *ncnt =
                                         (volatile uint32_t *)0xF1C378u;
@@ -3559,9 +3576,16 @@ int main(void)
                     if (joypad_read() & (PAD_A | PAD_B | PAD_C)) break;
                 }
                 }
-                /* flush the last partial audio batch */
+                /* flush the last partial audio batch (and un-primed
+                   first batch on very short clips) */
                 if (g_sfx_ok && acc) {
-                    if (!astarted) jerry_sfx(0, mbuf[abuf], (uint32_t)acc, 0);
+                    if (!astarted && havefirst) {
+                        extern void jerry_sfx_queue(const void*, uint32_t);
+                        jerry_sfx(0, mbuf[firstbuf], (uint32_t)firstlen, 0);
+                        jerry_sfx_queue(mbuf[abuf], (uint32_t)acc);
+                        astarted = 1;
+                    }
+                    else if (!astarted) jerry_sfx(0, mbuf[abuf], (uint32_t)acc, 0);
                     else {
                         volatile uint32_t *ncnt = (volatile uint32_t *)0xF1C378u;
                         uint32_t w2;
