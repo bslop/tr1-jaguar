@@ -101,6 +101,7 @@ def main():
     print("title/loading backgrounds -> %s" % OUTDIR)
     convert("AMERTIT.RAW", "title")
     convert("GYMLOAD.RAW", "gymload")
+    convert("AZTECLOA.RAW", "cavesload")   # Peru loading art (the Caves)
 
 
 if __name__ == "__main__":

@@ -116,13 +116,16 @@ sfx_bank:
 music_bank:
 	.incbin "music.bin"
 	.balign 8
-	.globl gymload_img
-gymload_img:
-	.incbin "gymload.bin"
-	.balign 8
+	/* loading-screen IMAGES stream from SD (CAVSLOAD/GYMLOAD.BIN -
+	   76800B each was the difference between fitting the 2MB budget
+	   and smashing the 68k stack, 2026-08-06). Palettes stay resident. */
 	.globl gymload_pal
 gymload_pal:
 	.incbin "gymload_pal.bin"
+	.balign 8
+	.globl cavesload_pal
+cavesload_pal:
+	.incbin "cavesload_pal.bin"
 	.balign 8
 	.globl gym_index
 gym_index:

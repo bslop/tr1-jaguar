@@ -4766,8 +4766,42 @@ bootvid_entry:
           (void)palOff;                /* flat white text (user pref) */
           clut[255]=0xFFFE;
           clut[254]=0x0000;
-          for (py2=0; py2<LH; py2++)
-            for (px2=0; px2<RENDER_W; px2++) lfb[py2*RENDER_W+px2]=254;
+          /* PS1 LOADING ART (user 2026-08-06, ref 15-40-02): the disc's
+             region loading screens - AZTECLOA (Lara at the carved cave
+             mouth, Peru) for the Caves, GYMLOAD for Lara's Home. The
+             76800-byte images STREAM from SD (ROM had no 77KB left; the
+             bss guard tripped) in 15360B chunks (48 rows each, 512-
+             aligned), row-decimated into the panel buffer. Palettes are
+             resident. Any failure falls through to the text panel. */
+#ifndef NO_GAMEDRIVE
+          { extern const uint16_t cavesload_pal[], gymload_pal[];
+            const uint16_t *lp = g_useset ? gymload_pal : cavesload_pal;
+            static uint8_t artbuf[15360] __attribute__((aligned(4)));
+            int lh2 = -1, mi8, k8, ck;
+            for (mi8 = 0; mi8 < 2 && lh2 < 0; mi8++)
+                lh2 = gd_fopen(g_useset ? (mi8 ? "/GYMLOAD.BIN" : "GYMLOAD.BIN")
+                                        : (mi8 ? "/CAVSLOAD.BIN" : "CAVSLOAD.BIN"),
+                               GD_FOPEN_READ | GD_FOPEN_OPEN_EXISTING);
+            if (lh2 >= 0) {
+                int okart = 1;
+                for (ck = 0; ck < 5 && okart; ck++) {
+                    if (gd_fread((unsigned)lh2, artbuf, 15360u,
+                                 GD_FREAD_CPU) != 0) { okart = 0; break; }
+                    for (py2 = 0; py2 < 48; py2++) {
+                        int sy8 = ck*48 + py2;
+                        int dy8 = sy8 * LH / 240;
+                        const uint8_t *sr = artbuf + py2*320;
+                        for (px2 = 0; px2 < RENDER_W; px2++)
+                            lfb[dy8*RENDER_W+px2] = sr[px2];
+                    }
+                }
+                gd_fclose((unsigned)lh2);
+                if (okart) {
+                    for (k8 = 0; k8 < 254; k8++) clut[k8] = lp[k8];
+                    goto load_art_done;
+                }
+            } }
+#endif
           /* glyph cells are 16 wide but the INK varies (8..15 cols, left-
              aligned) — advance by ink width + a constant gap so the word
              is evenly spaced. Two passes: measure, then draw. */
@@ -4824,6 +4858,7 @@ bootvid_entry:
                   }
                 ox += inkw[gi] + 2;
             } } }
+          load_art_done: ;
           /* PROGRESS BAR (2026-07-25, user request): an empty outlined bar
              along the bottom. It is filled by load_prog() as the load runs.
              Geometry is derived from LH so it is correct in all three display
