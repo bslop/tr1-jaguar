@@ -3368,8 +3368,13 @@ int main(void)
 #else
           int ringA = 0;
 #endif
-          int ringS = ringA, ringD = 0, ringK = 4;
-#define RING_SLEW_T 4                /* frames per one-item rotation */
+          int ringS = ringA, ringD = 0, ringK = 3;
+#define RING_SLEW_T 3                /* frames per one-item rotation; slew
+                                        frames draw the WHOLE carousel (the
+                                        PSX turns everything together, user
+                                        capture 10-42-06) so each costs a
+                                        full repaint - 3 steps reads as one
+                                        continuous turn */
           /* DIRTY-RECT ring renderer (2026-08-06): the ring page was ~3fps
              because all 449 staged faces redrew every frame on a per-face-
              bound Tom. Only the MOVING items (front spinner; the swapping
@@ -3904,7 +3909,7 @@ int main(void)
                       if (panelPrev && !pn2) fullpaint = 3;
                       panelPrev = pn2; }
                     fastring2 = gpu_ok && !popen && !copen && !sopen &&
-                                fullpaint == 0;
+                                fullpaint == 0 && ringK >= RING_SLEW_T;
                     if (!fastring2) {
                         blit_copy(simg, tfb, TITLE_ART_H);
                         if (fullpaint && !popen && !copen && !sopen)
@@ -4308,8 +4313,13 @@ int main(void)
                              one or two sorts. Records are uniform QREC here
                              and the permute is PHYSICAL, so between frames
                              of a slow spin the records stay nearly sorted
-                             and the insertion pass is close to linear. */
-                          {
+                             and the insertion pass is close to linear.
+                             ONLY the concave/double-sided items (sunglasses,
+                             walkman): the passport's near-coplanar covers
+                             flickered when noisy centroid keys reordered
+                             them (user capture 10-42-56) - approved items
+                             keep their authored order. */
+                          if (it2 == 1 || it2 == 2) {
                               int nf5 = rnq0[it2] + rnt0[it2];
                               static uint8_t fscr[160*QREC];
                               static int16_t fkey[160];
