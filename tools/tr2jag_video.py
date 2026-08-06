@@ -105,7 +105,8 @@ def encode_vq():
                 for f in fr]
         def blocks(a):
             return a.reshape(H2//4, 4, W2//4, 4).transpose(0, 2, 1, 3).reshape(-1, 16)
-        allb = np.concatenate([blocks(a) for a in idxf[::2]], axis=0)
+        tstride = max(2, len(idxf) // 120)   # cap training set for long clips
+        allb = np.concatenate([blocks(a) for a in idxf[::tstride]], axis=0)
         vec = pal[allb].reshape(len(allb), -1)
         rng = np.random.default_rng(7)
         # k-means++ seeding: spread centroids by distance, not luck

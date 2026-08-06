@@ -3409,12 +3409,17 @@ int main(void)
                queues audio chunks on the DSP, paces and flips. */
             if (gpu_ok)
                 gpu_jvdec_load();
-            for (vc = 0; vc < 2; vc++) {
+            for (vc = 0; vc < 3; vc++) {
                 int vh = -1, mi2, vw, vhh, vfps, vnf, fi, remain, have, pos;
                 uint32_t t0, plen = 0;
+                /* boot flow (user 2026-08-05): EIDOS -> CORE -> the disc
+                   intro cinematic (CAFE.FMV: snake eye / dig / cafe pitch)
+                   -> title. A skips the current clip; A during the intro
+                   lands on the main menu. */
                 for (mi2 = 0; mi2 < 2 && vh < 0; mi2++)
-                    vh = gd_fopen(vc ? (mi2 ? "/CORE.JV" : "CORE.JV")
-                                     : (mi2 ? "/EIDOS.JV" : "EIDOS.JV"),
+                    vh = gd_fopen(vc == 0 ? (mi2 ? "/EIDOS.JV" : "EIDOS.JV")
+                                : vc == 1 ? (mi2 ? "/CORE.JV" : "CORE.JV")
+                                          : (mi2 ? "/INTRO.JV" : "INTRO.JV"),
                                   GD_FOPEN_READ | GD_FOPEN_OPEN_EXISTING);
                 if (vh < 0) continue;
                 /* SECTOR DISCIPLINE (silicon laws, 2026-08-05): 512-granular
