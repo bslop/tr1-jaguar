@@ -4025,7 +4025,9 @@ int main(void)
    COS(6)/SIN(6)) or its predictions do not match the kernel; calibrate it
    against real measured renders before trusting a search over it. */
 #ifndef PASS_YAW
-#define PASS_YAW 0
+/* 128 = 180 in SINTAB-effective units: the PSX greet lands with the
+   gold crest toward the viewer (ref 11-16-51); 0 greeted back-first. */
+#define PASS_YAW 128
 #endif
 /* 118 = 246 flipped 180 deg about Y. The user spotted that the ring was
    showing the BACK of the passport: the silhouette is identical either way, so
