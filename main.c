@@ -3525,8 +3525,17 @@ bootvid_entry:
                                                      (e.g. the A that chose
                                                      Start Game) must not
                                                      skip - edges only */
-                { int acc = 0, abuf = 0, astarted = 0;
-                  int havefirst = 0, firstbuf = 0, firstlen = 0;
+                { /* AUDIO RING (2026-08-06, user: "all clips hitch"):
+                     the old two-buffer scheme BLOCKED on the DSP queue
+                     slot (up to ~350ms) every ~4KB batch - a rhythmic
+                     stall in EVERY clip that the read de-judder could
+                     not touch. Six 4KB slots in mbuf (24KB = 2.2s of
+                     audio) filled ahead, queued NON-blocking whenever
+                     the slot frees; the only blocking wait left is the
+                     end-of-clip flush. */
+                  int8_t *aring = (int8_t *)mbuf;
+                  int acc = 0, wslot = 0, rslot = 0, pend = 0, astarted = 0;
+                  int alen[6];
                 { int kfonly = (vnf >> 16) & 1; vnf &= 0xFFFF;
                 for (fi = 0; fi < vnf; fi++) {
                     uint32_t L, AL;
@@ -3566,44 +3575,39 @@ bootvid_entry:
                        early (~2 chunks) so the whoosh isn't late. */
                     if (AL) {
                         if (g_sfx_ok) {
-                            /* PRIME LIKE THE MUSIC BOOT (user: 'a bit of a
-                               buzz when the video starts'): the old early
-                               start armed a 132ms first batch that drained
-                               before batch two was ready - start-up
-                               stutter. Fill BOTH buffers, then arm+queue
-                               together; the clips open near-silent so the
-                               ~370ms prime is inaudible. */
-                            int thr = astarted ? (4096 - (int)AL)
-                                               : (2048 - (int)AL);
-                            if (acc > thr) {
-                                if (!astarted) {
-                                    if (!havefirst) {
-                                        firstbuf = abuf; firstlen = acc;
-                                        havefirst = 1;
-                                    } else {
-                                        extern void jerry_sfx_queue(const void*, uint32_t);
-                                        jerry_sfx(0, mbuf[firstbuf],
-                                                  (uint32_t)firstlen, 0);
-                                        jerry_sfx_queue(mbuf[abuf], (uint32_t)acc);
-                                        astarted = 1;
-                                    }
-                                } else {
-                                    volatile uint32_t *ncnt =
-                                        (volatile uint32_t *)0xF1C378u;
-                                    uint32_t w2;
-                                    for (w2 = 0; w2 < 200000u && *ncnt; w2++)
-                                        ;
-                                    { extern void jerry_sfx_queue(const void*, uint32_t);
-                                      jerry_sfx_queue(mbuf[abuf], (uint32_t)acc); }
-                                }
-                                abuf ^= 1; acc = 0;
+                            /* close the slot when the next chunk won't fit */
+                            if (acc + (int)AL > 4096 && pend < 5) {
+                                alen[wslot] = acc; pend++;
+                                wslot = (wslot + 1) % 6; acc = 0;
                             }
-                            { int8_t *ab = mbuf[abuf] + acc;
+                            { int8_t *ab = aring + wslot*4096 + acc;
                               const uint32_t *as2 = (const uint32_t *)(vb + pos);
                               uint32_t *ad = (uint32_t *)ab;
                               uint32_t k2;
                               for (k2 = 0; k2 < AL >> 2; k2++) ad[k2] = as2[k2];
                               acc += (int)AL; }
+                            /* NON-BLOCKING service: prime with two batches
+                               (arm + queue together - the early-start buzz
+                               fix), then push one whenever the DSP slot is
+                               free. Never spins. */
+                            { volatile uint32_t *ncnt =
+                                  (volatile uint32_t *)0xF1C378u;
+                              extern void jerry_sfx_queue(const void*, uint32_t);
+                              if (!astarted) {
+                                  if (pend >= 2) {
+                                      jerry_sfx(0, aring + rslot*4096,
+                                                (uint32_t)alen[rslot], 0);
+                                      rslot = (rslot + 1) % 6; pend--;
+                                      jerry_sfx_queue(aring + rslot*4096,
+                                                      (uint32_t)alen[rslot]);
+                                      rslot = (rslot + 1) % 6; pend--;
+                                      astarted = 1;
+                                  }
+                              } else if (pend > 0 && *ncnt == 0) {
+                                  jerry_sfx_queue(aring + rslot*4096,
+                                                  (uint32_t)alen[rslot]);
+                                  rslot = (rslot + 1) % 6; pend--;
+                              } }
                         }
                         pos += (int)AL;
                     }
@@ -3708,23 +3712,29 @@ bootvid_entry:
                       vpp = vp2; }
                 }
                 }
-                /* flush the last partial audio batch (and un-primed
-                   first batch on very short clips) */
-                if (g_sfx_ok && acc) {
-                    if (!astarted && havefirst) {
-                        extern void jerry_sfx_queue(const void*, uint32_t);
-                        jerry_sfx(0, mbuf[firstbuf], (uint32_t)firstlen, 0);
-                        jerry_sfx_queue(mbuf[abuf], (uint32_t)acc);
-                        astarted = 1;
+                /* end-of-clip flush: close the partial slot, then drain
+                   the ring - blocking is fine here, the clip is over */
+                if (g_sfx_ok) {
+                    volatile uint32_t *ncnt = (volatile uint32_t *)0xF1C378u;
+                    extern void jerry_sfx_queue(const void*, uint32_t);
+                    if (acc && pend < 5) {
+                        alen[wslot] = acc; pend++;
+                        wslot = (wslot + 1) % 6; acc = 0;
                     }
-                    else if (!astarted) jerry_sfx(0, mbuf[abuf], (uint32_t)acc, 0);
-                    else {
-                        volatile uint32_t *ncnt = (volatile uint32_t *)0xF1C378u;
-                        uint32_t w2;
-                        for (w2 = 0; w2 < 200000u && *ncnt; w2++)
-                            ;
-                        { extern void jerry_sfx_queue(const void*, uint32_t);
-                          jerry_sfx_queue(mbuf[abuf], (uint32_t)acc); }
+                    while (pend > 0) {
+                        if (!astarted) {
+                            jerry_sfx(0, aring + rslot*4096,
+                                      (uint32_t)alen[rslot], 0);
+                            astarted = 1;
+                        } else {
+                            uint32_t w2;
+                            for (w2 = 0; w2 < 400000u && *ncnt; w2++)
+                                ;
+                            if (*ncnt) break;      /* DSP wedged: stop */
+                            jerry_sfx_queue(aring + rslot*4096,
+                                            (uint32_t)alen[rslot]);
+                        }
+                        rslot = (rslot + 1) % 6; pend--;
                     }
                 } } }
                 gd_fclose((unsigned)vh);
