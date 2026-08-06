@@ -4053,13 +4053,16 @@ int main(void)
 /* Sound cassette (model 96): same lying-authored convention as the others -
    stand it up with pitch, no yaw/roll until tuned against the reference. */
 #ifndef SND_YAW
-#define SND_YAW 512
+/* SINTAB is 256/turn and title_bake masks &255: 512 ALIASED TO 0 (the
+   morning's "flip" was a no-op). 128 = the real 180 - cassette door to
+   the camera (user 2026-08-06). SND_ROLL 512 was the same alias = 0. */
+#define SND_YAW 128
 #endif
 #ifndef SND_PITCH
 #define SND_PITCH 0
 #endif
 #ifndef SND_ROLL
-#define SND_ROLL 512
+#define SND_ROLL 0
 #endif
 #ifndef PASS_OPEN_ROLL
 #define PASS_OPEN_ROLL 67
