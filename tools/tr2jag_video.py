@@ -90,8 +90,10 @@ def encode_vq():
                         "-vf", ("crop=%d:%d:%d:%d,hqdn3d=4:3:12:12,fps=%d,"
                                 "scale=%dx%d:flags=lanczos")
                         % (r - l, b - t, l, t, FPS, W2, H2),
-                        os.path.join(td, "f_%04d.png")], check=True)
+                        os.path.join(td, "f_%04d.png")])
+        # no check: STR tails often carry junk sectors the demuxer trips on
         names = sorted(f for f in os.listdir(td) if f.startswith("f_"))
+        assert names, "no frames extracted"
         fr = [np.asarray(Image.open(os.path.join(td, f)).convert("RGB"),
                          dtype=np.float32) for f in names]
         print("%d frames @ %dfps (VQ %dx%d)" % (len(fr), FPS, W2, H2))

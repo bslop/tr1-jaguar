@@ -3647,9 +3647,23 @@ int main(void)
               int hdr=16+(nv+nt)*8, i3, f3;
               int len=hdr+(nq+nt)*QREC;
               uint16_t *w2; const uint16_t *s2;
+              /* per-item world scale (256 = 1.0): the PS1 reference
+                 (screencast 18-36-05) shows the closed passport at ~27%%
+                 of screen height; ours measured ~15%% - the model is
+                 authored small. 460/256 = x1.8. */
+              static const uint16_t rscale[6] = {460,256,256,256,256,256};
               if (len > (int)sizeof(rblob[0])) { nq=0; nt=0; hdr=16+nv*8; len=hdr; }
               for (i3=0;i3<16+nv*8;i3++) rblob[it2][i3]=sb[i3];
-              { const int16_t *sv=(const int16_t*)(sb+16);
+              if (rscale[it2] != 256) {
+                  int16_t *vv2 = (int16_t*)(rblob[it2]+16);
+                  int k4;
+                  for (k4 = 0; k4 < nv; k4++) {
+                      vv2[k4*4+0] = (int16_t)(((int)vv2[k4*4+0]*rscale[it2])>>8);
+                      vv2[k4*4+1] = (int16_t)(((int)vv2[k4*4+1]*rscale[it2])>>8);
+                      vv2[k4*4+2] = (int16_t)(((int)vv2[k4*4+2]*rscale[it2])>>8);
+                  }
+              }
+              { const int16_t *sv=(const int16_t*)(rblob[it2]+16);
                 int16_t *dv=(int16_t*)(rblob[it2]+16+nv*8);
                 const uint16_t *tf=(const uint16_t*)(sb+16+nv*8+nq*24);
                 for (f3=0;f3<nt;f3++){
