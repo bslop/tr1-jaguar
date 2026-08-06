@@ -97,3 +97,29 @@ so `k` steps down a real ramp like every other surface in the game.
 
 Requires `RAMP_PAL=1` (already in the recipe).  Add `LARA_COLRAMP=1` to the
 Level 1 command line above.
+
+## Title ring items (tr2jag_title.py)
+
+```
+PASS_DOUBLE=1 python3 tools/tr2jag_title.py                       # pass (71 open->closed pair)
+PASS_TYPE=71 PASS_PREFIX=pass2 python3 tools/tr2jag_title.py
+PASS_PREFIX=photo PASS_TYPE=73 PASS_FORCE_TEX=265 PASS_DOUBLE=1 python3 tools/tr2jag_title.py
+PASS_PREFIX=sound PASS_TYPE=96 PASS_POSES=1 PASS_DOUBLE=1 python3 tools/tr2jag_title.py
+PASS_PREFIX=detail PASS_TYPE=95 PASS_POSES=1 PASS_DOUBLE=1 PASS_GAIN=1.55 python3 tools/tr2jag_title.py
+python3 tools/gen_polaroid.py
+```
+
+The sunglasses (detail, type 95) need PASS_GAIN=1.55 — the PS1's lit lens
+reads (124,32,20) but the unbiased quantize picks a near-black entry and the
+lenses vanish on a CRT. The gain also drags the FRAME swatch onto the neutral
+grey ramp (246), which the PS1's frame is not — patch it back to the warm
+dark entry after extraction:
+
+```
+python3 - <<'PYEOF'
+b = bytearray(open("detail_atlas.bin","rb").read())
+for i, v in enumerate(b):
+    if v == 246: b[i] = 119        # grey -> warm dark (PS1 frame tone)
+open("detail_atlas.bin","wb").write(bytes(b))
+PYEOF
+```
