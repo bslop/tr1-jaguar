@@ -4043,17 +4043,20 @@ int main(void)
                                     (65536 - COS(phi))) >> 16);
                           pz[it2] = 700 + (int)((RING_RZ *
                                     (65536 - COS(phi))) >> 16);
-                          /* passport x1.8 (PS1 ref 18-36-05: ~27% screen
-                             height vs our ~13%): the bake re-reads ROM
-                             verts every frame, so staged-vert scaling is dead -
-                             PERSPECTIVE does it instead: nearer pz, px/py
-                             scaled alike so the screen position (and the
-                             py/pz camera tilt ratio) hold. */
-                          if (it2 == 0) {
-                              px[it2] = (px[it2] * 256) / 460;
-                              py[it2] = (py[it2] * 256) / 460;
-                              pz[it2] = (pz[it2] * 256) / 460;
-                          }
+                          /* per-item PERSPECTIVE scale (x256): the bake
+                             re-reads ROM verts every frame so staged-vert
+                             scaling is dead - nearer pz does it, px/py
+                             scaled alike so screen position (and the py/pz
+                             camera-tilt ratio) hold. Fitted against the
+                             PS1 references: passport 18-36-05 (~27% vs our
+                             13%), walkman 22-42-11 (~26% vs our 16.5%). */
+                          { static const uint16_t iscale[5] =
+                                { 460, 256, 404, 256, 256 };
+                            if (iscale[it2] != 256) {
+                                px[it2] = (px[it2] * 256) / iscale[it2];
+                                py[it2] = (py[it2] * 256) / iscale[it2];
+                                pz[it2] = (pz[it2] * 256) / iscale[it2];
+                            } }
                           /* the ORIGINAL spins the selected item a full 360
                              clockwise, showing front AND back (user reference
                              2026-08-04). Unselected items hold still. */
