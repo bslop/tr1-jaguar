@@ -34,6 +34,12 @@ PREFIXP   = os.environ.get("PASS_PREFIX", "pass")
 # 657 KB at 1:1, which alone would not fit alongside the level in 2 MB of DRAM.
 # 4 takes it to ~41 KB and is invisible at that size.
 TEXDIV    = max(1, int(os.environ.get("PASS_TEXDIV", "1")))
+# PASS_YSQUASH: vertical vert scale x1000. The PSX title displays through a
+# non-square-pixel mode, so the authored model (cover 86x143, aspect 1.66)
+# SHOWS at ~the art aspect (72x96 = 1.33) on a real PS1; our square-pixel
+# 240-line title renders the raw 1.66 - the cover art visibly stretched
+# (user 2026-08-05). 800 = x0.80 makes face aspect == art aspect.
+YSQUASH   = int(os.environ.get("PASS_YSQUASH", "1000"))
 
 def main():
     data = open(LEVEL, 'rb').read()
@@ -248,7 +254,7 @@ def main():
         # center on the bbox so the title camera can frame it blind
         xs=[v[0] for v in verts]; ys=[v[1] for v in verts]; zs=[v[2] for v in verts]
         cx=(min(xs)+max(xs))//2; cy=(min(ys)+max(ys))//2; cz=(min(zs)+max(zs))//2
-        verts=[(x-cx,y-cy,z-cz) for (x,y,z) in verts]
+        verts=[(x-cx,((y-cy)*YSQUASH)//1000,z-cz) for (x,y,z) in verts]
         if pi==0:
             print("bbox after center: X[%d..%d] Y[%d..%d] Z[%d..%d]" % (
                 min(xs)-cx,max(xs)-cx,min(ys)-cy,max(ys)-cy,min(zs)-cz,max(zs)-cz))
