@@ -102,7 +102,7 @@ Level 1 command line above.
 
 ```
 PASS_DOUBLE=1 python3 tools/tr2jag_title.py                       # pass (71 open->closed pair)
-PASS_TYPE=71 PASS_PREFIX=pass2 python3 tools/tr2jag_title.py
+PASS_TYPE=71 PASS_PREFIX=pass2 PASS_DOUBLE=1 python3 tools/tr2jag_title.py   # double-sided or the open pages cull to a white slab
 PASS_PREFIX=photo PASS_TYPE=73 PASS_FORCE_TEX=265 PASS_DOUBLE=1 python3 tools/tr2jag_title.py
 PASS_PREFIX=sound PASS_TYPE=96 PASS_POSES=1 PASS_DOUBLE=1 python3 tools/tr2jag_title.py
 PASS_PREFIX=detail PASS_TYPE=95 PASS_POSES=1 PASS_DOUBLE=1 PASS_GAIN=1.55 python3 tools/tr2jag_title.py
