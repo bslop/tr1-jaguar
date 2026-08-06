@@ -103,11 +103,14 @@ void gpu_jvdec_done(void)
     *(volatile uint32_t *)(G_PARAMS + 24) = 0;
 }
 
-int gpu_jvdec_frame(const void *prevTok, uint32_t prevLen,
+/* ASYNC split (2026-08-06, user: "make the video player less jumpy"):
+ * kick returns immediately so the 68k can run GD top-up reads inside the
+ * frame's pace window instead of serialising read -> decode -> wait. The
+ * caller must not touch the token/codebook buffers between kick and wait. */
+void gpu_jvdec_kick(const void *prevTok, uint32_t prevLen,
                     const void *curTok, uint32_t curLen,
                     const void *cb, void *fb)
 {
-    uint32_t i;
     G_CTRL = 0;
     *(volatile uint32_t *)(G_PARAMS + 0)  = (uint32_t)prevTok;
     *(volatile uint32_t *)(G_PARAMS + 4)  = prevLen;
@@ -118,6 +121,11 @@ int gpu_jvdec_frame(const void *prevTok, uint32_t prevLen,
     *(volatile uint32_t *)(G_PARAMS + 32) = 0;
     G_PC = G_SRAM;
     G_CTRL = 1;
+}
+
+int gpu_jvdec_wait(void)
+{
+    uint32_t i;
     /* sparse poll - a tight DRAM poll starves Tom (porting notes) */
     for (i = 0; i < 80000; i++) {
         volatile uint32_t d;
@@ -130,6 +138,14 @@ int gpu_jvdec_frame(const void *prevTok, uint32_t prevLen,
     }
     G_CTRL = 0;
     return 0;
+}
+
+int gpu_jvdec_frame(const void *prevTok, uint32_t prevLen,
+                    const void *curTok, uint32_t curLen,
+                    const void *cb, void *fb)
+{
+    gpu_jvdec_kick(prevTok, prevLen, curTok, curLen, cb, fb);
+    return gpu_jvdec_wait();
 }
 
 int gpu_spanfill(const uint32_t *list, uint32_t count, uint16_t *fb)

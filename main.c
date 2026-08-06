@@ -3609,7 +3609,7 @@ bootvid_entry:
                     }
                     { uint8_t *tk = vb + pos;
                       uint8_t *bb = (uint8_t *)video_backbuffer();
-                      int gok;
+                      int gok = 0, kicked = 0;
                       pos += (int)((L + 3u) & ~3u);
                       /* BACK BUFFER ONLY (user: 'a lot of flashes' - the
                          old both-buffers write hit the DISPLAYED buffer
@@ -3617,13 +3617,59 @@ bootvid_entry:
                          so apply the PREVIOUS frame's tokens first, then
                          this frame's; the display only ever shows
                          completed frames. */
+                      /* DE-JUDDER (2026-08-06, user: "a bit jumpy"): the
+                         frame used to serialise read -> decode-wait ->
+                         pace-wait, so any 24KB GD read (~125ms) blew two
+                         15fps slots and the cadence lurched. Now the
+                         tokens are STASHED first and the GPU decodes from
+                         the stash ASYNCHRONOUSLY while the pace window
+                         runs SMALL top-up reads (6KB ~= 2 fields) - the
+                         stream buffer stays full without ever stalling a
+                         frame slot. kf-only streams need no prev tokens,
+                         so the stash doubles as the decode source; the
+                         legacy two-pass path keeps the serial order. */
+                      if (kfonly) {
+                          uint32_t k2, nw = ((L + 3u) & ~3u) >> 2;
+                          const uint32_t *ts = (const uint32_t *)tk;
+                          uint32_t *td = (uint32_t *)ptk;
+                          for (k2 = 0; k2 < nw; k2++) td[k2] = ts[k2];
+                          if (gpu_ok) {
+                              gpu_jvdec_kick(ptk, 0, ptk, L, cbk, bb);
+                              kicked = 1;
+                          }
+                          /* top-up reads inside the pace window; the GPU
+                             reads ptk, so compacting vb is safe */
+                          { int dl = ((fi + 1) * 60) / vfps;
+                            for (;;) {
+                                int nowr = (int)(frame_count - t0);
+                                if (nowr >= dl) break;
+                                if (remain > 0 && have < 31488 - 512 &&
+                                    (dl - nowr) >= 3) {
+                                    if (pos) { int mv = have - pos, k3;
+                                        for (k3 = 0; k3 < mv; k3++)
+                                            vb[k3] = vb[pos + k3];
+                                        have = mv; pos = 0; }
+                                    { int want = (31488 - have) & ~511;
+                                      if (want > 6144)  want = 6144;
+                                      if (want > remain) want = remain;
+                                      if (want > 0 &&
+                                          gd_fread((unsigned)vh, vb + have,
+                                                   (unsigned)want,
+                                                   GD_FREAD_CPU) == 0) {
+                                          have += want; remain -= want;
+                                      } else remain = 0;
+                                    }
+                                }
+                            } }
+                          if (kicked) gok = gpu_jvdec_wait();
+                      } else
                       gok = gpu_ok &&
                             gpu_jvdec_frame(ptk, kfonly ? 0 : plen,
                                             tk, L, cbk, bb);
                       if (!gok) {
                           int pass;
                           for (pass = 0; pass < 2; pass++) {
-                              uint8_t *s = pass ? tk : ptk;
+                              uint8_t *s = pass ? (kfonly ? ptk : tk) : ptk;
                               uint8_t *e = s + (pass ? L : (kfonly ? 0 : plen));
                               uint8_t *dA = bb;
                               int bx = 0, left = 4800;
@@ -3646,11 +3692,13 @@ bootvid_entry:
                               }
                           }
                       }
-                      /* stash this frame's tokens for the next buffer */
-                      { uint32_t k2, nw = ((L + 3u) & ~3u) >> 2;
-                        const uint32_t *ts = (const uint32_t *)tk;
-                        uint32_t *td = (uint32_t *)ptk;
-                        for (k2 = 0; k2 < nw; k2++) td[k2] = ts[k2]; }
+                      /* stash this frame's tokens for the next buffer
+                         (the kf-only path stashed before the kick) */
+                      if (!kfonly) {
+                          uint32_t k2, nw = ((L + 3u) & ~3u) >> 2;
+                          const uint32_t *ts = (const uint32_t *)tk;
+                          uint32_t *td = (uint32_t *)ptk;
+                          for (k2 = 0; k2 < nw; k2++) td[k2] = ts[k2]; }
                       plen = L; }
                     while ((int)(frame_count - t0) < ((fi + 1) * 60) / vfps)
                         ;

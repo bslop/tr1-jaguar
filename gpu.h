@@ -43,6 +43,10 @@ void gpu_textured_kick(const uint32_t *list, uint32_t count, void *fb,
  * the room blob + camera block + atlas. room = room0_tex.bin. */
 void gpu_jvdec_load(void);
 void gpu_jvdec_done(void);
+void gpu_jvdec_kick(const void *prevTok, unsigned prevLen,
+                    const void *curTok, unsigned curLen,
+                    const void *cb, void *fb);
+int  gpu_jvdec_wait(void);
 int  gpu_jvdec_frame(const void *prevTok, unsigned prevLen,
                      const void *curTok, unsigned curLen,
                      const void *cb, void *fb);
