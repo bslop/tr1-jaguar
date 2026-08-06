@@ -4458,15 +4458,19 @@ bootvid_entry:
                      original shows the item's name bottom-centre and a
                      "Select" prompt bottom-left. Jaguar wording, TR font. */
                   if (popen >= PASS_OPEN_TICKS) {
-                      /* open-book footer like the reference: Select prompt
-                         left, active row bottom-centre */
-                      static const char *const PROW[2] = { "Start Game", "Go Back" };
+                      /* PSX rows (user 2026-08-06): the photo spread is
+                         the LOAD GAME page (not implemented yet - A is a
+                         no-op there), the plain spread is START GAME. B
+                         closes, hinted bottom-right mirroring A Select. */
+                      static const char *const PROW[2] = { "Load Game", "Start Game" };
                       const char *lb = PROW[prow];
                       int ln = 0; while (lb[ln]) ln++;
                       menu_text((fbpix *)tfb, RENDER_W, 240,
                                 lb, (320 - ln*8)/2, 200, 2, 2, 0);
                       menu_text((fbpix *)tfb, RENDER_W, 240,
                                 "A Select", 10, 200, 2, 2, 0);
+                      menu_text((fbpix *)tfb, RENDER_W, 240,
+                                "B Back", 320 - 10 - 6*8, 200, 2, 2, 0);
                   }
                   if (!copen && !sopen && !popen) {
                       static const char *const RLBL[5] =
@@ -4620,7 +4624,7 @@ bootvid_entry:
                  frames so the open-book pose can be captured hands-off
                  (same rationale as CTRLOPEN above). */
               { static int _po = 0;
-                if (++_po == (PASSOPEN) && !popen) { popen = 1; prow = 0; panim = 0; } }
+                if (++_po == (PASSOPEN) && !popen) { popen = 1; prow = 1; panim = 128; } }
 #endif
 #ifdef PASSSWEEP
               /* rig-only: while the book is open, step g_psweep every 30
@@ -4657,7 +4661,7 @@ bootvid_entry:
                       prow ^= 1; sfx_play(1, SFX_MENU_SPIN);
                   }
                   else if ((edge & PAD_A) && popen >= PASS_OPEN_TICKS) {
-                      if (prow == 0) {
+                      if (prow == 1) {
                           g_useset = 0; sfx_play(1, SFX_MENU_SHOW);
 #if !defined(NO_GAMEDRIVE) && defined(BOOTVID)
                           /* the caves intro cinematic plays between the
@@ -4668,7 +4672,8 @@ bootvid_entry:
                           break;
 #endif
                       }
-                      popen = 0; sfx_play(1, SFX_MENU_SPIN);
+                      else sfx_play(1, SFX_MENU_SPIN);   /* Load Game: no
+                                 saves yet - acknowledge, stay open */
                   }
               }
               else if (!copen && !sopen && (edge & (PAD_LEFT|PAD_RIGHT))) {
@@ -4700,7 +4705,7 @@ bootvid_entry:
                   sfx_play(1, SFX_MENU_SPIN);
               }
               else if (!copen && !sopen && (edge & PAD_A)) {
-                  if (page == 0) { popen = 1; prow = 0; panim = 0; /* the passport OPENS */
+                  if (page == 0) { popen = 1; prow = 1; panim = 128; /* opens on START GAME */
                                    sfx_play(1, SFX_MENU_SHOW); }
                   else if (page == 1) { /* Screen Adjust: page later */
                                         sfx_play(1, SFX_MENU_SHOW); }
