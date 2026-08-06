@@ -65,15 +65,18 @@ for y in range(IH):
     for x in range(IW):
         sx = x*PICW//IW
         na[(BT+y)*NAW + BL+x] = atl[(PICY+sy)*aw + PICX+sx]
-# BACK at (FW+4, 0): BLACK - the PS1 reference's between-front spin
-# phases (ph_010..ph_041, 22-22-21) show a solid black card back; the
-# white EDGE faces supply the rim light exactly like the ref's bottom
-# edge. (First read called it white - that was front-glare frames.)
+# BACK at (FW+4, 0): the WHITE CARD with a BLACK INNER WINDOW - real
+# instant film seen from behind: the black development backing shows
+# through the same window geometry as the front (thin borders, fat
+# bottom), white frame all around. (v1 grey and v2 all-white and v3
+# all-black were each "not entirely correct" - user + enhanced ref
+# frames ph_012/013 settled it, 2026-08-05.)
 BLACK = nearest(10, 10, 12)
 BX = FW+4
 for y in range(FH):
     for x in range(FW):
-        na[y*NAW + BX+x] = BLACK
+        inner = (BL <= x < FW-BR) and (BT <= y < FH-BB)
+        na[y*NAW + BX+x] = BLACK if inner else WHITE
 # EDGE strip at (BX+FW+4, 0) 8x8 white (already white)
 EX = BX+FW+4
 
