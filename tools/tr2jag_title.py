@@ -245,8 +245,16 @@ def main():
             cx,cy=sw_of[f['tex']]
             return [(cx+1,cy+1),(cx+SW-2,cy+1),(cx+SW-2,cy+SW-2),(cx+1,cy+SW-2)]
         g,umin,vmin=grp[f['tex']]; ax,ay=pos[g]
-        return [(ax+(u-umin)//TEXDIV,ay+(v-vmin)//TEXDIV)
-                for (u,v) in objtex[f['tex']]['uv']]
+        uv=[(ax+(u-umin)//TEXDIV,ay+(v-vmin)//TEXDIV)
+            for (u,v) in objtex[f['tex']]['uv']]
+        # PSX MESH objtex stores quad UVs in ZIG-ZAG corner order
+        # (TL,TR,BL,BR) while the kernel walks the quad PERIMETER - the
+        # crossed mapping bowtied the passport cover into a mirrored
+        # diagonal mush ('the picture on the front is not right',
+        # sim-proven A/B 2026-08-05). Swap to perimeter for quads.
+        if len(uv) == 4:
+            uv = [uv[0], uv[1], uv[3], uv[2]]
+        return uv
     blob=bytearray(); offs=[]
     for pi in range(NPOSE):
         fidx=(pi*(nframes-1))//max(1,NPOSE-1)
