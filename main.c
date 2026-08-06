@@ -3951,13 +3951,13 @@ int main(void)
 /* Sound cassette (model 96): same lying-authored convention as the others -
    stand it up with pitch, no yaw/roll until tuned against the reference. */
 #ifndef SND_YAW
-#define SND_YAW 0
+#define SND_YAW 512
 #endif
 #ifndef SND_PITCH
-#define SND_PITCH 192
+#define SND_PITCH 0
 #endif
 #ifndef SND_ROLL
-#define SND_ROLL 0
+#define SND_ROLL 512
 #endif
 #ifndef PASS_OPEN_ROLL
 #define PASS_OPEN_ROLL 67
@@ -4142,6 +4142,60 @@ int main(void)
                                 mp[2]=(int16_t)((bv[a4+2]+bv[c4+2])>>1);
                                 mp[3]=255;
                             } }
+#ifdef STAGEDIET
+                          /* PAINTER'S SORT for the walkman (2026-08-06): the
+                             kernel draws faces in DATA order with no depth
+                             test. Sound is the one CONCAVE, double-sided ring
+                             item (two cups + band), so any static order shows
+                             the far cup's black interior through the near cup
+                             at half the spin angles (user capture 07-47-27).
+                             Faces are uniform QREC records here, so re-order
+                             them back-to-front each frame. The permute is
+                             PHYSICAL, so between frames of a slow spin the
+                             records stay nearly sorted and the insertion
+                             pass is close to linear. */
+                          if (it2 == 2) {
+                              int nf5 = rnq0[it2] + rnt0[it2];
+                              static uint8_t fscr[160*QREC];
+                              static int16_t fkey[160];
+                              static uint8_t ford[160];
+                              if (nf5 <= 160) {
+                                  uint8_t *fb5 = rblob[it2] + 16 +
+                                                 (rnv0[it2]+rnt0[it2])*8;
+                                  const int16_t *bv5 =
+                                      (const int16_t *)(rblob[it2]+16);
+                                  int f5, g5;
+                                  for (f5 = 0; f5 < nf5; f5++) {
+                                      const uint16_t *fw5 = (const uint16_t *)
+                                          (fb5 + f5*QREC) + LPLANE_PREFIX/2;
+                                      fkey[f5] = (int16_t)
+                                          ((bv5[fw5[0]*4+2] + bv5[fw5[1]*4+2] +
+                                            bv5[fw5[2]*4+2] + bv5[fw5[3]*4+2]) >> 2);
+                                      ford[f5] = (uint8_t)f5;
+                                  }
+                                  for (f5 = 1; f5 < nf5; f5++) {
+                                      uint8_t k5 = ford[f5];
+                                      int16_t kk5 = fkey[k5];
+                                      for (g5 = f5; g5 > 0 &&
+                                           fkey[ford[g5-1]] < kk5; g5--)
+                                          ford[g5] = ford[g5-1];
+                                      ford[g5] = k5;
+                                  }
+                                  for (f5 = 0; f5 < nf5; f5++) {
+                                      const uint16_t *sp5 = (const uint16_t *)
+                                          (fb5 + ford[f5]*QREC);
+                                      uint16_t *dp5 = (uint16_t *)
+                                          (fscr + f5*QREC);
+                                      for (g5 = 0; g5 < QREC/2; g5++)
+                                          dp5[g5] = sp5[g5];
+                                  }
+                                  { uint16_t *d5 = (uint16_t *)fb5;
+                                    const uint16_t *s5 = (const uint16_t *)fscr;
+                                    for (f5 = 0; f5 < nf5*(QREC/2); f5++)
+                                        d5[f5] = s5[f5]; }
+                              }
+                          }
+#endif
                           gpu_geotex(rblob[it2], tfb, tcam, ratl[it2], 256u);
                         }
                       }
