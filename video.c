@@ -427,6 +427,18 @@ static void point_op_at_list(void)
 
 /* Called from the asm stub in startup.S at every vertical interrupt,
  * which fires just before the display field starts. */
+#ifdef PADVID
+#define PV_STR2(x) #x
+#define PV_STR(x) PV_STR2(x)
+/* PADVID=N (2026-08-07): shift the ISR handler WITHIN video.o - the
+   HANGDIAG-boots clue suggests the A10-critical position is internal
+   to video.o, which whole-object pads (PADMAIN) cannot move. */
+__attribute__((used, noinline)) void pad_video_probe(void)
+{
+    __asm__ volatile(".space " PV_STR(PADVID));
+}
+#endif
+
 void vblank_handler(void)
 {
 #if defined(BEACON_AT) && BEACON_AT == 11

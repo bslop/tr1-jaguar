@@ -1171,6 +1171,11 @@ ifdef PASSSWEEP
 CFLAGS   += -DPASSSWEEP=$(PASSSWEEP)
 CXXFLAGS += -DPASSSWEEP=$(PASSSWEEP)
 endif
+# PADVID=N: shift the ISR handler within video.o (A10 internal-position roll)
+ifdef PADVID
+CFLAGS   += -DPADVID=$(PADVID)
+CXXFLAGS += -DPADVID=$(PADVID)
+endif
 # PADMAIN=N: intra-main.o layout roll (A10 shifts PADTEXT cannot reach)
 ifdef PADMAIN
 CFLAGS   += -DPADMAIN=$(PADMAIN)
