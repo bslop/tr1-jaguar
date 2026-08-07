@@ -126,7 +126,18 @@ void gpu_jvdec_kick(const void *prevTok, uint32_t prevLen,
                     const void *curTok, uint32_t curLen,
                     const void *cb, void *fb)
 {
+    uint32_t s9;
     G_CTRL = 0;
+    /* KICK STOP-SETTLE (2026-08-07, user: "STOP USING THE 68000"): the
+       load got the settle but the KICK never did - if Tom is not fully
+       halted when G_PC is written, the write DROPS and G_CTRL=1 resumes
+       the OLD kernel: the exact silent no-hello signature. Rewrite the
+       stop and read back until GPUGO clears, then drain. */
+    for (s9 = 0; s9 < 10000; s9++) {
+        if ((G_CTRL & 1u) == 0) break;
+        G_CTRL = 0;
+    }
+    { volatile uint32_t d9; for (d9 = 0; d9 < 2000; d9++) ; }
     /* DONE/HELLO handshake moved to the DRAM mailbox (2026-08-07): the 68k
        cannot reliably read GPU SRAM while the GPU is running, so polling
        PARAMS+32 timed out on EVERY frame on silicon and all video was

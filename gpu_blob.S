@@ -23,13 +23,19 @@ gpu_kernel:
 gpu_kernel_end:
 
 /* JV02 boot-FMV decoder kernel (BOOTVID; loaded only while the logos
- * play, then the title's kernel_select reloads the renderer). */
+ * play, then the title's kernel_select reloads the renderer).
+ * ★ 2026-08-07: lives in .data (DRAM after crt0's init copy), NOT .rodata
+ * (GameDrive-served ROM) - if GD ROM reads flake in some contexts, both
+ * the SRAM copy source AND the verify reference were poisoned together.
+ * From DRAM, neither can be. */
+	.section .data
 	.balign	4
 	.globl	gpu_jvdec_kernel
 	.globl	gpu_jvdec_kernel_end
 gpu_jvdec_kernel:
 	.incbin	"build/gpu_jvdec.bin"
 gpu_jvdec_kernel_end:
+	.section .rodata
 
 /* GPU-driven Blitter probe kernel (BLITPROBE builds use it; embedding it
  * unconditionally keeps this file free of extra flag plumbing). */
