@@ -3660,32 +3660,27 @@ bootvid_entry:
                               gpu_jvdec_kick(ptk, 0, ptk, L, cbk, bb);
                               kicked = 1;
                           }
-                          /* WINDOW-SIZED top-up while the GPU decodes:
-                             sized to the fields left before this frame's
-                             slot (~2.8KB/field, one field of safety) so it
-                             ALWAYS runs - the fixed-6KB gate starved and
-                             the frame-top 24KB read (125ms) chopped 1-in-6
-                             frames (measured, cadence.mp4). */
-                          { int dl = ((fi + 1) * 60) / vfps;
-                            int nowr = (int)(frame_count - t0);
-                            int wfld = dl - nowr;
-                            if (remain > 0 && have < 31488 - 512 && wfld >= 2) {
-                                int want = (31488 - have) & ~511;
-                                int cap  = ((wfld - 1) * 2816) & ~511;
-                                if (want > cap)    want = cap;
-                                if (want > remain) want = remain;
-                                if (want > 0) {
-                                    if (pos) { int mv = have - pos, k3;
-                                        for (k3 = 0; k3 < mv; k3++)
-                                            vb[k3] = vb[pos + k3];
-                                        have = mv; pos = 0; }
-                                    if (gd_fread((unsigned)vh, vb + have,
-                                                 (unsigned)want,
-                                                 GD_FREAD_CPU) == 0) {
-                                        have += want; remain -= want;
-                                    } else remain = 0;
-                                }
-                            } }
+                          /* BULK low-water refill: with the ISR presenting
+                             frames at their scheduled fields (video_pend_at)
+                             the cadence is immune to 68k stalls, so reads
+                             go back to the GD's efficient size. Runs while
+                             the GPU decodes. */
+                          if (remain > 0 && have - pos < 12288) {
+                              int want;
+                              if (pos) { int mv = have - pos, k3;
+                                  for (k3 = 0; k3 < mv; k3++)
+                                      vb[k3] = vb[pos + k3];
+                                  have = mv; pos = 0; }
+                              want = (31488 - have) & ~511;
+                              if (want > 24576) want = 24576;
+                              if (want > remain) want = remain;
+                              if (want > 0 &&
+                                  gd_fread((unsigned)vh, vb + have,
+                                           (unsigned)want,
+                                           GD_FREAD_CPU) == 0) {
+                                  have += want; remain -= want;
+                              } else remain = 0;
+                          }
                           if (kicked) gok = gpu_jvdec_wait();
                       } else
                       gok = gpu_ok &&
@@ -3727,10 +3722,11 @@ bootvid_entry:
                       plen = L; }
                     { int tgt = ((fi + 1) * 60) / vfps;
                       if (tgt < dprev + 60 / vfps) tgt = dprev + 60 / vfps;
-                      while ((int)(frame_count - t0) < tgt)
-                          ;
-                      dprev = (int)(frame_count - t0);
-                      if (dprev < tgt) dprev = tgt; }
+                      /* HARDWARE-TIMED presentation: the ISR shows this
+                         frame at exactly t0+tgt; video_flip's own entry
+                         wait (pending clear) paces the loop. */
+                      video_pend_at = t0 + (uint32_t)tgt;
+                      dprev = tgt; }
                     video_flip();
                     { uint32_t vp2 = joypad_read();
                       if (vp2 & ~vpp & (PAD_A | PAD_B | PAD_C)) break;
@@ -3770,6 +3766,7 @@ bootvid_entry:
                 } } } }
                 gd_fclose((unsigned)vh);
             }
+            video_pend_at = 0;     /* every later flip is immediate again */
             if (gpu_ok)
                 gpu_jvdec_done();   /* restore the init-once kernel params
                                        (mailbox ptr) the video block used */

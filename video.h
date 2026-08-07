@@ -51,6 +51,7 @@ void      video_set_clut(const uint16_t *pal);  /* FB8: load OP CLUT      */
 void      video_wait_vblank(void);  /* block until the next vblank        */
 
 extern volatile uint32_t frame_count;
+extern volatile uint32_t video_pend_at;
 
 void video_dump_oplist(void);   /* dump OP list to skunk console (debug) */
 

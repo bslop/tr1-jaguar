@@ -121,6 +121,12 @@ volatile uint32_t frame_count;
 FLIPSTATIC fbpix *draw_buf;               /* CPU renders here                    */
 OPSTATIC uint32_t front_fb;           /* what the OP displays                */
 OPSTATIC volatile uint32_t pending_fb;/* buffer the ISR should show, 0=none  */
+/* VIDEO PLAYER PRESENTATION SCHEDULE (2026-08-06): the ISR performs a
+   pending flip only once frame_count reaches this field. Zero = always
+   due (every existing caller). The FMV player sets it per frame so the
+   cadence is HARDWARE-timed and immune to 68k read stalls; it must be
+   reset to 0 when the player exits. */
+OPSTATIC volatile uint32_t video_pend_at;
 
 /* FAST OP-LIST REPAIR (plain unscaled object only). The OP destroys ONLY
  * phrase 0 of the bitmap object (data ptr / ypos / height) as it draws; the
@@ -442,7 +448,7 @@ void vblank_handler(void)
 #if !(defined(LOWRES) && !defined(HALFRES))
     /* fast path: restore ONLY the OP-destroyed phrase — 2 stores, no calls.
        Flip values were precomputed in video_flip, outside the ISR. */
-    if (pf) {
+    if (pf && (int32_t)(frame_count - video_pend_at) >= 0) {
         op_list[0] = pend_fix0;
         op_list[1] = pend_fix1;
         op_fix0 = pend_fix0;
@@ -465,7 +471,7 @@ void vblank_handler(void)
        by disassembly). Indexed is the cheaper phrasing here; ~60 instructions
        total is still ~6x below the rebuild this replaces, and the probe showed
        that rebuild overshooting the VC-32 fetch by only 1-3 half-lines. */
-    if (pf) {
+    if (pf && (int32_t)(frame_count - video_pend_at) >= 0) {
         op_fix0 = pend_fix0;
         front_fb = pf;
         pending_fb = 0;
@@ -685,7 +691,7 @@ void video_flip_force(void)
       uint32_t v = *(volatile uint32_t *)0x100u;
       hang_beacon(v == (uint32_t)&vblank_stub ? 0x003E : 0xF800); }
 #endif
-    if (pf) {
+    if (pf && (int32_t)(frame_count - video_pend_at) >= 0) {
         op_fix0 = pend_fix0;
         front_fb = pf;
         pending_fb = 0;
