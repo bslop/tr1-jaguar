@@ -1341,3 +1341,9 @@ endif
 ifdef VR_LIVEPANEL
 CFLAGS   += -DVR_LIVEPANEL
 endif
+
+# VR_MAXF=N: play only the first N frames of the clip, then hold. INTRO and
+# CAVES are ~104s each and a roll should not cost two minutes of rig time.
+ifdef VR_MAXF
+CFLAGS   += -DVR_MAXF=$(VR_MAXF)
+endif

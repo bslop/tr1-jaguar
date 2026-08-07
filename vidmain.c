@@ -29,6 +29,7 @@
  *   VR_NO68K     never fall back to the 68k token walk - a failed Tom decode
  *                stays visible instead of being papered over
  *   VR_CLIP      "EIDOS.JV" (default), "CORE.JV", "INTRO.JV", "CAVES.JV"
+ *   VR_MAXF      stop after N frames (long clips; averages stay representative)
  *
  * The read-out is drawn by hand into the top-left of every frame (and onto a
  * hold screen before the clip opens, so a dead GD still yields data):
@@ -390,6 +391,12 @@ static int play_clip(const char *name)
     vfps = (vb[8] << 8) | vb[9];
     vnf  = (vb[10] << 8) | vb[11];
     if (vw != 320 || vhh != 240 || vfps <= 0) { gd_fclose((unsigned)vh); return 0; }
+#ifdef VR_MAXF
+    /* stop after N frames: INTRO and CAVES are ~104s each, and waiting out a
+       full clip per roll makes the harness as slow as the game builds it
+       replaced. The averages over 300 frames are representative. */
+    if (vnf > VR_MAXF) vnf = VR_MAXF;
+#endif
     video_set_clut((const uint16_t *)(vb + 16));
     clut_markers();
     d_stage = 5;
