@@ -52,6 +52,7 @@ void      video_wait_vblank(void);  /* block until the next vblank        */
 
 extern volatile uint32_t frame_count;
 extern volatile uint32_t video_pend_at;
+extern volatile uint32_t pending_fb;
 
 void video_dump_oplist(void);   /* dump OP list to skunk console (debug) */
 

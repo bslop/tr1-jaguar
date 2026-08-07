@@ -1171,6 +1171,11 @@ ifdef PASSSWEEP
 CFLAGS   += -DPASSSWEEP=$(PASSSWEEP)
 CXXFLAGS += -DPASSSWEEP=$(PASSSWEEP)
 endif
+# VIDCAD=1: per-frame parity block in the FMV for cadence measurement
+ifdef VIDCAD
+CFLAGS   += -DVIDCAD=$(VIDCAD)
+CXXFLAGS += -DVIDCAD=$(VIDCAD)
+endif
 # PASSTART=N: press A on the open book N frames later (captures)
 ifdef PASSTART
 CFLAGS   += -DPASSTART=$(PASSTART)

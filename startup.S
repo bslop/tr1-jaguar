@@ -233,6 +233,16 @@ vblank_stub:
 	| by then the deadline is already met.
 	move.l	pending_fb,%d0
 	beq.s	2f
+	| FMV presentation schedule (video.c video_pend_at): 0 = due now
+	| (every non-player flip, 3-word cost); else hold the frame until
+	| frame_count reaches the scheduled field - the player's cadence is
+	| hardware-timed and immune to 68k read stalls (2026-08-06).
+	tst.l	video_pend_at
+	beq.s	7f
+	move.l	frame_count,%d1
+	sub.l	video_pend_at,%d1
+	bmi.s	2f			| early: keep showing the current frame
+7:
 	move.l	pend_fix0,%d1		| flip: adopt the queued buffer now
 	move.l	%d1,op_fix0
 #ifdef OPMOVEM

@@ -3515,6 +3515,10 @@ bootvid_entry:
                   if (kfonly) vnf |= 0x10000; }
                 if (vw != 320 || vhh != 240 || vfps <= 0) vnf = 0;
                 video_set_clut((const uint16_t *)(vb + 16));
+#ifdef VIDCAD
+                { volatile uint16_t *cl9=(volatile uint16_t*)0xF00400u;
+                  cl9[254]=0x0000; cl9[255]=0xFFFE; }
+#endif
                 if (gd_fread((unsigned)vh, cbk, 4096, GD_FREAD_CPU) != 0) {
                     gd_fclose((unsigned)vh); continue;
                 }
@@ -3682,6 +3686,15 @@ bootvid_entry:
                               } else remain = 0;
                           }
                           if (kicked) gok = gpu_jvdec_wait();
+#ifdef VIDCAD
+                          /* cadence ground truth: 16x8 parity block the
+                             capture rig reads - immune to clip content */
+                          { uint8_t *cb8 = (uint8_t *)bb; int y8, x8;
+                            uint8_t v8 = (fi & 1) ? 255 : 254;
+                            for (y8 = 0; y8 < 8; y8++)
+                                for (x8 = 0; x8 < 16; x8++)
+                                    cb8[y8*320 + x8] = v8; }
+#endif
                       } else
                       gok = gpu_ok &&
                             gpu_jvdec_frame(ptk, kfonly ? 0 : plen,
@@ -3720,11 +3733,17 @@ bootvid_entry:
                           uint32_t *td = (uint32_t *)ptk;
                           for (k2 = 0; k2 < nw; k2++) td[k2] = ts[k2]; }
                       plen = L; }
-                    { int tgt = ((fi + 1) * 60) / vfps;
+                    { int tgt, nowr;
+                      /* previous frame consumed AT ITS FIELD first, so the
+                         schedule anchors to ACTUAL display times - v6
+                         anchored to virtual time and burst at 33ms once
+                         late (measured, cadence6) */
+                      while (pending_fb)
+                          ;
+                      nowr = (int)(frame_count - t0);
+                      tgt = ((fi + 1) * 60) / vfps;
                       if (tgt < dprev + 60 / vfps) tgt = dprev + 60 / vfps;
-                      /* HARDWARE-TIMED presentation: the ISR shows this
-                         frame at exactly t0+tgt; video_flip's own entry
-                         wait (pending clear) paces the loop. */
+                      if (tgt < nowr + 1)          tgt = nowr + 1;
                       video_pend_at = t0 + (uint32_t)tgt;
                       dprev = tgt; }
                     video_flip();
