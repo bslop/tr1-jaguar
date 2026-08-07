@@ -3611,8 +3611,20 @@ bootvid_entry:
                                       astarted = 1;
                                   }
                               } else if (pend > 0 && *ncnt == 0) {
-                                  jerry_sfx_queue(aring + rslot*4096,
-                                                  (uint32_t)alen[rslot]);
+                                  /* ☠️ a queue NEVER restarts an idle
+                                     voice (music-engine law): after any
+                                     stall > the DSP's ~744ms of buffered
+                                     audio (clip transitions!), the voice
+                                     dies and stays dead - RE-ARM when
+                                     V0_CNT reads 0 */
+                                  volatile uint32_t *vcnt =
+                                      (volatile uint32_t *)0xF1C340u;
+                                  if (*vcnt == 0)
+                                      jerry_sfx(0, aring + rslot*4096,
+                                                (uint32_t)alen[rslot], 0);
+                                  else
+                                      jerry_sfx_queue(aring + rslot*4096,
+                                                      (uint32_t)alen[rslot]);
                                   rslot = (rslot + 1) % 6; pend--;
                               } }
                         }
@@ -3740,12 +3752,18 @@ bootvid_entry:
                                       (uint32_t)alen[rslot], 0);
                             astarted = 1;
                         } else {
+                            volatile uint32_t *vcnt =
+                                (volatile uint32_t *)0xF1C340u;
                             uint32_t w2;
                             for (w2 = 0; w2 < 400000u && *ncnt; w2++)
                                 ;
                             if (*ncnt) break;      /* DSP wedged: stop */
-                            jerry_sfx_queue(aring + rslot*4096,
-                                            (uint32_t)alen[rslot]);
+                            if (*vcnt == 0)
+                                jerry_sfx(0, aring + rslot*4096,
+                                          (uint32_t)alen[rslot], 0);
+                            else
+                                jerry_sfx_queue(aring + rslot*4096,
+                                                (uint32_t)alen[rslot]);
                         }
                         rslot = (rslot + 1) % 6; pend--;
                     }
