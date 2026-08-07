@@ -5145,48 +5145,14 @@ bootvid_entry:
           { extern void video_set_disp240(int); extern void gpu_kernel_select(int);
             video_set_disp240(0); gpu_kernel_select(0); }
 #ifdef VIDDIAG
-          /* CONTEXT PROBE v2 (2026-08-07, Tom campaign): three experiments
-             at game entry, where kernel loads PROVABLY work. Overlay paints
-             J<a><b>V<n>: a = micro-kernel ran after a standard load (1/2),
-             b = ran after a verify-retry load (1/2), n = verify mismatch
-             bucket (0 = SRAM held the bytes). v1 reboot-looped because
-             kernel_select(0) no-op'd on a stale tracker - now dirtied. */
+/* CONTEXT PROBE v3 (lean): ONLY the SRAM reliability test -
+             v2's kernel/display experiments wedged the entry. Bounded
+             ops, no kernel touches, no mode flips. */
           { extern int gpu_sync(void);
-            extern void gpu_kernel_select(int);
-            extern void gpu_kernel_dirty(void);
-            extern uint32_t gpu_jvdec_hello(void);
-            extern uint32_t gpu_jvdec_verify(void);
-            uint32_t spin2; int tries;
+            extern uint32_t gpu_sram_test(void);
             gpu_sync();
-            { extern uint32_t gpu_sram_test(void); g_sr[3] = gpu_sram_test(); }
-            gpu_jvdec_load();
-            g_jv_vfy = gpu_jvdec_verify();
-            gpu_jvdec_kick((void *)0, 0, (void *)0, 0, (void *)0, (void *)0);
-            for (spin2 = 0; spin2 < 20000; spin2++) {
-                volatile int d2; for (d2 = 0; d2 < 20; d2++) ;
-                if (gpu_jvdec_hello() == 0x0A3D0001u) break;
-            }
-            g_jvmin_game = (gpu_jvdec_hello() == 0x0A3D0001u) ? 1 : 2;
-            *(volatile uint32_t *)0xF02114u = 0;   /* stop Tom */
-            for (tries = 0; tries < 8 && gpu_jvdec_verify(); tries++)
-                gpu_jvdec_load();                  /* retry until bytes hold */
-            gpu_jvdec_kick((void *)0, 0, (void *)0, 0, (void *)0, (void *)0);
-            for (spin2 = 0; spin2 < 20000; spin2++) {
-                volatile int d2; for (d2 = 0; d2 < 20; d2++) ;
-                if (gpu_jvdec_hello() == 0x0A3D0001u) break;
-            }
-            g_jvmin2 = (gpu_jvdec_hello() == 0x0A3D0001u) ? 1 : 2;
-            *(volatile uint32_t *)0xF02114u = 0;
-            /* experiment 3: is DISP240 the saboteur? boot videos have no
-               music, yet their loads fail - the one structural difference
-               left vs this working context is the 240-line display mode. */
-            { extern void video_set_disp240(int);
-              video_set_disp240(1);
-              gpu_jvdec_load();
-              g_jv_d240 = gpu_jvdec_verify() ? 2 : 1;
-              video_set_disp240(0); }
-            gpu_kernel_dirty();
-            gpu_kernel_select(0); }   /* game kernel FORCED back */
+            g_sr[3] = gpu_sram_test();
+            g_jvmin_game = 3; }   /* 3 = lean probe ran (no J run/fail) */
 #endif
 #if defined(GYMTEST) || defined(CAVETEST)
           menu_done:
