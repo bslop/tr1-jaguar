@@ -742,6 +742,21 @@ void *video_backbuffer(void)
     return draw_buf;
 }
 
+/* FMV pin start: enter 2-buffer mode with a DETERMINISTIC first target.
+   Without this the first (key)frame lands in whatever buffer the menu left
+   as draw target - often fb2, which the pinned rotation never revisits, so
+   one of fb0/fb1 misses the keyframe and flickers stale-title ghost every
+   other frame until a later keyframe heals it (user 2026-08-07). Seeding
+   the ping-pong on the non-shown of fb0/fb1 guarantees frame 0 (keyframe)
+   and frame 1 (prev = that keyframe) cover both buffers. */
+void video_pin_start(void)
+{
+    while (pending_fb)
+        ;
+    draw_buf = ((uint32_t)fb0 != front_fb) ? fb0 : fb1;
+    video_two_buf = 1;
+}
+
 /* Load a 256-entry RGB16 palette into the OP CLUT (for FB8 8bpp mode). */
 void video_set_clut(const uint16_t *pal)
 {

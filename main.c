@@ -3561,7 +3561,10 @@ bootvid_entry:
                 int vh = -1, mi2, vw, vhh, vfps, vnf, fi, remain, have, pos;
                 uint32_t t0, plen = 0;
                 uint8_t *pcur = ptkA, *pprev = ptkB;
-                video_two_buf = 1;   /* pin the flip to fb0/fb1 (see video.c) */
+                { extern void video_pin_start(void);
+                  video_pin_start(); } /* 2-buffer pin + seed the ping-pong
+                                          so the keyframe covers BOTH buffers
+                                          within two frames (see video.c) */
                 /* boot flow (user 2026-08-05): EIDOS -> CORE -> the disc
                    intro cinematic (CAFE.FMV: snake eye / dig / cafe pitch)
                    -> title. A skips the current clip; A during the intro
