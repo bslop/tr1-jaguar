@@ -3794,6 +3794,19 @@ bootvid_entry:
                             for (k9 = 0; k9 < (320u*240u)/4u; k9++)
                                 dv[k9] = sv[k9]; }
                           (void)gpu_ok; (void)pcur; (void)pprev; kicked = 0;
+#ifdef VIDDIAG
+                          /* TOM PROBE (2026-08-07): fire the kernel IN
+                             PARALLEL with the 68k shadow decode purely to
+                             exercise the load/start path - the hello/done
+                             squares read its mailbox. fb param = vshadow
+                             (JVMIN micro-kernel never writes fb; for full-
+                             kernel probes a Tom write there only smudges
+                             the shadow, never the display buffers). */
+                          if (gpu_ok) {
+                              gpu_jvdec_kick(pprev, 0, pcur, 8, cbk, vshadow);
+                              kicked = 1;
+                          }
+#endif
                           /* STEADY-RATE refill (GDPROBE-measured, 2026-08:
                              gd_fread = ~3.5ms fixed + 193KB/s - small reads
                              are CHEAP; the '24KB-only' premise was false).

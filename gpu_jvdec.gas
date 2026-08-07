@@ -40,6 +40,25 @@ TFBB        .equ    $40000
 .endif
 
 start:
+.if JVMIN=1
+	; MICRO-KERNEL BISECT (2026-08-07): the smallest possible program via
+	; the exact same load+kick path - reads ONE param (the DRAM mailbox),
+	; stores hello+done there, halts. If even THIS never runs, the fault
+	; is the load/start site; if it runs, bisect into the real kernel.
+	movei	#PARAMS+24,r1
+	nop
+	load	(r1),r3			; DRAM mailbox
+	movei	#MAGIC_HELLO,r2
+	nop
+	move	r3,r0
+	addq	#4,r0
+	store	r2,(r0)			; mailbox[1] = hello
+	movei	#MAGIC_DONE,r0
+	store	r0,(r3)			; mailbox[0] = done
+.mhalt:
+	jr	T,.mhalt
+	nop
+.endif
 .if TEST
 	movei	#tpay,r26		; PREV pass = the same payload
 	movei	#tpayend,r27

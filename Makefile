@@ -781,7 +781,7 @@ $(BUILD)/gpu_spanfill.bin: gpu_spanfill.gas | $(BUILD)
 	$(JAS) $< -o $@ --gpu
 
 $(BUILD)/gpu_jvdec.bin: gpu_jvdec.gas | $(BUILD)
-	$(JAS) $< -o $@ --gpu
+	$(JAS) -d JVMIN=$(if $(JVMIN),1,0) $< -o $@ --gpu
 
 $(BUILD)/gpu_geomwalk.bin: gpu_geomwalk.gas | $(BUILD)
 	$(JAS) $< -o $@ --gpu
