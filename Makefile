@@ -1333,3 +1333,11 @@ endif
 ifdef VR_PHRASECOPY
 CFLAGS   += -DVR_PHRASECOPY
 endif
+
+# VR_LIVEPANEL=1: also paint the read-out DURING playback. Off by default -
+# the panel costs ~35ms/frame, so leaving it out of the clip loop makes the
+# measurement the real ship cost. The counters accumulate either way and the
+# hold screen after the clip shows the whole-clip totals.
+ifdef VR_LIVEPANEL
+CFLAGS   += -DVR_LIVEPANEL
+endif

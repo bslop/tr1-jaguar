@@ -545,7 +545,7 @@ static int play_clip(const char *name)
 #endif
             p_copy += vtick() - ta; }
           d_frames++;
-#ifndef VR_NOPANEL
+#ifdef VR_LIVEPANEL
           /* ☠️ EVERY frame, never amortized. Painting it every 4th frame
              looked like a free 3/4 saving and read as SIX DEAD ROLLS: the
              whole-frame block copy rewrites the back buffer first, so a
