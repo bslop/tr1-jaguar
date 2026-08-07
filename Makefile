@@ -1326,3 +1326,10 @@ endif
 ifdef JVFASTKICK
 CFLAGS   += -DJVFASTKICK
 endif
+
+# VR_PHRASECOPY=1: move the video frame with the Blitter in PHRASE mode
+# (8 bytes/step) instead of per-pixel. Falls back per frame if the Blitter
+# never idles, counted in the high bits of the stage row.
+ifdef VR_PHRASECOPY
+CFLAGS   += -DVR_PHRASECOPY
+endif

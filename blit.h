@@ -13,6 +13,9 @@ void blit_band(void *fb, int y0, int y1, uint32_t c);
 /* full-width 8bpp image copy, src -> dst, h rows (Blitter, not a 68k loop) */
 void blit_copy(const void *src, void *dst, int h);
 void blit_rect(const void *src, void *dst, int x0, int y0, int w, int h);
+/* same move in PHRASE mode (8 bytes per step instead of one pixel); returns
+   0 if the Blitter never reported idle */
+int  blit_copy_phrase(const void *src, void *dst, int h);
 
 #ifdef HALFRES
 /* Line-double an 8bpp RENDER_W x srch source into a RENDER_W x 2*srch dest. */

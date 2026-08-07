@@ -113,6 +113,37 @@ void blit_copy(const void *src, void *dst, int h)
     blit_wait();
 }
 
+/* PHRASE-mode full-width 8bpp copy.  blit_copy above addresses ONE PIXEL per
+ * inner step (XADDPIX), so a whole 320x240 frame is 76800 read/write pairs
+ * ping-ponging between two DRAM regions - measured at 40ms/frame in the video
+ * player, the largest cost left after the 68k loop it replaced.  XADDCTRL
+ * value 0 is XADDPHR: eight bytes per step, an eighth of the DRAM page churn.
+ * 320 bytes is exactly 40 phrases per row and both buffers are 16-aligned, so
+ * the alignment preconditions hold exactly.
+ * Returns 0 if the Blitter never went idle - the wait is BOUNDED here because
+ * a wrong phrase-mode setup must report itself, not wedge the console behind
+ * the unbounded spin every other entry point uses. */
+int blit_copy_phrase(const void *src, void *dst, int h)
+{
+    uint32_t xreset = ((uint32_t)(-RENDER_W)) & 0xFFFFu;
+    uint32_t g;
+    blit_wait();
+    A1_BASE  = (uint32_t)src;
+    A1_FLAGS = BLIT_PIX8 | BLIT_WID320;          /* XADDCTRL 0 = XADDPHR */
+    A1_PIXEL = 0;
+    A1_STEP  = (1u << 16) | xreset;
+    A2_BASE  = (uint32_t)dst;
+    A2_FLAGS = BLIT_PIX8 | BLIT_WID320;
+    A2_PIXEL = 0;
+    A2_STEP  = (1u << 16) | xreset;
+    B_COUNT  = ((uint32_t)h << 16) | RENDER_W;
+    B_CMD    = BLIT_CMD_COPY | BLIT_UPDA1 | BLIT_UPDA2;
+    for (g = 0; g < 4000000u; g++)
+        if (B_CMD & BLIT_IDLE)
+            return 1;
+    return 0;
+}
+
 /* blit_rect: sub-rectangle Blitter copy between two RENDER_W-wide 8bpp
  * images (same layout both sides). The title's dirty-rect repaint uses
  * this to restore the art behind a moving ring item without erasing the

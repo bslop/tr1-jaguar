@@ -141,6 +141,8 @@ static uint32_t d_fields;   /* fields elapsed in the clip: fps = frames*60/d_fie
    would cost a silicon roll per theory. Accumulated over the whole clip and
    painted as bit rows, so one still frame carries the whole breakdown. */
 static uint32_t p_read, p_tom, p_copy, p_pace, p_paint;
+static uint32_t d_blitfail;   /* phrase-mode copies that had to fall back */
+static uint32_t d_phrase;     /* phrase-mode Blitter copy verified byte-exact */
 
 /* Monotonic half-line clock. VC wraps every field, so fold in frame_count -
    which the vblank ISR bumps once per field - to get a running tick. */
@@ -273,7 +275,7 @@ static void paint_markers(uint8_t *fb)
     bits32(fb, 7, p_paint);
     bits32(fb, 8, d_pc);
     bits32(fb, 9, d_tomfail);
-    bits32(fb, 10, d_stage);
+    bits32(fb, 10, d_stage | (d_phrase << 8) | (d_blitfail << 16));
     bits32(fb, 11, d_verify);
 }
 
@@ -286,7 +288,13 @@ static void hold_screen(int fields)
         uint8_t *bb = (uint8_t *)video_backbuffer();
         uint32_t *w = (uint32_t *)bb;
         uint32_t k;
-        for (k = 0; k < (320u*240u)/4u; k++) w[k] = 0x01010101u;
+        /* ☠️ Fill with MK_OFF, not palette index 1. After a clip the CLUT is
+           the CLIP'S - index 1 is one of its colours and came back BRIGHT,
+           so the whole panel read as set bits and the decoder's calibration
+           word failed. 254/255 are the only two entries we own, and
+           clut_markers re-forces them whatever palette is loaded. */
+        clut_markers();
+        for (k = 0; k < (320u*240u)/4u; k++) w[k] = (uint32_t)MK_OFF * 0x01010101u;
         paint_markers(bb);
         video_flip();
         t0 = frame_count;
@@ -320,6 +328,25 @@ static int jvdec_selftest(void)
     d_hello = gpu_jvdec_hello();
     d_pc = gpu_pc_read();
     return ok;
+}
+
+/* PHRASE-MODE SELF-TEST. A mis-set Blitter does not politely fail - it can
+   run away over DRAM, and the first phrase-copy build came back black with
+   no way to tell that from an A10 miss. So prove the mode on EIGHT ROWS into
+   a scratch buffer, byte-for-byte on the 68k, BEFORE letting it near the
+   framebuffer. Contained: at most 2560 bytes can be written wrongly. */
+static int phrase_selftest(void)
+{
+    uint32_t i;
+    uint8_t *src = vshadow, *dst = cbk;
+    for (i = 0; i < 320u*8u; i++) src[i] = (uint8_t)(i * 7u + (i >> 5));
+    for (i = 0; i < 320u*8u; i++) dst[i] = 0;
+    if (!blit_copy_phrase(src, dst, 8))
+        return 0;
+    for (i = 0; i < 320u*8u; i++)
+        if (dst[i] != src[i])
+            return 0;
+    return 1;
 }
 
 /* ---- the clip ---------------------------------------------------------- */
@@ -508,7 +535,14 @@ static int play_clip(const char *name)
              player. blit_copy is the same image move as hardware DMA, and
              it is what the title screen already uses for exactly this. */
           { uint32_t ta = vtick();
+#ifdef VR_PHRASECOPY
+            if (!d_phrase || !blit_copy_phrase(vshadow, bb, 240)) {
+                d_blitfail++;               /* Blitter never idled: fall back */
+                blit_copy(vshadow, bb, 240);
+            }
+#else
             blit_copy(vshadow, bb, 240);
+#endif
             p_copy += vtick() - ta; }
           d_frames++;
 #ifndef VR_NOPANEL
@@ -593,13 +627,21 @@ int main(void)
 
     hold_screen(120);                      /* ~2s of read-out before the clip */
 
-    for (;;) {
 #ifndef VR_EARLYLOAD
-        jvdec_load_verified();
-        d_selftest = jvdec_selftest();
+    jvdec_load_verified();
+    d_selftest = jvdec_selftest();
 #endif
-        if (!play_clip(VR_CLIP))
-            hold_screen(180);              /* no SD / bad file: keep showing  */
-    }
+    d_phrase = (uint32_t)phrase_selftest();
+    /* PLAY ONCE, THEN HOLD - never touch the GameDrive again.
+       ☠️ The looping version wedged the USB link twice (LIBUSB_ERROR_TIMEOUT,
+       console left on the RetroHQ logo, and every roll after it read dark
+       until a power cycle). Same hazard as writing the SD while the game
+       runs: this ROM STREAMS from the cart, and a `jaggd` upload races its
+       gd_freads. Once the clip ends the file is closed and the frame loop is
+       pure repaint, so an upload always lands - and the final panel carries
+       the WHOLE-CLIP averages instead of a 40-frame prefix. */
+    play_clip(VR_CLIP);
+    for (;;)
+        hold_screen(120);
     return 0;
 }
