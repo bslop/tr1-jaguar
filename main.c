@@ -6478,7 +6478,25 @@ bootvid_entry:
 #ifdef HEADSPIN
             cY = COS(0); sY = SIN(0);   /* diagnostic: pinned camera, Lara spins */
 #else
-            cY = COS(g_layaw); sY = SIN(g_layaw);
+            /* CAMERA LAG (2026-08-07, user: PSX turns are smooth/incremental,
+               ours jerky): the camera used to be WELDED to Lara's yaw, so a
+               turn snapped the whole world by the frame's full step. The PSX
+               camera swings behind her with a spring. camyaw eases toward
+               g_layaw (shortest path) at ~1/4 of the gap per 30Hz tick, in
+               8.8 sub-units so the ease is smooth at any rate; Lara visibly
+               rotates WITHIN the frame while the world pans over ~0.3s. */
+            { static int camyaw8 = -1;
+              int tgt8 = (int)g_layaw << 8, d8, tk2;
+              if (camyaw8 < 0) camyaw8 = tgt8;
+              d8 = ((tgt8 - camyaw8 + 32768) & 65535) - 32768;
+              for (tk2 = g_ticks >> 1; tk2 > 0; tk2--)
+                  { d8 = ((((int)g_layaw << 8) - camyaw8 + 32768) & 65535) - 32768;
+                    camyaw8 = (camyaw8 + (d8 >> 2)) & 65535;
+                    if (d8 && (d8 >> 2) == 0)      /* never stall the tail */
+                        camyaw8 = (camyaw8 + (d8 > 0 ? 1 : -1)) & 65535; }
+              { int cy1 = (camyaw8 >> 8) & 255, cy2 = (cy1 + 1) & 255, fr8 = camyaw8 & 255;
+                cY = COS(cy1) + (((COS(cy2) - COS(cy1)) * fr8) >> 8);
+                sY = SIN(cy1) + (((SIN(cy2) - SIN(cy1)) * fr8) >> 8); } }
 #endif
             camx = g_lax - (int)(((int32_t)sY*CAMDIST)>>16);
             camz = g_laz - (int)(((int32_t)cY*CAMDIST)>>16);
