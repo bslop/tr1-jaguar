@@ -43,6 +43,7 @@
 #include "video.h"
 #include "gpu.h"
 #include "gdbios.h"
+#include "blit.h"
 
 #ifndef VR_CLIP
 #define VR_CLIP "EIDOS.JV"
@@ -134,6 +135,23 @@ static int      d_gpu_ok, d_loaded, d_selftest;
    screen forever now says WHICH step refused. */
 static uint32_t d_stage;
 static uint32_t d_fields;   /* fields elapsed in the clip: fps = frames*60/d_fields */
+/* PER-PHASE PROFILE, in VC half-line ticks (~31.7us each, 525 per field).
+   frame_count alone is far too coarse to attribute a 250ms frame, and
+   guessing between "the GameDrive is slow" and "the 68k block copy is slow"
+   would cost a silicon roll per theory. Accumulated over the whole clip and
+   painted as bit rows, so one still frame carries the whole breakdown. */
+static uint32_t p_read, p_tom, p_copy, p_pace, p_paint;
+
+/* Monotonic half-line clock. VC wraps every field, so fold in frame_count -
+   which the vblank ISR bumps once per field - to get a running tick. */
+static uint32_t vtick(void)
+{
+    extern volatile uint32_t frame_count;
+    uint32_t f = frame_count;
+    uint32_t v = VC;
+    if (frame_count != f) { f = frame_count; v = VC; }
+    return f * 525u + (v & 0x3FFu);
+}
 static uint32_t d_verify = 0xFFFFFFFFu, d_pc, d_hello, d_tomok, d_frames,
                 d_tomfail;
 
@@ -161,47 +179,102 @@ static void clut_markers(void)
     cl[MK_ON]  = JAG16(31,63,31);
 }
 
-/* 14x10 lamp at x=4, y=4+row*12; a 2px white rail at x=0 locates the column
- * in a capture no matter what the clip is showing. */
-static void lamp(uint8_t *fb, int row, int on)
+/* ---- the read-out panel ------------------------------------------------
+ * A SELF-CALIBRATING panel, because eyeballing scaled captures does not
+ * scale: the first decoder inferred the framebuffer grid from the picture
+ * edges and drifted by a row or two near the bottom, quietly turning real
+ * profile numbers into zeros. So the panel draws its own reference frame -
+ * a solid black field with a 2px white border at a FIXED framebuffer rect -
+ * and the host decoder recovers the exact grid from that border instead of
+ * guessing. Everything inside is then addressed in framebuffer pixels.
+ *
+ *   lamps    8 x (14x10) at x=4,  y=4 + i*12
+ *   bit rows 12 x 32 bits at x=24, y=102 + i*11, 4px per bit, 8px tall
+ */
+#define PAN_W 160
+/* ☠️ PAN_H must cover the LAST bit row: with BITY0+10*BITDY > PAN_H the
+   bottom rows are drawn over the video, outside the border the host decoder
+   calibrates from, and they read back as garbage - p_tom/p_copy came back as
+   "0ms to copy 76800 bytes" until this was caught. 102 + 12*11 + 2 = 236, rounded to 234 with the last row ending at 231. */
+#define PAN_H 234
+#define BITX  24
+#define BITW  4
+#define BITY0 102
+#define BITDY 11
+#define BITH  8
+
+/* ☠️ LONG stores. The first version filled 36160 bytes one at a time and
+   cost more per frame than Tom's entire decode - an instrument that changes
+   what it measures. Byte stores are the 68k's worst case under OP
+   contention; this is the same fill at a quarter of the accesses. */
+/* ☠️ THE INSTRUMENT MUST NOT DOMINATE THE MEASUREMENT. The first panel
+   cleared 160x234 and drew every cell as byte stores: 62 ms/frame on
+   silicon, second only to Tom's whole decode and a third of the frame.
+   So: no background fill at all (every cell paints BOTH states, so nothing
+   stale survives), and every write is a LONG - the cells are 4 px wide at
+   4-aligned x precisely so one store covers one row of one cell. ~10 ms. */
+#define L_ON  0xFFFFFFFFu
+#define L_OFF ((uint32_t)MK_OFF * 0x01010101u)
+
+static void panel_border(uint8_t *fb)
 {
-    int y, x, y0 = 4 + row * 12;
-    for (y = y0; y < y0 + 10; y++) {
-        fb[y*320 + 0] = MK_ON;
-        fb[y*320 + 1] = MK_ON;
-        for (x = 4; x < 18; x++)
-            fb[y*320 + x] = on ? MK_ON : MK_OFF;
+    int y, x;
+    for (y = 0; y < PAN_H; y++) {
+        uint32_t *r = (uint32_t *)(fb + y * 320);
+        if (y < 2 || y >= PAN_H - 2) {
+            for (x = 0; x < PAN_W / 4; x++)
+                r[x] = L_ON;
+        } else {
+            r[0] = L_ON;                    /* 4px left rail  */
+            r[PAN_W / 4 - 1] = L_ON;        /* 4px right rail */
+        }
     }
 }
 
-/* 32 bits, MSB left, 3px per bit, 6 rows tall - reads straight off a capture */
-static void bits32(uint8_t *fb, int y0, uint32_t v)
+static void lamp(uint8_t *fb, int row, int on)
 {
-    int b, y, x;
-    for (b = 0; b < 32; b++) {
-        int on = (v >> (31 - b)) & 1;
-        for (y = y0; y < y0 + 6; y++)
-            for (x = 0; x < 3; x++)
-                fb[y*320 + 24 + b*3 + x] = on ? MK_ON : MK_OFF;
+    int y, x, y0 = 4 + row * 12;
+    uint32_t v = on ? L_ON : L_OFF;
+    for (y = y0; y < y0 + 10; y++) {
+        uint32_t *r = (uint32_t *)(fb + y * 320 + 4);
+        for (x = 0; x < 4; x++)             /* 16 px wide, 4-aligned */
+            r[x] = v;
+    }
+}
+
+static void bits32(uint8_t *fb, int row, uint32_t v)
+{
+    int b, y, y0 = BITY0 + row * BITDY;
+    for (y = y0; y < y0 + BITH; y++) {
+        uint32_t *r = (uint32_t *)(fb + y * 320 + BITX);
+        for (b = 0; b < 32; b++)
+            r[b] = ((v >> (31 - b)) & 1) ? L_ON : L_OFF;
     }
 }
 
 static void paint_markers(uint8_t *fb)
 {
-    lamp(fb, 0, (d_frames & 1));
+    panel_border(fb);
+    lamp(fb, 0, (int)(d_frames & 1));
     lamp(fb, 1, d_gpu_ok);
     lamp(fb, 2, d_loaded);
     lamp(fb, 3, d_verify == 0);
     lamp(fb, 4, d_hello == 0x0A3D0001u);
-    lamp(fb, 5, d_tomok);
+    lamp(fb, 5, (int)d_tomok);
     lamp(fb, 6, d_pc >= 0xF03000u && d_pc < 0xF04000u);
     lamp(fb, 7, d_selftest);
-    bits32(fb, 100, d_verify);
-    bits32(fb, 110, d_pc);
-    bits32(fb, 120, d_frames);
-    bits32(fb, 130, d_tomfail);
-    bits32(fb, 140, d_stage);
-    bits32(fb, 150, d_fields);
+    bits32(fb, 0, 0xA5A5A5A5u);      /* calibration: fixed alternating pattern */
+    bits32(fb, 1, d_frames);
+    bits32(fb, 2, d_fields);
+    bits32(fb, 3, p_read);
+    bits32(fb, 4, p_tom);
+    bits32(fb, 5, p_copy);
+    bits32(fb, 6, p_pace);
+    bits32(fb, 7, p_paint);
+    bits32(fb, 8, d_pc);
+    bits32(fb, 9, d_tomfail);
+    bits32(fb, 10, d_stage);
+    bits32(fb, 11, d_verify);
 }
 
 static void hold_screen(int fields)
@@ -323,16 +396,25 @@ static int play_clip(const char *name)
                 if (have - pos >= need) break;
             }
             if (pos) {
-                int mv = have - pos, k;
-                for (k = 0; k < mv; k++) vb[k] = vb[pos + k];
+                /* records are 4-padded, so pos stays 4-aligned and this can
+                   move longs; the byte version walked up to 26KB one at a
+                   time, every time the buffer compacted */
+                int mv = have - pos, k, nl = mv >> 2;
+                uint32_t *d4 = (uint32_t *)vb;
+                const uint32_t *s4 = (const uint32_t *)(vb + pos);
+                for (k = 0; k < nl; k++) d4[k] = s4[k];
+                for (k = nl << 2; k < mv; k++) vb[k] = vb[pos + k];
                 have = mv; pos = 0;
             }
             { int want = (VB_SIZE - have) & ~511;
               if (want > 24576) want = 24576;
               if (want > remain) want = remain;
               if (want <= 0) { fi = vnf; break; }
-              if (gd_fread((unsigned)vh, vb + have, (unsigned)want,
-                           GD_FREAD_CPU) != 0) { fi = vnf; break; }
+              { uint32_t ta = vtick();
+                int rr = gd_fread((unsigned)vh, vb + have, (unsigned)want,
+                                  GD_FREAD_CPU);
+                p_read += vtick() - ta;
+                if (rr != 0) { fi = vnf; break; } }
               have += want; remain -= want; }
         }
         if (fi >= vnf) break;
@@ -386,8 +468,10 @@ static int play_clip(const char *name)
               const uint32_t *ts = (const uint32_t *)tk;
               uint32_t *td = (uint32_t *)pcur;
               for (k = 0; k < nw; k++) td[k] = ts[k];
-              gpu_jvdec_kick(pcur, 0, pcur, L, cbk, vshadow);
-              d_tomok = (uint32_t)gpu_jvdec_wait();
+              { uint32_t ta = vtick();
+                gpu_jvdec_kick(pcur, 0, pcur, L, cbk, vshadow);
+                d_tomok = (uint32_t)gpu_jvdec_wait();
+                p_tom += vtick() - ta; }
               d_hello = gpu_jvdec_hello();
               d_pc = gpu_pc_read();
           }
@@ -418,34 +502,55 @@ static int play_clip(const char *name)
                 } }
 #endif
           }
-          { const uint32_t *sv = (const uint32_t *)vshadow;
-            uint32_t *dv = (uint32_t *)bb; uint32_t k;
-            for (k = 0; k < (320u*240u)/4u; k++) dv[k] = sv[k]; }
+          /* THE BLITTER MOVES THE FRAME, NOT THE 68k (2026-08-08). The
+             19200-long software copy measured 95ms/frame on silicon - three
+             times Tom's whole decode and the single largest cost in the
+             player. blit_copy is the same image move as hardware DMA, and
+             it is what the title screen already uses for exactly this. */
+          { uint32_t ta = vtick();
+            blit_copy(vshadow, bb, 240);
+            p_copy += vtick() - ta; }
           d_frames++;
-          paint_markers(bb);
+#ifndef VR_NOPANEL
+          /* AMORTIZED: even as pure long stores the panel costs ~31ms of a
+             164ms frame. Repainting every 4th frame keeps the read-out live
+             (the block copy rewrites the whole frame, so a stale panel is
+             simply overwritten) at a quarter of the cost. */
+          if ((d_frames & 3u) == 0) {
+              uint32_t ta = vtick(); paint_markers(bb); p_paint += vtick() - ta;
+          }
+#endif
           { uint8_t *sw = pprev; pprev = pcur; pcur = sw; }
         }
 
         /* --- steady 4KB/frame refill + bulk rescue (v9 pacing) ----------- */
         if (remain > 0 && have - pos < 8192) {
             int want = (have - pos < 4096) ? 24576 : 4096;
-            if (pos) { int mv = have - pos, k;
-                for (k = 0; k < mv; k++) vb[k] = vb[pos + k];
+            if (pos) { int mv = have - pos, k, nl = mv >> 2;
+                uint32_t *d4 = (uint32_t *)vb;
+                const uint32_t *s4 = (const uint32_t *)(vb + pos);
+                for (k = 0; k < nl; k++) d4[k] = s4[k];
+                for (k = nl << 2; k < mv; k++) vb[k] = vb[pos + k];
                 have = mv; pos = 0; }
             if (want > (int)((VB_SIZE - have) & ~511))
                 want = (VB_SIZE - have) & ~511;
             if (want > remain) want = remain;
             if (want > 0) {
-                if (gd_fread((unsigned)vh, vb + have, (unsigned)want,
-                             GD_FREAD_CPU) == 0) { have += want; remain -= want; }
+                uint32_t ta = vtick();
+                int rr = gd_fread((unsigned)vh, vb + have, (unsigned)want,
+                                  GD_FREAD_CPU);
+                p_read += vtick() - ta;
+                if (rr == 0) { have += want; remain -= want; }
                 else remain = 0;
             }
         }
 
         /* --- pace on the 60Hz VI, then publish -------------------------- */
         { int tgt = (int)(((uint32_t)(fi + 1) * 60u) / (uint32_t)vfps);
+          uint32_t ta = vtick();
           while ((int)(frame_count - t0) < tgt)
               ;
+          p_pace += vtick() - ta;
           d_fields = frame_count - t0;
           video_flip(); }
 

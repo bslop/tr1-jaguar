@@ -137,7 +137,9 @@ void gpu_jvdec_kick(const void *prevTok, uint32_t prevLen,
         if ((G_CTRL & 1u) == 0) break;
         G_CTRL = 0;
     }
+#ifndef JVFASTKICK
     { volatile uint32_t d9; for (d9 = 0; d9 < 2000; d9++) ; }
+#endif
     /* DONE/HELLO handshake moved to the DRAM mailbox (2026-08-07): the 68k
        cannot reliably read GPU SRAM while the GPU is running, so polling
        PARAMS+32 timed out on EVERY frame on silicon and all video was

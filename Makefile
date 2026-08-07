@@ -1312,3 +1312,17 @@ vidrom: $(BUILD)/vidrom.cof
 ifdef VR_PAD
 CFLAGS   += -DVR_PAD=$(VR_PAD)
 endif
+
+# VR_NOPANEL=1: drop the on-screen read-out (measure the player, not the
+# instrument - the panel itself cost 62ms/frame before it was made cheap).
+ifdef VR_NOPANEL
+CFLAGS   += -DVR_NOPANEL
+endif
+
+# JVFASTKICK=1: drop the 2000-iteration 68k drain loop in gpu_jvdec_kick.
+# It was added during the blind Tom campaign as a "stop-settle" fix and was
+# already falsified there; now that Tom demonstrably runs, it is ~12ms of
+# pure 68k spin per video frame. Verify the hello lamp still lights.
+ifdef JVFASTKICK
+CFLAGS   += -DJVFASTKICK
+endif
