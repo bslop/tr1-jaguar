@@ -767,6 +767,11 @@ mmx_copy:
 	movei	#vc_done,r22
 	jump	EQ,(r22)
 	nop
+	.if VCJDIET=1
+	movei	#vc_loop,r28		; loop-back target hoisted (r28 freed by
+					; INLINEMUL — REQUIRED: the imul32 ladder
+					; uses r28 as its return register)
+	.endif
 vc_loop:
 	.if VPACK=1
 	; two long loads instead of three word loads: RVert is (x,y,z,shade)
@@ -1085,6 +1090,26 @@ vc_syp:
 	add	r1,r0
 	addq	#4,r18
 	store	r0,(r18)		; cache sy
+	.if VCJDIET=1
+	; common path FALLS THROUGH to vc_next (the behind block moves past the
+	; loop exit) and the loop-back reuses hoisted r28 — saves a movei+jump
+	; on the sy path and a movei on every iteration
+	addq	#4,r18
+vc_next:
+	subq	#1,r31
+	jump	NE,(r28)		; r28 = vc_loop (hoisted in vc_self)
+	nop
+	movei	#vc_done,r22		; loop exhausted -> skip the behind block
+	jump	T,(r22)
+	nop
+vc_behind:
+	movei	#$07FFFFFF,r0
+	store	r0,(r18)		; behind sentinel
+	addq	#8,r18
+	movei	#vc_next,r22		; rare path pays the jump instead
+	jump	T,(r22)
+	nop
+	.else
 	movei	#vc_next,r22
 	jump	T,(r22)
         addq	#4,r18
@@ -1098,6 +1123,7 @@ vc_next:
 	movei	#vc_loop,r22
 	jump	NE,(r22)
 	nop
+	.endif
 vc_done:
 	; fall into quad_setup
 
