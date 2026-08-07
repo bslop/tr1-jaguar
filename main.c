@@ -593,6 +593,10 @@ static int g_jvmin_game;              /* context probe: 1=ran at game entry,
 static int g_jvmin2;                  /* ...after a verify-retry load       */
 static int g_jv_d240;                 /* load-under-disp240: 1 ok, 2 corrupt */
 #endif
+static int g_jv_early;                /* jvdec kernel loaded at boot (skip
+                                         the video-block load entirely)    */
+#ifdef VIDDIAG
+#endif
 static int g_autograb;                /* airborne: treat ACTION as held so
                                          the auto jump catches and pulls up */
 static fix g_vaultx, g_vaultz;        /* foothold on top of the ledge     */
@@ -2963,6 +2967,29 @@ int main(void)
 #endif
     gpu_ok = gpu_init();             /* Tom drains the span list if up */
     CRUMB(0x07FF);                   /* CYAN: gpu_init done */
+#ifdef BOOTVID
+    /* EARLY JVDEC LOAD (2026-08-07, Tom campaign): loads into GPU SRAM
+       verify CLEAN here (the same window where the game-entry probes read
+       J11V0D1) and FAIL from inside the video block for reasons every
+       bisect has exonerated one by one (music, disp240, retries). So:
+       load the video kernel ONCE, HERE, in the proven-quiet boot window,
+       verify it, and let the video block only ever KICK. Nothing else
+       touches GPU SRAM before the title's kernel_select (post-clips).
+       gpu_init's drain has already run; the game re-selects its kernel
+       at title/game transitions as always. */
+    if (gpu_ok) {
+        extern uint32_t gpu_jvdec_verify(void);
+        int ld9;
+        for (ld9 = 0; ld9 < 8; ld9++) {
+            gpu_jvdec_load();
+            if (gpu_jvdec_verify() == 0) break;
+        }
+#ifdef VIDDIAG
+        g_jv_vfy = gpu_jvdec_verify();
+#endif
+        g_jv_early = 1;               /* video block: skip its own load */
+    }
+#endif
     { extern int jerry_init(void);
       gpu_geotex_setclip(0, 319, 0, RENDER_H-1);   /* clip = full screen */
       g_jerry_ok = jerry_init();
@@ -3569,7 +3596,8 @@ bootvid_entry:
                    QUIESCE THE DSP VOICE for the ~50us of loading (the clip
                    replaces the music's audio anyway), then verify-retry
                    until the bytes hold. */
-                { volatile uint32_t *v0 = (volatile uint32_t *)0xF1C340u;
+                if (!g_jv_early) {
+                  volatile uint32_t *v0 = (volatile uint32_t *)0xF1C340u;
                   volatile uint32_t *nq = (volatile uint32_t *)0xF1C378u;
                   extern uint32_t gpu_jvdec_verify(void);
                   int ld;
@@ -4012,6 +4040,8 @@ bootvid_entry:
             }
             video_pend_at = 0;     /* every later flip is immediate again */
             video_two_buf = 0;     /* release the fb0/fb1 pin */
+            g_jv_early = 0;        /* boot pass done: later entries (Start
+                                      Game) must load the kernel themselves */
             /* scrub ALL THREE framebuffers: video wrote 240-line frames and
                pinned to two buffers - stale rows/pixels otherwise ghost into
                the title and show as LINES below the game's 120-line window
