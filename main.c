@@ -6275,10 +6275,24 @@ bootvid_entry:
                     int jd = g_jfwd * jt;
                     int jx = g_lax + (int)(((int32_t)SIN(ja) * jd) >> 16);
                     int jz = g_laz + (int)(((int32_t)COS(ja) * jd) >> 16);
-                    /* walls stop her in the air too (no jump-through) */
-                    if (!room_wall_at(rsect[g_curroom], jx, g_laz)) g_lax = jx;
-                    if (!room_wall_at(rsect[g_curroom], g_lax, jz)) g_laz = jz;
-                    }
+                    /* walls stop her in the air too (no jump-through) — and so
+                       does a LEDGE FACE: a column whose floor is more than a
+                       step above her feet is a wall while she is under it.
+                       Without this the carry drifts her over a high terrace
+                       and the landing clamp teleports her UP onto a ledge her
+                       arc never reached (user clip 2026-08-07: long-jump
+                       gaining a full block; TR1 wants jump-grab-pull-up).
+                       Approaching from ABOVE (feet over the ledge top) still
+                       lands normally — that is a real jump onto the ledge. */
+                    { int af;
+                    g_flr_wy = g_lay;   /* integration moved her: fresh Y context */
+                    if (!room_wall_at(rsect[g_curroom], jx, g_laz) &&
+                        room_floor_mr(rsect, roomCount, jx, g_laz, &af) &&
+                        g_lay - af <= LARA_STEPUP) g_lax = jx;
+                    if (!room_wall_at(rsect[g_curroom], g_lax, jz) &&
+                        room_floor_mr(rsect, roomCount, g_lax, jz, &af) &&
+                        g_lay - af <= LARA_STEPUP) g_laz = jz;
+                    } }
                 }
                 if (g_lay >= g_lafloor) {
                     /* thud only on REAL falls: slope descents micro-hop
