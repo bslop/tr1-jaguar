@@ -90,6 +90,16 @@ void gpu_jvdec_load(void)
     volatile uint32_t *dst = (volatile uint32_t *)G_SRAM;
     uint32_t i;
     G_CTRL = 0;
+    /* STOP-SETTLE (2026-08-07, the load-corruption root): G_CTRL=0 posts
+       but Tom keeps executing for a while - SRAM writes issued before he
+       actually halts get mangled. Loads issued long after a stop (game
+       entry, behind two heavy functions) verified clean; loads issued
+       immediately after activity (video entry, post-drain boot) failed
+       every probe. Read back until the GPUGO bit drops, then let the
+       pipeline drain before touching his RAM. */
+    for (i = 0; i < 10000; i++)
+        if ((G_CTRL & 1u) == 0) break;
+    { volatile uint32_t d; for (d = 0; d < 4000; d++) ; }
     for (i = 0; i < n; i++)
         dst[i] = src[i];
 }
