@@ -478,10 +478,12 @@ static int room_floor_mr(const uint8_t **rsect, int n, int wx, int wz, int *floo
    34 = TR1's authentic 4.27 u/tick = 180 deg/s;  24 = the old value, 126 deg/s.
    Tune with make TURNRUN=/TURNWALK=. */
 #ifndef TURN_RUN_TR1
-#define TURN_RUN_TR1   12       /* 1.5 u/tick = 63 deg/s */
+#define TURN_RUN_TR1    8       /* 1.0 u/tick = 42 deg/s (user 2026-08-07:
+                                   'closer to what the game has' - the PSX
+                                   reads slower per displayed frame) */
 #endif
 #ifndef TURN_WALK_TR1
-#define TURN_WALK_TR1   8       /* 1.0 u/tick = 42 deg/s */
+#define TURN_WALK_TR1   6       /* 0.75 u/tick = 32 deg/s */
 #endif
 #ifndef TURN_RAMP
 #define TURN_RAMP       4       /* ticks to reach full turn rate (ease-in) */
