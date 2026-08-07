@@ -512,13 +512,14 @@ static int play_clip(const char *name)
             p_copy += vtick() - ta; }
           d_frames++;
 #ifndef VR_NOPANEL
-          /* AMORTIZED: even as pure long stores the panel costs ~31ms of a
-             164ms frame. Repainting every 4th frame keeps the read-out live
-             (the block copy rewrites the whole frame, so a stale panel is
-             simply overwritten) at a quarter of the cost. */
-          if ((d_frames & 3u) == 0) {
-              uint32_t ta = vtick(); paint_markers(bb); p_paint += vtick() - ta;
-          }
+          /* ☠️ EVERY frame, never amortized. Painting it every 4th frame
+             looked like a free 3/4 saving and read as SIX DEAD ROLLS: the
+             whole-frame block copy rewrites the back buffer first, so a
+             frame that skips the paint has no panel at all - the read-out
+             simply vanishes for three frames out of four and every capture
+             decodes as "no signal". The instrument has to be redrawn after
+             whatever erased it. Use VR_NOPANEL to measure without it. */
+          { uint32_t ta = vtick(); paint_markers(bb); p_paint += vtick() - ta; }
 #endif
           { uint8_t *sw = pprev; pprev = pcur; pcur = sw; }
         }
