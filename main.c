@@ -3561,11 +3561,26 @@ bootvid_entry:
                    over a live kernel wedges the kick protocol. Boot-time
                    this sync is a no-op. */
                 extern int gpu_sync(void); gpu_sync();
-                gpu_jvdec_load();
+                /* THE LOAD FIX (2026-08-07, context probe J11V0): the 68k's
+                   copy into GPU SRAM fails while Jerry's I2S/queue engine
+                   is streaming (bus-master collision) - the SAME load
+                   verifies clean in the music-stopped window at game entry.
+                   QUIESCE THE DSP VOICE for the ~50us of loading (the clip
+                   replaces the music's audio anyway), then verify-retry
+                   until the bytes hold. */
+                { volatile uint32_t *v0 = (volatile uint32_t *)0xF1C340u;
+                  volatile uint32_t *nq = (volatile uint32_t *)0xF1C378u;
+                  extern uint32_t gpu_jvdec_verify(void);
+                  int ld;
+                  *nq = 0; v0[0] = 0; *nq = 0; v0[0] = 0;
+                  for (ld = 0; ld < 8; ld++) {
+                      gpu_jvdec_load();
+                      if (gpu_jvdec_verify() == 0) break;
+                  }
 #ifdef VIDDIAG
-                { extern uint32_t gpu_jvdec_verify(void);
-                  g_jv_vfy = gpu_jvdec_verify(); }
+                  g_jv_vfy = gpu_jvdec_verify();
 #endif
+                }
             }
 #ifdef NOBOOTCLIPS
             for (vc = 3; vc < (introplay ? 4 : 3); vc++) {
@@ -3757,20 +3772,28 @@ bootvid_entry:
                          so the stash doubles as the decode source; the
                          legacy two-pass path keeps the serial order. */
                       {
+                          int tomok = 0;
                           while (pending_fb)
                               ;
-                          /* SHADOW DECODE (2026-08-07, the ghost-slayer):
-                             apply this frame's tokens to a PRIVATE full
-                             frame in DRAM - delta semantics live THERE -
-                             then block-copy the complete image into
-                             whatever buffer the display hands us. No
-                             dependence on framebuffer history AT ALL:
-                             any rotation, any staleness, every displayed
-                             frame is complete by construction. (The Tom
-                             jvdec kernel never ran on silicon - probe
-                             saga in gpu.c; the 68k IS the decoder, and
-                             ~2ms of tokens + ~7ms of copy fits a 15fps
-                             slot three times over.) */
+                          /* TOM DECODE INTO THE SHADOW (2026-08-07, user:
+                             "video runs off Tom"): with the DSP-quiesced
+                             load fixed (context probe J11V0), Tom applies
+                             this frame's tokens to the persistent shadow
+                             frame; the 68k only block-copies the complete
+                             image to the display buffer. Ghost-proof
+                             display + GPU decode. The shadow persists, so
+                             no prev re-apply is needed (prevlen 0). The
+                             68k token walk below remains as the verified
+                             fallback if Tom's wait ever fails. */
+                          if (gpu_ok) {
+                              uint32_t k2, nw = ((L + 3u) & ~3u) >> 2;
+                              const uint32_t *ts = (const uint32_t *)tk;
+                              uint32_t *td = (uint32_t *)pcur;
+                              for (k2 = 0; k2 < nw; k2++) td[k2] = ts[k2];
+                              gpu_jvdec_kick(pcur, 0, pcur, L, cbk, vshadow);
+                              tomok = gpu_jvdec_wait();
+                          }
+                          if (!tomok)
                           { const uint8_t *s = tk, *e = tk + L;
                             uint8_t *dA = vshadow;
                             int bx = 0, left = 4800;
@@ -3796,20 +3819,8 @@ bootvid_entry:
                             uint32_t *dv = (uint32_t *)bb; uint32_t k9;
                             for (k9 = 0; k9 < (320u*240u)/4u; k9++)
                                 dv[k9] = sv[k9]; }
-                          (void)gpu_ok; (void)pcur; (void)pprev; kicked = 0;
-#ifdef VIDDIAG
-                          /* TOM PROBE (2026-08-07): fire the kernel IN
-                             PARALLEL with the 68k shadow decode purely to
-                             exercise the load/start path - the hello/done
-                             squares read its mailbox. fb param = vshadow
-                             (JVMIN micro-kernel never writes fb; for full-
-                             kernel probes a Tom write there only smudges
-                             the shadow, never the display buffers). */
-                          if (gpu_ok) {
-                              gpu_jvdec_kick(pprev, 0, pcur, 8, cbk, vshadow);
-                              kicked = 1;
-                          }
-#endif
+                          gok = tomok; kicked = tomok;
+                          (void)pprev;
                           /* STEADY-RATE refill (GDPROBE-measured, 2026-08:
                              gd_fread = ~3.5ms fixed + 193KB/s - small reads
                              are CHEAP; the '24KB-only' premise was false).
