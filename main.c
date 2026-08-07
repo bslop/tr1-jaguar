@@ -3829,8 +3829,17 @@ bootvid_entry:
                               } else remain = 0;
                           }
 #else
-                          /* v8 low-water bulk refill - the PROVEN shape */
-                          if (remain > 0 && have - pos < 12288) {
+                          /* STEADY 4KB/frame refill (2026-08-07, user: the
+                             kf-only/high-rate clips "chug"): the v8 low-water
+                             shape read up to 24KB in one gd_fread = ~125ms =
+                             TWO 15fps slots - a visible hiccup at every
+                             burst. One 4KB sector-aligned read per frame
+                             (~24ms) fits beside the ~25ms decode+copy and
+                             sustains ~60KB/s - above every delta clip's
+                             rate. The 24KB bulk read remains ONLY as the
+                             critical-low rescue (start-up, seeks). */
+                          if (remain > 0 && have - pos < 8192) {
+                              /* CRITICAL: not even one frame ahead - bulk */
                               int want;
                               if (pos) { int mv = have - pos, k3;
                                   for (k3 = 0; k3 < mv; k3++)
@@ -3839,6 +3848,21 @@ bootvid_entry:
                               want = (31488 - have) & ~511;
                               if (want > 24576) want = 24576;
                               if (want > remain) want = remain;
+                              if (want > 0 &&
+                                  gd_fread((unsigned)vh, vb + have,
+                                           (unsigned)want,
+                                           GD_FREAD_CPU) == 0) {
+                                  have += want; remain -= want;
+                              } else remain = 0;
+                          } else if (remain > 0 && have - pos < 26624) {
+                              /* steady state: one 4KB sector per frame */
+                              int want = 4096;
+                              if (pos) { int mv = have - pos, k3;
+                                  for (k3 = 0; k3 < mv; k3++)
+                                      vb[k3] = vb[pos + k3];
+                                  have = mv; pos = 0; }
+                              if (want > remain) want = remain;
+                              if (31488 - have < want) want = 31488 - have;
                               if (want > 0 &&
                                   gd_fread((unsigned)vh, vb + have,
                                            (unsigned)want,
