@@ -44,6 +44,11 @@ void gpu_kernel_select(int hq)
     for (i = 0; i < n; i++) dst[i] = src[i];
     g_kernel_cur = hq;
 }
+
+void gpu_kernel_dirty(void)
+{
+    g_kernel_cur = -1;
+}
 #endif
 
 int gpu_init(void)
@@ -153,6 +158,34 @@ uint32_t gpu_jvdec_hello(void)
 {
     return mailbox[1];
 }
+
+/* VIDDIAG: does GPU SRAM actually hold the jvdec kernel? (call with the
+   GPU stopped, right after gpu_jvdec_load). Returns mismatch count. */
+uint32_t gpu_jvdec_verify(void)
+{
+    extern const uint8_t gpu_jvdec_kernel[], gpu_jvdec_kernel_end[];
+    const uint32_t *src = (const uint32_t *)gpu_jvdec_kernel;
+    volatile uint32_t *dst = (volatile uint32_t *)G_SRAM;
+    uint32_t n = (uint32_t)(gpu_jvdec_kernel_end - gpu_jvdec_kernel) / 4;
+    uint32_t i, bad = 0;
+    for (i = 0; i < n; i++)
+        if (dst[i] != src[i]) bad++;
+    return bad;
+}
+
+/* VIDDIAG: where is Tom? (sample after wait; PC holds its last value) */
+uint32_t gpu_pc_read(void)
+{
+    return *(volatile uint32_t *)0xF02110u;
+}
+
+#ifdef MULTIROOM
+/* VIDDIAG: invalidate the resident-kernel tracker so the next
+   gpu_kernel_select RELOADS unconditionally - a probe that loaded jvdec
+   left g_kernel_cur stale and kernel_select(0) no-op'd, sending the GAME
+   into the micro-kernel (the reboot-loop of 2026-08-07). */
+void gpu_kernel_dirty(void);
+#endif
 
 int gpu_jvdec_frame(const void *prevTok, uint32_t prevLen,
                     const void *curTok, uint32_t curLen,

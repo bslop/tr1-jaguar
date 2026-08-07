@@ -590,6 +590,7 @@ static int g_fwdblk;                  /* forward held but BLOCKED this frame
 static uint32_t g_jv_vfy;             /* SRAM-verify mismatches after load */
 static int g_jvmin_game;              /* context probe: 1=ran at game entry,
                                          2=failed there too, 0=not run yet */
+static int g_jvmin2;                  /* ...after a verify-retry load       */
 #endif
 static int g_autograb;                /* airborne: treat ACTION as held so
                                          the auto jump catches and pulls up */
@@ -5080,27 +5081,39 @@ bootvid_entry:
           { extern void video_set_disp240(int); extern void gpu_kernel_select(int);
             video_set_disp240(0); gpu_kernel_select(0); }
 #ifdef VIDDIAG
-          /* CONTEXT PROBE (2026-08-07, Tom campaign): run the JVMIN micro-
-             kernel load+kick AT GAME ENTRY - the one place a kernel load
-             (kernel_select, the line above) is PROVEN to work. Result goes
-             to g_jvmin_game; the DBGROOM overlay paints J1/J0. If it runs
-             HERE but not in the video block, the video context is the
-             fault; if it fails here too, the loader itself is. Restore the
-             game kernel afterwards. */
+          /* CONTEXT PROBE v2 (2026-08-07, Tom campaign): three experiments
+             at game entry, where kernel loads PROVABLY work. Overlay paints
+             J<a><b>V<n>: a = micro-kernel ran after a standard load (1/2),
+             b = ran after a verify-retry load (1/2), n = verify mismatch
+             bucket (0 = SRAM held the bytes). v1 reboot-looped because
+             kernel_select(0) no-op'd on a stale tracker - now dirtied. */
           { extern int gpu_sync(void);
             extern void gpu_kernel_select(int);
+            extern void gpu_kernel_dirty(void);
             extern uint32_t gpu_jvdec_hello(void);
-            uint32_t spin2;
+            extern uint32_t gpu_jvdec_verify(void);
+            uint32_t spin2; int tries;
             gpu_sync();
             gpu_jvdec_load();
+            g_jv_vfy = gpu_jvdec_verify();
             gpu_jvdec_kick((void *)0, 0, (void *)0, 0, (void *)0, (void *)0);
             for (spin2 = 0; spin2 < 20000; spin2++) {
                 volatile int d2; for (d2 = 0; d2 < 20; d2++) ;
                 if (gpu_jvdec_hello() == 0x0A3D0001u) break;
             }
             g_jvmin_game = (gpu_jvdec_hello() == 0x0A3D0001u) ? 1 : 2;
-            gpu_sync();
-            gpu_kernel_select(0); }   /* game kernel back */
+            *(volatile uint32_t *)0xF02114u = 0;   /* stop Tom */
+            for (tries = 0; tries < 8 && gpu_jvdec_verify(); tries++)
+                gpu_jvdec_load();                  /* retry until bytes hold */
+            gpu_jvdec_kick((void *)0, 0, (void *)0, 0, (void *)0, (void *)0);
+            for (spin2 = 0; spin2 < 20000; spin2++) {
+                volatile int d2; for (d2 = 0; d2 < 20; d2++) ;
+                if (gpu_jvdec_hello() == 0x0A3D0001u) break;
+            }
+            g_jvmin2 = (gpu_jvdec_hello() == 0x0A3D0001u) ? 1 : 2;
+            *(volatile uint32_t *)0xF02114u = 0;
+            gpu_kernel_dirty();
+            gpu_kernel_select(0); }   /* game kernel FORCED back */
 #endif
 #if defined(GYMTEST) || defined(CAVETEST)
           menu_done:
@@ -6937,7 +6950,7 @@ bootvid_entry:
                every capture is labelled while walking the whole level looking
                for broken rooms.  Overlay into the finished frame before flip. */
             { uint8_t *dfb = (uint8_t *)video_backbuffer();
-              char rs[8]; int rn = g_curroom, p = 0;
+              char rs[12]; int rn = g_curroom, p = 0;
               rs[p++]='R';
               if (rn >= 10) rs[p++] = (char)('0' + (rn/10)%10);
               rs[p++] = (char)('0' + rn%10);
@@ -6946,8 +6959,12 @@ bootvid_entry:
                  entry (video context is the fault), J2 = failed there too
                  (the loader is), nothing = probe never executed */
               if (g_jvmin_game) {
+                  int vb9 = (int)(g_jv_vfy > 9 ? 9 : g_jv_vfy);
                   rs[p++] = 'J';
                   rs[p++] = (char)('0' + g_jvmin_game);
+                  rs[p++] = (char)('0' + g_jvmin2);
+                  rs[p++] = 'V';
+                  rs[p++] = (char)('0' + vb9);
               }
 #endif
               rs[p] = 0;
