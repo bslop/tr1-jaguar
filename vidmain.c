@@ -141,9 +141,11 @@ static uint32_t d_fields;   /* fields elapsed in the clip: fps = frames*60/d_fie
    guessing between "the GameDrive is slow" and "the 68k block copy is slow"
    would cost a silicon roll per theory. Accumulated over the whole clip and
    painted as bit rows, so one still frame carries the whole breakdown. */
-static uint32_t p_read, p_tom, p_copy, p_pace, p_paint;
+static uint32_t p_read, p_tom, p_copy, p_pace, p_paint, p_audio;
 static uint32_t d_blitfail;   /* phrase-mode copies that had to fall back */
 static uint32_t d_phrase;     /* phrase-mode Blitter copy verified byte-exact */
+static uint32_t d_sfx;        /* jerry_init() said the DSP came up */
+static uint32_t d_abatch;     /* audio batches handed to the DSP */
 
 /* Monotonic half-line clock. VC wraps every field, so fold in frame_count -
    which the vblank ISR bumps once per field - to get a running tick. */
@@ -276,8 +278,9 @@ static void paint_markers(uint8_t *fb)
     bits32(fb, 7, p_paint);
     bits32(fb, 8, d_pc);
     bits32(fb, 9, d_tomfail);
-    bits32(fb, 10, d_stage | (d_phrase << 8) | (d_blitfail << 16));
-    bits32(fb, 11, d_verify);
+    bits32(fb, 10, d_stage | (d_phrase << 8) | (d_sfx << 9)
+                 | (d_abatch << 16));
+    bits32(fb, 11, p_audio);
 }
 
 static void hold_screen(int fields)
@@ -455,7 +458,8 @@ static int play_clip(const char *name)
         pos += 8;
 
 #ifdef VR_AUDIO
-        if (AL) {
+        if (AL && d_sfx) {
+            uint32_t tau = vtick();
             volatile uint32_t *ncnt = (volatile uint32_t *)0xF1C378u;
             volatile uint32_t *vcnt = (volatile uint32_t *)0xF1C340u;
             if (acc + (int)AL > 4096) {
@@ -474,15 +478,16 @@ static int play_clip(const char *name)
                     rslot = (rslot + 1) % 6; pend--;
                     jerry_sfx_queue(aring + rslot*4096, (uint32_t)alen[rslot]);
                     rslot = (rslot + 1) % 6; pend--;
-                    astarted = 1;
+                    astarted = 1; d_abatch += 2;
                 }
             } else if (pend > 0 && *ncnt == 0) {
                 if (*vcnt == 0)
                     jerry_sfx(0, aring + rslot*4096, (uint32_t)alen[rslot], 0);
                 else
                     jerry_sfx_queue(aring + rslot*4096, (uint32_t)alen[rslot]);
-                rslot = (rslot + 1) % 6; pend--;
+                rslot = (rslot + 1) % 6; pend--; d_abatch++;
             }
+            p_audio += vtick() - tau;
         }
         pos += (int)AL;
 #else
@@ -607,6 +612,11 @@ int main(void)
 {
     pal_init();
     video_init();
+    /* FIRST crumb, immediately after video_init - the earliest point the
+       display can show anything. Without one here, "pure black, no crumb"
+       cannot distinguish a hang from a starved A10 miss, which is exactly
+       how the jerry_init investigation stalled. */
+    BGC(BG_YELLOW);
     video_set_clut(holdpal);
     /* NOT optional: gd_install() is what maps the GameDrive BIOS in. Without
        it every gd_fopen refuses and the clip silently never opens (the first
@@ -619,7 +629,17 @@ int main(void)
     d_gpu_ok = 1;                          /* no geotex kernel in this image */
 #endif
 #ifdef VR_JERRY
-    jerry_init();
+    /* gate the audio on the DSP actually coming up, the way main.c does with
+       g_sfx_ok - jerry_sfx into a dead DSP is a silent no-op that looks like
+       "the clip has no audio".
+       CRUMBS: every VR_JERRY build blacks out on all six layouts while the
+       identical build without it runs at 14.88fps, and the screen shows NO
+       background crumb at all - which says jerry_init never returns rather
+       than "a later stage broke". RED before, GREEN after: whichever colour
+       the screen holds names the side of the call the fault is on. */
+    BGC(BG_RED);
+    d_sfx = (uint32_t)jerry_init();
+    BGC(BG_GREEN);
 #endif
     video_set_disp240(1);                  /* clips are native 320x240 */
     BGC(BG_BLUE);                          /* BG shows only where nothing
