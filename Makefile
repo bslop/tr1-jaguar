@@ -1237,3 +1237,9 @@ ifdef VIDDIAG
 CFLAGS   += -DVIDDIAG
 CXXFLAGS += -DVIDDIAG
 endif
+
+# ASVID: auto-Start-Game after the title settles (Tom campaign self-test)
+ifdef ASVID
+CFLAGS   += -DASVID
+CXXFLAGS += -DASVID
+endif

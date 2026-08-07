@@ -4990,6 +4990,17 @@ bootvid_entry:
                  short delay so no physical A press is needed to reach the level */
               { static int _as_ctr = 0; if (++_as_ctr > 20) { g_useset = 0; page = 0; break; } }
 #endif
+#ifdef ASVID
+              /* Tom campaign self-test (2026-08-07): take the EXACT Start
+                 Game path (intro clip -> game) with no pad press - the
+                 menu-exit context is where kernel loads provably work, so
+                 this is experiment #1 running itself. */
+              { static int _av = 0; if (++_av > 20) {
+#ifndef NO_GAMEDRIVE
+                    if (mh >= 0) { gd_fclose((unsigned)mh); mh = -1; }
+#endif
+                    introplay = 1; goto bootvid_entry; } }
+#endif
 #ifdef CTRLOPEN
               /* CTRLOPEN=N: open the page after N title frames. Deliberately
                  NOT an initial value - a build that starts in the page cannot
