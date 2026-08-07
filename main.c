@@ -586,6 +586,9 @@ static int g_autoj;                   /* AUTO JUMP-REACH armed (UP at a wall
                                          with a grabbable ledge above)     */
 static int g_fwdblk;                  /* forward held but BLOCKED this frame
                                          (gates the auto-reach probe)      */
+#ifdef VIDDIAG
+static uint32_t g_jv_vfy;             /* SRAM-verify mismatches after load */
+#endif
 static int g_autograb;                /* airborne: treat ACTION as held so
                                          the auto jump catches and pulls up */
 static fix g_vaultx, g_vaultz;        /* foothold on top of the ledge     */
@@ -3552,6 +3555,10 @@ bootvid_entry:
                    this sync is a no-op. */
                 extern int gpu_sync(void); gpu_sync();
                 gpu_jvdec_load();
+#ifdef VIDDIAG
+                { extern uint32_t gpu_jvdec_verify(void);
+                  g_jv_vfy = gpu_jvdec_verify(); }
+#endif
             }
 #ifdef NOBOOTCLIPS
             for (vc = 3; vc < (introplay ? 4 : 3); vc++) {
@@ -3756,11 +3763,18 @@ bootvid_entry:
                           while (pending_fb)
                               ;
                           for (k2 = 0; k2 < nw; k2++) td[k2] = ts[k2];
-                          if (gpu_ok) {
-                              gpu_jvdec_kick(pprev, kfonly ? 0 : (int)plen,
-                                             pcur, L, cbk, bb);
-                              kicked = 1;
-                          }
+                          /* 68K DECODE PATH (2026-08-07): the Tom jvdec
+                             kernel has NEVER completed on silicon (probe
+                             markers: hello dark even at cold boot, DRAM
+                             mailbox made no difference) - every shipped
+                             video was already painted by the fallback,
+                             AFTER a ~260ms wait timeout that wrecked the
+                             cadence and flipped half-painted frames. Skip
+                             the kick entirely: the fallback is the proven
+                             decoder and a 2-pass delta paint (~36ms) fits
+                             a 15fps slot with room to spare. Tom probes
+                             live in VIDDIAG when the mystery reopens. */
+                          (void)gpu_ok; kicked = 0;
                           /* STEADY-RATE refill (GDPROBE-measured, 2026-08:
                              gd_fread = ~3.5ms fixed + 193KB/s - small reads
                              are CHEAP; the '24KB-only' premise was false).
@@ -3834,9 +3848,7 @@ bootvid_entry:
                             uint32_t *td = (uint32_t *)pcur;
                             for (k2 = 0; k2 < nw && k2 < 7552/4; k2++)
                                 td[k2] = ts[k2]; }
-                          gok = gpu_ok &&
-                                gpu_jvdec_frame(pprev, kfonly ? 0 : (int)plen,
-                                                tk, L, cbk, bb);
+                          gok = 0;   /* 68k decode path here too */
                       }
                       if (!gok) {
                           int pass;
@@ -3892,7 +3904,20 @@ bootvid_entry:
                                 mb[my*320 + 296 + mx] = st;
                         for (my = 124; my < 132; my++)
                             for (mx = 0; mx < 12; mx++)
-                                mb[my*320 + 296 + mx] = he; }
+                                mb[my*320 + 296 + mx] = he;
+                        /* square 4: SRAM verify (white = kernel bytes hold) */
+                        { extern uint32_t gpu_pc_read(void);
+                          uint8_t sv = (g_jv_vfy == 0) ? 255 : 64;
+                          uint32_t pc = gpu_pc_read();
+                          /* square 5: PC in SRAM range = Tom ran our code */
+                          uint8_t pq = (pc >= 0xF03000u && pc < 0xF04000u)
+                                       ? 255 : 64;
+                          for (my = 136; my < 144; my++)
+                              for (mx = 0; mx < 12; mx++)
+                                  mb[my*320 + 296 + mx] = sv;
+                          for (my = 148; my < 156; my++)
+                              for (mx = 0; mx < 12; mx++)
+                                  mb[my*320 + 296 + mx] = pq; } }
 #endif
                       /* ping-pong: this frame's tokens become next frame's
                          prev (both paths copied the tokens into pcur) */
