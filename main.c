@@ -591,6 +591,7 @@ static uint32_t g_jv_vfy;             /* SRAM-verify mismatches after load */
 static int g_jvmin_game;              /* context probe: 1=ran at game entry,
                                          2=failed there too, 0=not run yet */
 static int g_jvmin2;                  /* ...after a verify-retry load       */
+static int g_jv_d240;                 /* load-under-disp240: 1 ok, 2 corrupt */
 #endif
 static int g_autograb;                /* airborne: treat ACTION as held so
                                          the auto jump catches and pulls up */
@@ -5123,6 +5124,14 @@ bootvid_entry:
             }
             g_jvmin2 = (gpu_jvdec_hello() == 0x0A3D0001u) ? 1 : 2;
             *(volatile uint32_t *)0xF02114u = 0;
+            /* experiment 3: is DISP240 the saboteur? boot videos have no
+               music, yet their loads fail - the one structural difference
+               left vs this working context is the 240-line display mode. */
+            { extern void video_set_disp240(int);
+              video_set_disp240(1);
+              gpu_jvdec_load();
+              g_jv_d240 = gpu_jvdec_verify() ? 2 : 1;
+              video_set_disp240(0); }
             gpu_kernel_dirty();
             gpu_kernel_select(0); }   /* game kernel FORCED back */
 #endif
@@ -6976,6 +6985,8 @@ bootvid_entry:
                   rs[p++] = (char)('0' + g_jvmin2);
                   rs[p++] = 'V';
                   rs[p++] = (char)('0' + vb9);
+                  rs[p++] = 'D';
+                  rs[p++] = (char)('0' + g_jv_d240);
               }
 #endif
               rs[p] = 0;
