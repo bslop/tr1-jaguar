@@ -584,6 +584,8 @@ static int g_watery;                  /* water surface Y for the active pool */
 static int g_vault;                   /* pull-up in progress (0/1)        */
 static int g_autoj;                   /* AUTO JUMP-REACH armed (UP at a wall
                                          with a grabbable ledge above)     */
+static int g_fwdblk;                  /* forward held but BLOCKED this frame
+                                         (gates the auto-reach probe)      */
 static int g_autograb;                /* airborne: treat ACTION as held so
                                          the auto jump catches and pulls up */
 static fix g_vaultx, g_vaultz;        /* foothold on top of the ledge     */
@@ -3528,7 +3530,14 @@ bootvid_entry:
           { extern volatile uint32_t frame_count;
             uint8_t *vb  = (uint8_t *)rblob;         /* stream buffer      */
             uint8_t *cbk = (uint8_t *)rblob + 31488; /* 4KB VQ codebook    */
-            uint8_t *ptk = (uint8_t *)rblob + 35584; /* prev-frame tokens  */
+            /* TWO token stashes, ping-ponged per frame: the kernel re-applies
+               the PREVIOUS frame's tokens to the stale back buffer, so the
+               previous stash must survive the current copy (delta streams;
+               kf-only passes prevlen 0 and never reads it). 7552B each is
+               ~1.5x the measured worst frame; the encoder asserts the cap. */
+            uint8_t *ptkA = (uint8_t *)rblob + 35584;
+            uint8_t *ptkB = (uint8_t *)rblob + 43136;
+            extern volatile uint32_t video_two_buf;
             int vc;
             /* JV04 (user: "the original videos from the disc"): NATIVE
                320x240 vector quantization - 4x4 blocks against a per-clip
@@ -3551,6 +3560,8 @@ bootvid_entry:
 #endif
                 int vh = -1, mi2, vw, vhh, vfps, vnf, fi, remain, have, pos;
                 uint32_t t0, plen = 0;
+                uint8_t *pcur = ptkA, *pprev = ptkB;
+                video_two_buf = 1;   /* pin the flip to fb0/fb1 (see video.c) */
                 /* boot flow (user 2026-08-05): EIDOS -> CORE -> the disc
                    intro cinematic (CAFE.FMV: snake eye / dig / cafe pitch)
                    -> title. A skips the current clip; A during the intro
@@ -3726,13 +3737,25 @@ bootvid_entry:
                          frame slot. kf-only streams need no prev tokens,
                          so the stash doubles as the decode source; the
                          legacy two-pass path keeps the serial order. */
-                      if (kfonly) {
+                      if (L <= 7552) {
+                          /* UNIFIED ASYNC PATH (2026-08-07): delta streams
+                             used to fall to the legacy serial path (no v8
+                             pacing = "goes faster in parts") and its prev
+                             re-apply couldn't cover TRIPLE buffering (title
+                             GHOSTED through). Now: 2-buffer pin + wait for
+                             the pending flip BEFORE decoding (the freed
+                             buffer is never on screen), stash ping-pong so
+                             the prev tokens survive, then the proven kick/
+                             refill/wait shape. */
                           uint32_t k2, nw = ((L + 3u) & ~3u) >> 2;
                           const uint32_t *ts = (const uint32_t *)tk;
-                          uint32_t *td = (uint32_t *)ptk;
+                          uint32_t *td = (uint32_t *)pcur;
+                          while (pending_fb)
+                              ;
                           for (k2 = 0; k2 < nw; k2++) td[k2] = ts[k2];
                           if (gpu_ok) {
-                              gpu_jvdec_kick(ptk, 0, ptk, L, cbk, bb);
+                              gpu_jvdec_kick(pprev, kfonly ? 0 : (int)plen,
+                                             pcur, L, cbk, bb);
                               kicked = 1;
                           }
                           /* STEADY-RATE refill (GDPROBE-measured, 2026-08:
@@ -3798,14 +3821,24 @@ bootvid_entry:
                                 for (x8 = 0; x8 < 16; x8++)
                                     cb8[y8*320 + x8] = v8; }
 #endif
-                      } else
-                      gok = gpu_ok &&
-                            gpu_jvdec_frame(ptk, kfonly ? 0 : plen,
-                                            tk, L, cbk, bb);
+                      } else {
+                          /* oversize frame (non-conforming file): serial
+                             decode straight from the stream buffer */
+                          while (pending_fb)
+                              ;
+                          { uint32_t k2, nw = ((L+3u)&~3u) >> 2;
+                            const uint32_t *ts = (const uint32_t *)tk;
+                            uint32_t *td = (uint32_t *)pcur;
+                            for (k2 = 0; k2 < nw && k2 < 7552/4; k2++)
+                                td[k2] = ts[k2]; }
+                          gok = gpu_ok &&
+                                gpu_jvdec_frame(pprev, kfonly ? 0 : (int)plen,
+                                                tk, L, cbk, bb);
+                      }
                       if (!gok) {
                           int pass;
                           for (pass = 0; pass < 2; pass++) {
-                              uint8_t *s = pass ? (kfonly ? ptk : tk) : ptk;
+                              uint8_t *s = pass ? pcur : pprev;
                               uint8_t *e = s + (pass ? L : (kfonly ? 0 : plen));
                               uint8_t *dA = bb;
                               int bx = 0, left = 4800;
@@ -3828,14 +3861,10 @@ bootvid_entry:
                               }
                           }
                       }
-                      /* stash this frame's tokens for the next buffer
-                         (the kf-only path stashed before the kick) */
-                      if (!kfonly) {
-                          uint32_t k2, nw = ((L + 3u) & ~3u) >> 2;
-                          const uint32_t *ts = (const uint32_t *)tk;
-                          uint32_t *td = (uint32_t *)ptk;
-                          for (k2 = 0; k2 < nw; k2++) td[k2] = ts[k2]; }
-                      plen = L; }
+                      /* ping-pong: this frame's stash becomes next frame's
+                         prev (both paths copied the tokens into pcur) */
+                      { uint8_t *sw = pprev; pprev = pcur; pcur = sw; }
+                      plen = (L <= 7552) ? L : 0; }
                     { int tgt, nowr;
                       /* previous frame consumed AT ITS FIELD first, so the
                          schedule anchors to ACTUAL display times - v6
@@ -3889,6 +3918,15 @@ bootvid_entry:
                 gd_fclose((unsigned)vh);
             }
             video_pend_at = 0;     /* every later flip is immediate again */
+            video_two_buf = 0;     /* release the fb0/fb1 pin */
+            /* scrub ALL THREE framebuffers: video wrote 240-line frames and
+               pinned to two buffers - stale rows/pixels otherwise ghost into
+               the title and show as LINES below the game's 120-line window
+               (user 2026-08-07). crash_fbs[] names every buffer. */
+            { extern uint8_t *const crash_fbs[3]; int b3; uint32_t k3;
+              for (b3 = 0; b3 < 3; b3++) {
+                  uint32_t *fw = (uint32_t *)crash_fbs[b3];
+                  for (k3 = 0; k3 < (320u*240u)/4u; k3++) fw[k3] = 0; } }
             if (gpu_ok)
                 gpu_jvdec_done();   /* restore the init-once kernel params
                                        (mailbox ptr) the video block used */
@@ -6009,6 +6047,7 @@ bootvid_entry:
 #endif
                   int nx = g_lax + (int)(((int32_t)SIN(g_layaw)*(spd*mv))>>16);
                   int nz = g_laz + (int)(((int32_t)COS(g_layaw)*(spd*mv))>>16);
+                  int mx0 = g_lax, mz0 = g_laz;   /* for the stall detector */
                   int nf;   /* only walk onto a floor whose step-UP is small (a
                                tall step is a wall/ledge you can't just walk up;
                                this stops Lara popping onto raised sectors) */
@@ -6024,6 +6063,13 @@ bootvid_entry:
                       !ent_door_blocks(g_curroom, g_lax, g_laz, g_lax, nz) &&
 #endif
                       g_lafloor - nf <= LARA_STEPUP) g_laz = nz;
+                  /* pressed against something: forward held but she moved on
+                     NEITHER axis. Gates the auto jump-reach probe below so
+                     its two extra floor searches (the priciest 68k call in
+                     the frame) only run at actual wall contact - probing
+                     every UP-held frame measurably dropped the GAME's fps
+                     (user 2026-08-07). */
+                  g_fwdblk = (mv > 0 && g_lax == mx0 && g_laz == mz0);
               }
 #ifdef MV_SIDE
               if (side) lara_sidestep(side, rsect, roomCount);
@@ -6215,8 +6261,8 @@ bootvid_entry:
                  whose ledge sits above vault reach but within an up-jump's
                  hands = she jumps in place reaching for it; the airborne
                  grab catches with ACTION implied and held UP pulls her up. */
-              if ((pad & PAD_UP) && g_lay >= g_lafloor - 4 && !g_vault &&
-                  !g_jumped && !g_hang && !g_autoj) {
+              if ((pad & PAD_UP) && g_fwdblk && g_lay >= g_lafloor - 4 &&
+                  !g_vault && !g_jumped && !g_hang && !g_autoj) {
                   /* probe a QUARTER CELL ahead, not WALK_SPEED*2 (94): the
                      move gate halts her up to a full frame-step (~140 units)
                      short of the wall, so the short probe sampled HER OWN

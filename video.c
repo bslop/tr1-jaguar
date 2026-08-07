@@ -127,6 +127,13 @@ OPSTATIC volatile uint32_t pending_fb;/* buffer the ISR should show, 0=none  */
    cadence is HARDWARE-timed and immune to 68k read stalls; it must be
    reset to 0 when the player exits. */
 OPSTATIC volatile uint32_t video_pend_at;
+/* FMV 2-BUFFER PIN (2026-08-07): delta video patches the back buffer with
+   the PREVIOUS frame's tokens, which covers exactly 2-deep staleness. The
+   demo's TRIPLE rotation leaves a third buffer un-patched -> the title
+   screen GHOSTED through the clip. While set, video_flip ping-pongs
+   fb0/fb1 only; the player waits for the pending flip BEFORE decoding so
+   the displayed buffer is never written mid-scan. Reset on player exit. */
+OPSTATIC volatile uint32_t video_two_buf;
 
 /* FAST OP-LIST REPAIR (plain unscaled object only). The OP destroys ONLY
  * phrase 0 of the bitmap object (data ptr / ypos / height) as it draws; the
@@ -821,7 +828,9 @@ void video_flip(void)
     {
         fbpix *done = draw_buf;
         /* rotate to the buffer that is neither queued nor on screen */
-        if ((uint32_t)fb0 != (uint32_t)done && (uint32_t)fb0 != shown)
+        if (video_two_buf)
+            draw_buf = ((uint32_t)fb0 != (uint32_t)done) ? fb0 : fb1;
+        else if ((uint32_t)fb0 != (uint32_t)done && (uint32_t)fb0 != shown)
             draw_buf = fb0;
         else if ((uint32_t)fb1 != (uint32_t)done && (uint32_t)fb1 != shown)
             draw_buf = fb1;
