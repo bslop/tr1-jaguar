@@ -196,13 +196,17 @@ uint32_t gpu_pc_read(void)
    SRAM path and in which direction. GPU must be stopped. */
 uint32_t gpu_sram_test(void)
 {
-    volatile uint32_t *p = (volatile uint32_t *)0xF03800u;
+    /* ☠️ F03800 was INSIDE the resident geotex kernel (3572B ends F03DF4)
+       - the first version of this test corrupted the renderer and wedged
+       boot on a pale screen (which incidentally PROVED the writes land).
+       F03E00..F03E60 is the only truly free gap (kernel end to SRAM vars). */
+    volatile uint32_t *p = (volatile uint32_t *)0xF03E00u;
     uint32_t i, r, bad = 0;
     G_CTRL = 0;
-    for (i = 0; i < 32; i++)
+    for (i = 0; i < 16; i++)
         p[i] = 0xA5000000u | (i * 0x01010101u);
     for (r = 0; r < 64; r++)
-        for (i = 0; i < 32; i++)
+        for (i = 0; i < 16; i++)
             if (p[i] != (0xA5000000u | (i * 0x01010101u))) bad++;
     return bad;
 }
