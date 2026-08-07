@@ -709,6 +709,21 @@ vc_self:
 	load	(r0),r16		; camy
 	addq	#4,r0
 	load	(r0),r17		; camz
+	.if OFFHOIST=1
+	; hoist the per-room offsets out of vc_loop: dx = wx-camx = x-(camx-offX),
+	; so fold once into r26/r27 here (freed by INLINEMUL — REQUIRED: without
+	; it imul32 clobbers both every call) and drop 2 movei + 2 SRAM loads +
+	; 2 adds + a nop from EVERY vertex.
+	movei	#OFFXW,r1
+	load	(r1),r26
+	movei	#OFFZW,r1
+	load	(r1),r27
+	nop
+	neg	r26
+	neg	r27
+	add	r15,r26			; camx - offX
+	add	r17,r27			; camz - offZ
+	.endif
 	.if MMULTX
 	; --- MMULT rotate setup: copy the 9 precomposed Q12 coeffs into MTXBUF
 	;     (= WBUF, verified free during the pre-pass — the face loop clobbers it
@@ -753,6 +768,21 @@ mmx_copy:
 	jump	EQ,(r22)
 	nop
 vc_loop:
+	.if VPACK=1
+	; two long loads instead of three word loads: RVert is (x,y,z,shade)
+	; s16 big-endian at stride 8, so long@+0 = (x<<16)|y and long@+4 =
+	; (z<<16)|shade — one fewer DRAM access per vertex (ext mem is the
+	; dominant stall bucket, 41% of room 34 after INLINEMUL)
+	load	(r10),r8		; (x<<16)|y
+	addq	#4,r10
+	load	(r10),r20		; (z<<16)|shade
+	addq	#4,r10
+	move	r8,r9
+	sharq	#16,r8			; x (arithmetic >> sign-extends)
+	shlq	#16,r9
+	sharq	#16,r9			; y
+	sharq	#16,r20			; z (shade falls off the bottom)
+	.else
 	loadw	(r10),r8		; x
 	addq	#2,r10
 	loadw	(r10),r9		; y
@@ -765,6 +795,12 @@ vc_loop:
 	sharq	#16,r9
 	shlq	#16,r20
 	sharq	#16,r20
+	.endif
+	.if OFFHOIST=1
+	sub	r26,r8			; dx = x - (camx-offX)
+	sub	r16,r9			; dy
+	sub	r27,r20			; dz = z - (camz-offZ)
+	.else
 	movei	#OFFXW,r0
 	load	(r0),r1
 	movei	#OFFZW,r0
@@ -775,6 +811,7 @@ vc_loop:
 	sub	r15,r8			; dx
 	sub	r16,r9			; dy
 	sub	r17,r20			; dz
+	.endif
 	.if MMXDIAG
 	; TEMP DIAGNOSTIC: OR |dx|,|dy|,|dz| into $1C0010. Any bit >=15 set in the
 	; result means some component exceeded s16 -> the bank-1 pack truncates it
