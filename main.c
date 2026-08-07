@@ -3741,7 +3741,11 @@ bootvid_entry:
                              SRGUARD: volatile gate keeps the code in the
                              image (same layout) but never executes it -
                              boots=runtime fault, black=layout. */
-                          if (g_sr_on && remain > 0 && have < 31488 - 7168) {
+                          /* condition on UNCONSUMED content, not raw fill -
+                             the uncompacted `have` sits near-full and the
+                             steady read almost never ran (150-184ms stall
+                             cluster, sr_par histogram) */
+                          if (g_sr_on && remain > 0 && have - pos < 24576) {
                               int want = 7168;
                               if (pos) { int mv = have - pos, k3;
                                   for (k3 = 0; k3 < mv; k3++)
