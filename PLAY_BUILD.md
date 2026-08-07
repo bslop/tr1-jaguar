@@ -41,6 +41,12 @@ make MULTIROOM=1 GEOMDIRECT=1 SHADEPASS=1 JERRYPOSE=1 STAGEDIET=1 \
      TIMESTEP=1 ANIMRATE=1 OPDBL=1 LPLANES=1 AUTOSTART=1 \
      VCBIG=1 ENTITIES=1 SWANIM=1 DOORTEX=1 PADTEXT=544
 
+# ★★ 2026-08-06: add INLINEMUL=1 to all future builds — inlines the 10
+# imul32 calls/vertex as exact s16 imults. +5.7% fps ON SILICON (9.30→9.83
+# median at the caves spawn, FPSBEACON A/B, ranges non-overlapping), output
+# bit-identical (vtxcache diff, 38 rooms × 5 yaws), kernel −114 B. The A/B
+# pair (ship recipe + FPSBEACON ± INLINEMUL) lit on PADTEXT=272; adding
+# INLINEMUL to THIS demo recipe re-rolls A10 as usual — build all rolls.
 # ★ 2026-08-03: added SWANIM=1 (Lara's switch-pull animation) and DOORTEX=1
 # (real carved-stone door texture). DOORTEX needs the atlas patched ONCE first:
 #   MRT_DOORPATCH=1 TEXSCALE=2 MRT_ROOMS=64 SUBDIV_MAX=6144 LARA_MINAREA=1600 \
