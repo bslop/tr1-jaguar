@@ -1171,6 +1171,11 @@ ifdef PASSSWEEP
 CFLAGS   += -DPASSSWEEP=$(PASSSWEEP)
 CXXFLAGS += -DPASSSWEEP=$(PASSSWEEP)
 endif
+# STEADYREAD=1: experimental 7KB/frame video reads (13-black mystery, OFF)
+ifdef STEADYREAD
+CFLAGS   += -DSTEADYREAD=$(STEADYREAD)
+CXXFLAGS += -DSTEADYREAD=$(STEADYREAD)
+endif
 # GDPROBE=1: measure gd_fread cost vs size, draw bars, park (rig only)
 ifdef GDPROBE
 CFLAGS   += -DGDPROBE=$(GDPROBE)

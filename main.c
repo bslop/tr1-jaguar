@@ -3713,6 +3713,11 @@ bootvid_entry:
                              against the stream's 84KB/s - the buffer never
                              drains and the big stalls never happen. Runs
                              while the GPU decodes from the stash. */
+#ifdef STEADYREAD
+                          /* ☠️ EXPERIMENTAL - 13 boots straight BLACK with
+                             this enabled (2026-08-06 night, offsets 0-1904);
+                             mechanism unfound by inspection. Bisect with
+                             border crumbs before trusting. */
                           if (remain > 0 && have < 31488 - 7168) {
                               int want = 7168;
                               if (pos) { int mv = have - pos, k3;
@@ -3727,6 +3732,25 @@ bootvid_entry:
                                   have += want; remain -= want;
                               } else remain = 0;
                           }
+#else
+                          /* v8 low-water bulk refill - the PROVEN shape */
+                          if (remain > 0 && have - pos < 12288) {
+                              int want;
+                              if (pos) { int mv = have - pos, k3;
+                                  for (k3 = 0; k3 < mv; k3++)
+                                      vb[k3] = vb[pos + k3];
+                                  have = mv; pos = 0; }
+                              want = (31488 - have) & ~511;
+                              if (want > 24576) want = 24576;
+                              if (want > remain) want = remain;
+                              if (want > 0 &&
+                                  gd_fread((unsigned)vh, vb + have,
+                                           (unsigned)want,
+                                           GD_FREAD_CPU) == 0) {
+                                  have += want; remain -= want;
+                              } else remain = 0;
+                          }
+#endif
                           if (kicked) gok = gpu_jvdec_wait();
 #ifdef VIDCAD
                           /* cadence ground truth: 16x8 parity block the
