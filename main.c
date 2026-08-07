@@ -3540,6 +3540,10 @@ bootvid_entry:
                ~1.5x the measured worst frame; the encoder asserts the cap. */
             uint8_t *ptkA = (uint8_t *)rblob + 35584;
             uint8_t *ptkB = (uint8_t *)rblob + 43136;
+            /* SHADOW frame: the ONE place delta semantics live. Painted by
+               the 68k from the token stream, then block-copied whole into
+               the display buffer every frame. */
+            static uint8_t vshadow[320*240] __attribute__((aligned(16)));
             extern volatile uint32_t video_two_buf;
             int vc;
             /* JV04 (user: "the original videos from the disc"): NATIVE
@@ -3568,11 +3572,12 @@ bootvid_entry:
                 int vh = -1, mi2, vw, vhh, vfps, vnf, fi, remain, have, pos;
                 uint32_t t0, plen = 0;
                 uint8_t *pcur = ptkA, *pprev = ptkB;
-                uint8_t *vscrub[2] = { 0, 0 };  /* first-touch scrub tracker */
                 { extern void video_pin_start(void);
-                  video_pin_start(); } /* 2-buffer pin + seed the ping-pong
-                                          so the keyframe covers BOTH buffers
-                                          within two frames (see video.c) */
+                  video_pin_start(); } /* 2-buffer pin (less rotation churn;
+                                          the shadow copy makes correctness
+                                          independent of it) */
+                { uint32_t *fw = (uint32_t *)vshadow, k9;
+                  for (k9 = 0; k9 < (320u*240u)/4u; k9++) fw[k9] = 0; }
                 /* boot flow (user 2026-08-05): EIDOS -> CORE -> the disc
                    intro cinematic (CAFE.FMV: snake eye / dig / cafe pitch)
                    -> title. A skips the current clip; A during the intro
@@ -3748,50 +3753,47 @@ bootvid_entry:
                          frame slot. kf-only streams need no prev tokens,
                          so the stash doubles as the decode source; the
                          legacy two-pass path keeps the serial order. */
-                      if (L <= 7552) {
-                          /* UNIFIED ASYNC PATH (2026-08-07): delta streams
-                             used to fall to the legacy serial path (no v8
-                             pacing = "goes faster in parts") and its prev
-                             re-apply couldn't cover TRIPLE buffering (title
-                             GHOSTED through). Now: 2-buffer pin + wait for
-                             the pending flip BEFORE decoding (the freed
-                             buffer is never on screen), stash ping-pong so
-                             the prev tokens survive, then the proven kick/
-                             refill/wait shape. */
-                          uint32_t k2, nw = ((L + 3u) & ~3u) >> 2;
-                          const uint32_t *ts = (const uint32_t *)tk;
-                          uint32_t *td = (uint32_t *)pcur;
+                      {
                           while (pending_fb)
                               ;
-                          /* FIRST-TOUCH SCRUB (2026-08-07): black any buffer
-                             the FIRST time this clip decodes into it, so a
-                             skip block can only preserve pixels THIS CLIP
-                             painted - menu text was surviving in the
-                             letterbox bars (delta skips black-on-black;
-                             only keyframes repaint them). Tracking by
-                             pointer also nets any buffer a leaky rotation
-                             sneaks in mid-clip: it costs one clean black-
-                             bar frame instead of a title ghost. ~6ms per
-                             first touch. */
-                          if (bb != vscrub[0] && bb != vscrub[1]) {
-                              uint32_t *fw = (uint32_t *)bb, k9;
-                              for (k9 = 0; k9 < (320u*240u)/4u; k9++)
-                                  fw[k9] = 0;
-                              vscrub[fi & 1] = bb;
-                          }
-                          for (k2 = 0; k2 < nw; k2++) td[k2] = ts[k2];
-                          /* 68K DECODE PATH (2026-08-07): the Tom jvdec
-                             kernel has NEVER completed on silicon (probe
-                             markers: hello dark even at cold boot, DRAM
-                             mailbox made no difference) - every shipped
-                             video was already painted by the fallback,
-                             AFTER a ~260ms wait timeout that wrecked the
-                             cadence and flipped half-painted frames. Skip
-                             the kick entirely: the fallback is the proven
-                             decoder and a 2-pass delta paint (~36ms) fits
-                             a 15fps slot with room to spare. Tom probes
-                             live in VIDDIAG when the mystery reopens. */
-                          (void)gpu_ok; kicked = 0;
+                          /* SHADOW DECODE (2026-08-07, the ghost-slayer):
+                             apply this frame's tokens to a PRIVATE full
+                             frame in DRAM - delta semantics live THERE -
+                             then block-copy the complete image into
+                             whatever buffer the display hands us. No
+                             dependence on framebuffer history AT ALL:
+                             any rotation, any staleness, every displayed
+                             frame is complete by construction. (The Tom
+                             jvdec kernel never ran on silicon - probe
+                             saga in gpu.c; the 68k IS the decoder, and
+                             ~2ms of tokens + ~7ms of copy fits a 15fps
+                             slot three times over.) */
+                          { const uint8_t *s = tk, *e = tk + L;
+                            uint8_t *dA = vshadow;
+                            int bx = 0, left = 4800;
+                            while (s < e && left > 0) {
+                                int t2 = *s++;
+                                int n2 = (t2 < 128) ? t2 + 1 : t2 - 127;
+                                while (n2-- && left > 0) {
+                                    if (t2 < 128) {
+                                        const uint32_t *cbe;
+                                        uint32_t *w0;
+                                        if (s >= e) { left = 0; break; }
+                                        cbe = (const uint32_t *)
+                                              (cbk + ((uint32_t)*s++ << 4));
+                                        w0 = (uint32_t *)dA;
+                                        w0[0] = cbe[0]; w0[80] = cbe[1];
+                                        w0[160] = cbe[2]; w0[240] = cbe[3];
+                                    }
+                                    dA += 4; left--;
+                                    if (++bx == 80) { bx = 0; dA += 960; }
+                                }
+                            } }
+                          { const uint32_t *sv = (const uint32_t *)vshadow;
+                            uint32_t *dv = (uint32_t *)bb; uint32_t k9;
+                            for (k9 = 0; k9 < (320u*240u)/4u; k9++)
+                                dv[k9] = sv[k9]; }
+                          (void)gpu_ok; (void)pcur; (void)pprev; kicked = 0;
                           /* STEADY-RATE refill (GDPROBE-measured, 2026-08:
                              gd_fread = ~3.5ms fixed + 193KB/s - small reads
                              are CHEAP; the '24KB-only' premise was false).
@@ -3855,44 +3857,8 @@ bootvid_entry:
                                 for (x8 = 0; x8 < 16; x8++)
                                     cb8[y8*320 + x8] = v8; }
 #endif
-                      } else {
-                          /* oversize frame (non-conforming file): serial
-                             decode straight from the stream buffer */
-                          while (pending_fb)
-                              ;
-                          { uint32_t k2, nw = ((L+3u)&~3u) >> 2;
-                            const uint32_t *ts = (const uint32_t *)tk;
-                            uint32_t *td = (uint32_t *)pcur;
-                            for (k2 = 0; k2 < nw && k2 < 7552/4; k2++)
-                                td[k2] = ts[k2]; }
-                          gok = 0;   /* 68k decode path here too */
                       }
-                      if (!gok) {
-                          int pass;
-                          for (pass = 0; pass < 2; pass++) {
-                              uint8_t *s = pass ? pcur : pprev;
-                              uint8_t *e = s + (pass ? L : (kfonly ? 0 : plen));
-                              uint8_t *dA = bb;
-                              int bx = 0, left = 4800;
-                              while (s < e && left > 0) {
-                                  int t2 = *s++;
-                                  int n2 = (t2 < 128) ? t2 + 1 : t2 - 127;
-                                  while (n2-- && left > 0) {
-                                      if (t2 < 128) {
-                                          const uint32_t *cbe;
-                                          uint32_t *w0;
-                                          if (s >= e) { left = 0; break; }
-                                          cbe = (const uint32_t *)(cbk + ((uint32_t)*s++ << 4));
-                                          w0 = (uint32_t *)dA;
-                                          w0[0] = cbe[0]; w0[80] = cbe[1];
-                                          w0[160] = cbe[2]; w0[240] = cbe[3];
-                                      }
-                                      dA += 4; left--;
-                                      if (++bx == 80) { bx = 0; dA += 960; }
-                                  }
-                              }
-                          }
-                      }
+                      (void)kfonly;   /* shadow path: every frame complete */
 #ifdef VIDDIAG
                       /* DECODE-STATUS MARKER (2026-08-07 ghost hunt): 8x8 at
                          top-right. Bright white = Tom wrote DONE; dark grey =
