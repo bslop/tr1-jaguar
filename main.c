@@ -3991,7 +3991,22 @@ bootvid_entry:
                                   mb[my*320 + 296 + mx] = sv;
                           for (my = 148; my < 156; my++)
                               for (mx = 0; mx < 12; mx++)
-                                  mb[my*320 + 296 + mx] = pq; } }
+                                  mb[my*320 + 296 + mx] = pq;
+                          /* squares 6-7: SRAM r/w pattern test results for
+                             post-init [0] and this video context [1 or 2] -
+                             white = clean. If these are WHITE while the
+                             kernel verify square is dark, the corruption is
+                             in the ROM SOURCE reads (GD-served), not the
+                             SRAM writes. */
+                          { uint8_t s6 = (g_sr[0] == 0) ? 255 : 64;
+                            uint8_t s7 = (g_sr[introplay ? 2 : 1] == 0)
+                                         ? 255 : 64;
+                            for (my = 160; my < 168; my++)
+                                for (mx = 0; mx < 12; mx++)
+                                    mb[my*320 + 296 + mx] = s6;
+                            for (my = 172; my < 180; my++)
+                                for (mx = 0; mx < 12; mx++)
+                                    mb[my*320 + 296 + mx] = s7; } } }
 #endif
                       /* ping-pong: this frame's tokens become next frame's
                          prev (both paths copied the tokens into pcur) */
