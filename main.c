@@ -588,6 +588,8 @@ static int g_fwdblk;                  /* forward held but BLOCKED this frame
                                          (gates the auto-reach probe)      */
 #ifdef VIDDIAG
 static uint32_t g_jv_vfy;             /* SRAM-verify mismatches after load */
+static int g_jvmin_game;              /* context probe: 1=ran at game entry,
+                                         2=failed there too, 0=not run yet */
 #endif
 static int g_autograb;                /* airborne: treat ACTION as held so
                                          the auto jump catches and pulls up */
@@ -5077,6 +5079,29 @@ bootvid_entry:
           /* task #4: leave TITLE mode - game kernel + scaled 120-line display */
           { extern void video_set_disp240(int); extern void gpu_kernel_select(int);
             video_set_disp240(0); gpu_kernel_select(0); }
+#ifdef VIDDIAG
+          /* CONTEXT PROBE (2026-08-07, Tom campaign): run the JVMIN micro-
+             kernel load+kick AT GAME ENTRY - the one place a kernel load
+             (kernel_select, the line above) is PROVEN to work. Result goes
+             to g_jvmin_game; the DBGROOM overlay paints J1/J0. If it runs
+             HERE but not in the video block, the video context is the
+             fault; if it fails here too, the loader itself is. Restore the
+             game kernel afterwards. */
+          { extern int gpu_sync(void);
+            extern void gpu_kernel_select(int);
+            extern uint32_t gpu_jvdec_hello(void);
+            uint32_t spin2;
+            gpu_sync();
+            gpu_jvdec_load();
+            gpu_jvdec_kick((void *)0, 0, (void *)0, 0, (void *)0, (void *)0);
+            for (spin2 = 0; spin2 < 20000; spin2++) {
+                volatile int d2; for (d2 = 0; d2 < 20; d2++) ;
+                if (gpu_jvdec_hello() == 0x0A3D0001u) break;
+            }
+            g_jvmin_game = (gpu_jvdec_hello() == 0x0A3D0001u) ? 1 : 2;
+            gpu_sync();
+            gpu_kernel_select(0); }   /* game kernel back */
+#endif
 #if defined(GYMTEST) || defined(CAVETEST)
           menu_done:
           { volatile uint32_t *v0 = (volatile uint32_t *)0xF1C340u;
@@ -6916,6 +6941,15 @@ bootvid_entry:
               rs[p++]='R';
               if (rn >= 10) rs[p++] = (char)('0' + (rn/10)%10);
               rs[p++] = (char)('0' + rn%10);
+#ifdef VIDDIAG
+              /* Tom context probe verdict: J1 = micro-kernel RAN at game
+                 entry (video context is the fault), J2 = failed there too
+                 (the loader is), nothing = probe never executed */
+              if (g_jvmin_game) {
+                  rs[p++] = 'J';
+                  rs[p++] = (char)('0' + g_jvmin_game);
+              }
+#endif
               rs[p] = 0;
               menu_text(dfb, RENDER_W, RENDER_H, rs, 4, 2, 1, 2, 255); }
 #endif
