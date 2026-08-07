@@ -6217,8 +6217,13 @@ bootvid_entry:
                  grab catches with ACTION implied and held UP pulls her up. */
               if ((pad & PAD_UP) && g_lay >= g_lafloor - 4 && !g_vault &&
                   !g_jumped && !g_hang && !g_autoj) {
-                  int px = g_lax + (int)(((int32_t)SIN(g_layaw)*(WALK_SPEED*2))>>16);
-                  int pz = g_laz + (int)(((int32_t)COS(g_layaw)*(WALK_SPEED*2))>>16);
+                  /* probe a QUARTER CELL ahead, not WALK_SPEED*2 (94): the
+                     move gate halts her up to a full frame-step (~140 units)
+                     short of the wall, so the short probe sampled HER OWN
+                     cell and never armed — she'd long-jump instead (user
+                     2026-08-07 second report) */
+                  int px = g_lax + (int)(((int32_t)SIN(g_layaw)*256)>>16);
+                  int pz = g_laz + (int)(((int32_t)COS(g_layaw)*256)>>16);
                   int lf, rise, lfok;
                   int cy2;
                   g_flr_grab = 1;
