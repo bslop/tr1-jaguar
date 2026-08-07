@@ -582,6 +582,10 @@ static int g_watery;                  /* water surface Y for the active pool */
 /* ledge vault / pull-up: a step too tall to walk up but low enough to climb
    triggers a pull-up; while airborne, hands within reach of a ledge grab it. */
 static int g_vault;                   /* pull-up in progress (0/1)        */
+static int g_autoj;                   /* AUTO JUMP-REACH armed (UP at a wall
+                                         with a grabbable ledge above)     */
+static int g_autograb;                /* airborne: treat ACTION as held so
+                                         the auto jump catches and pulls up */
 static fix g_vaultx, g_vaultz;        /* foothold on top of the ledge     */
 static int g_vaulty;                  /* target feet Y once up            */
 static int g_climbf;                  /* climb tick counter               */
@@ -639,6 +643,10 @@ static const uint8_t g_padding[PADBYTES] __attribute__((used)) = { 1 };
 #endif
 static int g_curroom;                 /* room Lara is standing in (visibility) */
 static int g_curroom_fwd(void) { return g_curroom; }
+#define LARA_JUMPGRAB 1664            /* AUTO JUMP-REACH ceiling: up-jump apex
+                                         (110^2/2g ~= 1008) + hand reach 720,
+                                         less a catch margin — ledges to ~6.5
+                                         clicks are worth jumping for */
 #define LARA_CLIMB    768             /* max standing VAULT = 3 clicks (TR1-authentic;
                                          taller ledges need a jump+grab at the right
                                          height — 7-click vaults let her scale the
@@ -5849,10 +5857,10 @@ bootvid_entry:
               if (g_hang) {
                   g_lay = g_vaulty + LARA_GRABREACH;
                   g_lavy = 0; g_airfr = 0;
-                  if (!(pad & PAD_B)) {           /* released: let go and fall */
+                  if (!(pad & PAD_B) && !g_autograb) { /* released: let go, fall */
                       g_hang = 0; g_jumped = 0; g_lajf = 0;
                   } else if (pad & PAD_UP) {      /* pull up */
-                      g_hang = 0; g_vault = 1;
+                      g_hang = 0; g_vault = 1; g_autograb = 0;
                       g_climbf = 0; g_climby0 = g_lay;
                       g_climbx0 = g_lax; g_climbz0 = g_laz;
                       /* TR1: WALK held during the pull-up = HANDSTAND */
@@ -6203,6 +6211,29 @@ bootvid_entry:
                       goto lara_done;                  /* skip jump physics       */
                   }
               }
+              /* AUTO JUMP-REACH (user 2026-08-07): UP alone against a wall
+                 whose ledge sits above vault reach but within an up-jump's
+                 hands = she jumps in place reaching for it; the airborne
+                 grab catches with ACTION implied and held UP pulls her up. */
+              if ((pad & PAD_UP) && g_lay >= g_lafloor - 4 && !g_vault &&
+                  !g_jumped && !g_hang && !g_autoj) {
+                  int px = g_lax + (int)(((int32_t)SIN(g_layaw)*(WALK_SPEED*2))>>16);
+                  int pz = g_laz + (int)(((int32_t)COS(g_layaw)*(WALK_SPEED*2))>>16);
+                  int lf, rise, lfok;
+                  int cy2;
+                  g_flr_grab = 1;
+                  lfok = room_floor_mr(rsect, roomCount, px, pz, &lf);
+                  g_flr_grab = 0;
+                  if (lfok &&
+                      (rise = g_lafloor - lf) > LARA_CLIMB &&
+                      rise <= LARA_JUMPGRAB &&
+                      (!room_ceil_at(rsect[g_curroom], g_lax, g_laz, &cy2) ||
+                       lf >= cy2) &&
+                      room_reachable(g_curroom, g_floorroom)) {
+                      g_layaw = ALIGN_WALL(g_layaw);   /* square to the wall */
+                      g_autoj = 1;                     /* arm the up-jump */
+                  }
+              }
               /* jump physics (+Y down: up = negative vy). EDGE-triggered:
                  a NEW press of PAD_A while grounded arms a 1-frame compress,
                  then launch. (Held-A used to relaunch on every landing —
@@ -6211,9 +6242,18 @@ bootvid_entry:
                 static uint32_t jprev; static int jprep;
                 uint32_t jedge = pad & ~jprev;
                 jprev = pad;
-                if ((jedge & PAD_A) && grounded && !jprep) jprep = 2;
+                if (((jedge & PAD_A) || g_autoj) && grounded && !jprep)
+                    jprep = 2;
                 if (jprep && grounded) {
                     if (--jprep == 0) {
+                        if (g_autoj) {
+                            /* AUTO JUMP-REACH launch: straight up, hands out */
+                            g_autoj = 0; g_autograb = 1;
+                            g_lajf = 0; g_jdir = 0;
+                            g_jumped = 1;
+                            g_lavy = -JUMP_VEL_UP;
+                            g_jfwd = 0;
+                        } else {
                         /* TR1 picks the jump by what is held at launch: no
                            direction = UP_JUMP (higher, barely forward); a
                            direction = a directional jump, and its reach
@@ -6232,6 +6272,7 @@ bootvid_entry:
                         g_jfwd = !g_lajf ? 0
                                : ((g_jdir == 0 && !(pad & PAD_C)) ? JUMP_FWD_RUN
                                                                   : JUMP_FWD_STAND);
+                        }
                     }
                 } else if (!grounded) jprep = 0;
                 /* Integrate on TR1's 30 Hz TICK, not the render frame.
@@ -6308,6 +6349,7 @@ bootvid_entry:
                         g_dead = 1;
                     g_lay = g_lafloor; g_lavy = 0; grounded = 1; g_lajf = 0;
                     g_jumped = 0; g_jdir = 0; g_fally = 0;
+                    g_autograb = 0;               /* auto-reach missed: done */
                     g_airfr = 0; }
                 else if (g_lavy == 0 && g_lafloor - g_lay <= LARA_STEPUP) {
                     /* walking DOWN a step/slope or across a room seam: EASE
@@ -6321,7 +6363,7 @@ bootvid_entry:
                 /* JUMP GRAB (TR: hold ACTION in mid-air). If her hands (feet -
                    reach) come level with a ledge ahead, she catches it and pulls
                    up, squaring to the wall. PAD_B = ACTION. */
-                if (!grounded && (pad & PAD_B)) {
+                if (!grounded && ((pad & PAD_B) || g_autograb)) {
                     int px = g_lax + (int)(((int32_t)SIN(g_layaw)*(WALK_SPEED*2))>>16);
                     int pz = g_laz + (int)(((int32_t)COS(g_layaw)*(WALK_SPEED*2))>>16);
                     int lf, handY = g_lay - LARA_GRABREACH, lfok;
@@ -6408,7 +6450,8 @@ bootvid_entry:
                     int fallish = !g_jumped || (!g_lajf && g_lavy > 0);
                     /* TR1 REACH (anim 94): ACTION held while descending is the
                        arms-out grab pose, not a plain fall. */
-                    lanim_set((pad & PAD_B) && g_lavy > 0 ? LANIM_REACH :
+                    lanim_set(((pad & PAD_B) || g_autograb) && g_lavy > 0
+                                                 ? LANIM_REACH :
                               /* a BACK jump past its apex becomes FALL_BACK
                                  (anim 93), not the launch pose */
                               (g_jdir == 1 && g_lavy > 0) ? LANIM_FALLBACK :
