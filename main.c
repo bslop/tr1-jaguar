@@ -3864,7 +3864,37 @@ bootvid_entry:
                               }
                           }
                       }
-                      /* ping-pong: this frame's stash becomes next frame's
+#ifdef VIDDIAG
+                      /* DECODE-STATUS MARKER (2026-08-07 ghost hunt): 8x8 at
+                         top-right. Bright white = Tom wrote DONE; dark grey =
+                         wait TIMED OUT and the 68k fallback painted. If the
+                         cinematic flashes dark-grey markers, the silicon
+                         story is decode-timeout races, which the sim (full
+                         budget, no contention) can never reproduce. */
+                      { uint8_t *mb = (uint8_t *)bb; int my, mx;
+                        /* v2: MID-BAND so the letterbox can't hide it, and
+                           frame-alternating so a shown marker PROVES the
+                           displayed buffer is the one we decoded into */
+                        uint8_t hb = (fi & 1) ? 255 : 1;   /* heartbeat  */
+                        uint8_t st = gok ? 255 : 64;       /* gok status */
+                        /* third square: did the kernel STICK ITS HEAD UP?
+                           (hello magic at PARAMS+36, written at kernel
+                           entry before any decode). White = Tom started;
+                           dark = the restart itself never ran. */
+                        extern uint32_t gpu_jvdec_hello(void);
+                        uint8_t he = (gpu_jvdec_hello() == 0x0A3D0001u)
+                                     ? 255 : 64;
+                        for (my = 100; my < 108; my++)
+                            for (mx = 0; mx < 12; mx++)
+                                mb[my*320 + 296 + mx] = hb;
+                        for (my = 112; my < 120; my++)
+                            for (mx = 0; mx < 12; mx++)
+                                mb[my*320 + 296 + mx] = st;
+                        for (my = 124; my < 132; my++)
+                            for (mx = 0; mx < 12; mx++)
+                                mb[my*320 + 296 + mx] = he; }
+#endif
+                      /* ping-pong: this frame's tokens become next frame's
                          prev (both paths copied the tokens into pcur) */
                       { uint8_t *sw = pprev; pprev = pcur; pcur = sw; }
                       plen = (L <= 7552) ? L : 0; }

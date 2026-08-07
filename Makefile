@@ -1231,3 +1231,9 @@ endif
 ifdef LARA_FOOT2
 CFLAGS   += -DLARA_FOOT2=$(LARA_FOOT2)
 endif
+
+# VIDDIAG: FMV decode-status marker (ghost hunt 2026-08-07)
+ifdef VIDDIAG
+CFLAGS   += -DVIDDIAG
+CXXFLAGS += -DVIDDIAG
+endif

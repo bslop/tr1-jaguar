@@ -112,6 +112,14 @@ void gpu_jvdec_kick(const void *prevTok, uint32_t prevLen,
                     const void *cb, void *fb)
 {
     G_CTRL = 0;
+    /* DONE/HELLO handshake moved to the DRAM mailbox (2026-08-07): the 68k
+       cannot reliably read GPU SRAM while the GPU is running, so polling
+       PARAMS+32 timed out on EVERY frame on silicon and all video was
+       silently 68k-fallback painted — the root of the delta-clip ghosting
+       and the entire v8 pacing fight. Same pattern as every other kernel. */
+    mailbox[0] = 0;
+    mailbox[1] = 0;
+    *(volatile uint32_t *)(G_PARAMS + 24) = (uint32_t)mailbox;
     *(volatile uint32_t *)(G_PARAMS + 0)  = (uint32_t)prevTok;
     *(volatile uint32_t *)(G_PARAMS + 4)  = prevLen;
     *(volatile uint32_t *)(G_PARAMS + 8)  = (uint32_t)curTok;
@@ -126,18 +134,24 @@ void gpu_jvdec_kick(const void *prevTok, uint32_t prevLen,
 int gpu_jvdec_wait(void)
 {
     uint32_t i;
-    /* sparse poll - a tight DRAM poll starves Tom (porting notes) */
+    /* sparse poll of the DRAM mailbox (NOT GPU SRAM - see gpu_jvdec_kick) */
     for (i = 0; i < 80000; i++) {
         volatile uint32_t d;
         for (d = 0; d < 40; d++)
             ;
-        if (*(volatile uint32_t *)(G_PARAMS + 32) == MAGIC_DONE) {
+        if (mailbox[0] == MAGIC_DONE) {
             G_CTRL = 0;
             return 1;
         }
     }
     G_CTRL = 0;
     return 0;
+}
+
+/* VIDDIAG: did the kernel start? (hello magic in the DRAM mailbox) */
+uint32_t gpu_jvdec_hello(void)
+{
+    return mailbox[1];
 }
 
 int gpu_jvdec_frame(const void *prevTok, uint32_t prevLen,

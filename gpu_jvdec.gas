@@ -63,11 +63,20 @@ start:
 	load	(r1),r6			; codebook base
 	addq	#4,r1
 	load	(r1),r30		; fb (back buffer only)
-	nop
-	nop
-	movei	#PARAMS+36,r0
+	addq	#4,r1
+	load	(r1),r3			; DRAM MAILBOX (2026-08-07: the 68k CANNOT
+	nop				;   reliably read GPU SRAM while the GPU
+	nop				;   runs - polling PARAMS+32 timed out on
+	nop				;   EVERY frame on silicon, and all video
+					;   was silently 68k-fallback painted. The
+					;   handshake lives in DRAM now, exactly
+					;   like every other kernel's mailbox.)
 	movei	#MAGIC_HELLO,r2
-	store	r2,(r0)
+	move	r3,r0
+	addq	#4,r0
+	store	r2,(r0)			; mailbox[1] = hello (DRAM)
+	movei	#PARAMS+36,r0
+	store	r2,(r0)			; SRAM copy kept (sim harness compat)
 .endif
 
 	moveq	#0,r25			; pass 0 = prev, 1 = cur
@@ -212,8 +221,10 @@ start:
 .if TEST
 	nop
 .else
-	movei	#PARAMS+32,r1
 	movei	#MAGIC_DONE,r0
+	store	r0,(r3)			; mailbox[0] = done (DRAM - the 68k
+					;   polls THIS; SRAM below is legacy)
+	movei	#PARAMS+32,r1
 	store	r0,(r1)
 .endif
 	nop
