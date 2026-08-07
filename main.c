@@ -596,6 +596,10 @@ static int g_jv_d240;                 /* load-under-disp240: 1 ok, 2 corrupt */
 static int g_jv_early;                /* jvdec kernel loaded at boot (skip
                                          the video-block load entirely)    */
 #ifdef VIDDIAG
+static uint32_t g_sr[4] = {99,99,99,99}; /* SRAM r/w test per context:
+                                        0=post-init 1=video 2=startgame 3=game */
+#endif
+#ifdef VIDDIAG
 #endif
 static int g_autograb;                /* airborne: treat ACTION as held so
                                          the auto jump catches and pulls up */
@@ -2988,6 +2992,9 @@ int main(void)
         g_jv_vfy = gpu_jvdec_verify();
 #endif
         g_jv_early = 1;               /* video block: skip its own load */
+#ifdef VIDDIAG
+        { extern uint32_t gpu_sram_test(void); g_sr[0] = gpu_sram_test(); }
+#endif
     }
 #endif
     { extern int jerry_init(void);
@@ -3596,6 +3603,10 @@ bootvid_entry:
                    QUIESCE THE DSP VOICE for the ~50us of loading (the clip
                    replaces the music's audio anyway), then verify-retry
                    until the bytes hold. */
+#ifdef VIDDIAG
+                { extern uint32_t gpu_sram_test(void);
+                  g_sr[introplay ? 2 : 1] = gpu_sram_test(); }
+#endif
                 if (!g_jv_early) {
                   volatile uint32_t *v0 = (volatile uint32_t *)0xF1C340u;
                   volatile uint32_t *nq = (volatile uint32_t *)0xF1C378u;
@@ -5147,6 +5158,7 @@ bootvid_entry:
             extern uint32_t gpu_jvdec_verify(void);
             uint32_t spin2; int tries;
             gpu_sync();
+            { extern uint32_t gpu_sram_test(void); g_sr[3] = gpu_sram_test(); }
             gpu_jvdec_load();
             g_jv_vfy = gpu_jvdec_verify();
             gpu_jvdec_kick((void *)0, 0, (void *)0, 0, (void *)0, (void *)0);
@@ -7011,7 +7023,7 @@ bootvid_entry:
                every capture is labelled while walking the whole level looking
                for broken rooms.  Overlay into the finished frame before flip. */
             { uint8_t *dfb = (uint8_t *)video_backbuffer();
-              char rs[12]; int rn = g_curroom, p = 0;
+              char rs[20]; int rn = g_curroom, p = 0;
               rs[p++]='R';
               if (rn >= 10) rs[p++] = (char)('0' + (rn/10)%10);
               rs[p++] = (char)('0' + rn%10);
@@ -7028,6 +7040,12 @@ bootvid_entry:
                   rs[p++] = (char)('0' + vb9);
                   rs[p++] = 'D';
                   rs[p++] = (char)('0' + g_jv_d240);
+              }
+              { int k5;
+                rs[p++] = 'S';
+                for (k5 = 0; k5 < 4; k5++)
+                    rs[p++] = (g_sr[k5] == 99) ? 'X'
+                             : (char)('0' + (g_sr[k5] > 9 ? 9 : g_sr[k5]));
               }
 #endif
               rs[p] = 0;

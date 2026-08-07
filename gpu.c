@@ -189,6 +189,24 @@ uint32_t gpu_pc_read(void)
     return *(volatile uint32_t *)0xF02110u;
 }
 
+/* VIDDIAG: GPU-SRAM read/write reliability probe. Writes a 32-long pattern
+   to an unused SRAM corner (F03800), reads it back 64 times, returns the
+   total mismatch count (0 = both directions clean HERE AND NOW). Run at
+   several moments of one boot to map WHICH contexts poison the 68k<->GPU
+   SRAM path and in which direction. GPU must be stopped. */
+uint32_t gpu_sram_test(void)
+{
+    volatile uint32_t *p = (volatile uint32_t *)0xF03800u;
+    uint32_t i, r, bad = 0;
+    G_CTRL = 0;
+    for (i = 0; i < 32; i++)
+        p[i] = 0xA5000000u | (i * 0x01010101u);
+    for (r = 0; r < 64; r++)
+        for (i = 0; i < 32; i++)
+            if (p[i] != (0xA5000000u | (i * 0x01010101u))) bad++;
+    return bad;
+}
+
 #ifdef MULTIROOM
 /* VIDDIAG: invalidate the resident-kernel tracker so the next
    gpu_kernel_select RELOADS unconditionally - a probe that loaded jvdec
