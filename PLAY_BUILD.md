@@ -41,6 +41,15 @@ make MULTIROOM=1 GEOMDIRECT=1 SHADEPASS=1 JERRYPOSE=1 STAGEDIET=1 \
      TIMESTEP=1 ANIMRATE=1 OPDBL=1 LPLANES=1 AUTOSTART=1 \
      VCBIG=1 ENTITIES=1 SWANIM=1 DOORTEX=1 PADTEXT=544
 
+# ★★★ 2026-08-07: VIDEO v9 SHIPPED — delta streams + SHADOW DECODE.
+# Player: tokens apply to one private DRAM frame, display gets whole-frame
+# copies (no fb-history dependence — the ghost-proof architecture). The Tom
+# jvdec kernel NEVER ran on silicon (probes under VIDDIAG); the 68k IS the
+# video decoder and always was. SD carries DELTA CORE.JV/INTRO.JV/CAVES.JV
+# (2.9x smaller streams); EIDOS.JV stays keyframe-only (no disc source).
+# Demo flag set now: ship recipe + ENEMIES=1 BOOTVID=1 VIDPROF=1
+#   INLINEMUL=1 OFFHOIST=1 VPACK=1 DBGROOM=1 (drop DBGROOM for release).
+# ship_v9 lit on PADTEXT=544.
 # ★★ 2026-08-06: add INLINEMUL=1 to all future builds — inlines the 10
 # imul32 calls/vertex as exact s16 imults. +5.7% fps ON SILICON (9.30→9.83
 # median at the caves spawn, FPSBEACON A/B, ranges non-overlapping), output
