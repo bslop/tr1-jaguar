@@ -3568,6 +3568,7 @@ bootvid_entry:
                 int vh = -1, mi2, vw, vhh, vfps, vnf, fi, remain, have, pos;
                 uint32_t t0, plen = 0;
                 uint8_t *pcur = ptkA, *pprev = ptkB;
+                uint8_t *vscrub[2] = { 0, 0 };  /* first-touch scrub tracker */
                 { extern void video_pin_start(void);
                   video_pin_start(); } /* 2-buffer pin + seed the ping-pong
                                           so the keyframe covers BOTH buffers
@@ -3762,6 +3763,22 @@ bootvid_entry:
                           uint32_t *td = (uint32_t *)pcur;
                           while (pending_fb)
                               ;
+                          /* FIRST-TOUCH SCRUB (2026-08-07): black any buffer
+                             the FIRST time this clip decodes into it, so a
+                             skip block can only preserve pixels THIS CLIP
+                             painted - menu text was surviving in the
+                             letterbox bars (delta skips black-on-black;
+                             only keyframes repaint them). Tracking by
+                             pointer also nets any buffer a leaky rotation
+                             sneaks in mid-clip: it costs one clean black-
+                             bar frame instead of a title ghost. ~6ms per
+                             first touch. */
+                          if (bb != vscrub[0] && bb != vscrub[1]) {
+                              uint32_t *fw = (uint32_t *)bb, k9;
+                              for (k9 = 0; k9 < (320u*240u)/4u; k9++)
+                                  fw[k9] = 0;
+                              vscrub[fi & 1] = bb;
+                          }
                           for (k2 = 0; k2 < nw; k2++) td[k2] = ts[k2];
                           /* 68K DECODE PATH (2026-08-07): the Tom jvdec
                              kernel has NEVER completed on silicon (probe
