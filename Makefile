@@ -1243,3 +1243,72 @@ ifdef ASVID
 CFLAGS   += -DASVID
 CXXFLAGS += -DASVID
 endif
+
+# ─────────────────────────────────────────────────────────────────────────
+# vidrom — STANDALONE BOOT-TO-VIDEO ROM (vidmain.c)
+#
+# `make vidrom` links a tiny image that boots straight into ONE .JV clip
+# from the GameDrive SD, decoded on Tom. No level data, no title, no game:
+# it builds in seconds and boots in ~5, which is what makes bisecting the
+# "Tom's jvdec kernel never starts from the boot context" mystery tractable
+# (each full-game probe cost a build + an A10 roll + a 3-minute boot chain).
+#
+#   make vidrom MULTIROOM=1 LOWRES=1 OPDBL=1 FLIPASM=1 VR_CLIP=EIDOS.JV
+#
+# Context switches (default = the barest context that can play a clip):
+#   VR_GPUINIT VR_JERRY VR_AUDIO VR_GDINPUT VR_EARLYLOAD VR_NO68K
+# Add them one at a time to find which ingredient poisons the kernel start.
+# ☠️ `rm -rf build` when switching between `make` and `make vidrom` — make
+# tracks timestamps, not flags, and the two share every object but main.
+ifdef VR_CLIP
+CFLAGS   += -DVR_CLIP=\"$(VR_CLIP)\"
+endif
+ifdef VR_GPUINIT
+CFLAGS   += -DVR_GPUINIT
+endif
+ifdef VR_JERRY
+CFLAGS   += -DVR_JERRY
+endif
+ifdef VR_AUDIO
+CFLAGS   += -DVR_AUDIO
+endif
+ifdef VR_GDINPUT
+CFLAGS   += -DVR_GDINPUT
+endif
+ifdef VR_EARLYLOAD
+CFLAGS   += -DVR_EARLYLOAD
+endif
+ifdef VR_NO68K
+CFLAGS   += -DVR_NO68K
+endif
+
+VIDOBJS := $(BUILD)/startup.o $(BUILD)/cpu68k.o $(BUILD)/vidmain.o \
+           $(BUILD)/video.o $(BUILD)/blit.o $(BUILD)/joypad.o \
+           $(BUILD)/gd_input.o $(BUILD)/gdbios.o \
+           $(BUILD)/gpu.o $(BUILD)/gpu_blob.o \
+           $(BUILD)/jerry.o $(BUILD)/dsp_blob.o
+
+# vidmain.c is the boot code the user asked to keep on the 68k, and it is on
+# gcc for the same reason main.c is: the frame loop copies 76800 bytes.
+$(BUILD)/vidmain.o: vidmain.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/vidrom.elf: $(VIDOBJS) jaguar.ld
+	$(CC) -nostdlib -T jaguar.ld -Wl,-Map=$(BUILD)/vidrom.map \
+	      -Wl,--no-warn-rwx-segments -Wl,--build-id=none -Wl,-z,noexecstack \
+	      -o $@ $(VIDOBJS) -lgcc
+
+$(BUILD)/vidrom.bin: $(BUILD)/vidrom.elf
+	$(OBJCOPY) -O binary $< $@
+
+$(BUILD)/vidrom.cof: $(BUILD)/vidrom.bin makecof.py
+	$(PYTHON) makecof.py $< $@ --addr $(LOAD_ADDR) --entry $(LOAD_ADDR)
+
+vidrom: $(BUILD)/vidrom.cof
+.PHONY: vidrom
+
+# VR_PAD=N: A10 layout roll for vidrom (see vidmain.c). Build 0/136/272/408/
+# 544/816 and keep whichever boot - small ROMs are NOT lottery-immune.
+ifdef VR_PAD
+CFLAGS   += -DVR_PAD=$(VR_PAD)
+endif
