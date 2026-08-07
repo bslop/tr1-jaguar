@@ -1171,10 +1171,15 @@ ifdef PASSSWEEP
 CFLAGS   += -DPASSSWEEP=$(PASSSWEEP)
 CXXFLAGS += -DPASSSWEEP=$(PASSSWEEP)
 endif
+# PADMAIN=N: intra-main.o layout roll (A10 shifts PADTEXT cannot reach)
+ifdef PADMAIN
+CFLAGS   += -DPADMAIN=$(PADMAIN)
+CXXFLAGS += -DPADMAIN=$(PADMAIN)
+endif
 # STEADYREAD=1: experimental 7KB/frame video reads (13-black mystery, OFF)
 ifdef STEADYREAD
-CFLAGS   += -DSTEADYREAD=$(STEADYREAD)
-CXXFLAGS += -DSTEADYREAD=$(STEADYREAD)
+CFLAGS   += -DSTEADYREAD=$(STEADYREAD) -DSRGUARD=$(if $(SRRUN),1,0)
+CXXFLAGS += -DSTEADYREAD=$(STEADYREAD) -DSRGUARD=$(if $(SRRUN),1,0)
 endif
 # GDPROBE=1: measure gd_fread cost vs size, draw bars, park (rig only)
 ifdef GDPROBE

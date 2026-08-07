@@ -21,6 +21,20 @@
 #include "joypad.h"
 #include "gd_input.h"
 #include "gdbios.h"
+
+/* PADMAIN=N (2026-08-06): intra-main.o layout roll. PADTEXT pads AFTER
+   the object, so a size delta INSIDE main.c shifts the A10-critical code
+   identically across every PADTEXT offset - 14 straight black boots
+   proved a ~100B block could not be compensated from outside. This
+   early dummy absorbs/extends the delta from BEFORE the critical code. */
+#ifdef PADMAIN
+#define PM_STR2(x) #x
+#define PM_STR(x) PM_STR2(x)
+__attribute__((used, noinline)) void pad_main_probe(void)
+{
+    __asm__ volatile(".space " PM_STR(PADMAIN));
+}
+#endif
 #include "gpu.h"
 #include "skunkdbg.h"
 #include "sintab.h"
@@ -668,6 +682,9 @@ static uint8_t g_layaw;               /* Lara heading (0..255)     */
 #define ANIMDIV 1
 #endif
 static int g_ticks = 1;
+#ifdef STEADYREAD
+static volatile int g_sr_on = SRGUARD;
+#endif
 static int g_tturn = 1;
 static int g_tanim = 1;
 #endif
@@ -3359,6 +3376,9 @@ int main(void)
           int panim = 0;
           int introplay = 0;
           static uint8_t p2src[240] __attribute__((aligned(8)));
+#ifdef STEADYREAD
+          { static volatile int g_sr_init; g_sr_init = (SRGUARD); }
+#endif
           /* CONTROLS PAGE state, mirroring popen: 0 = on the ring, 1 = open.
              CTRLOPEN=1 boots straight into it so the layout can be checked
              offline in jagemu without driving the menu. */
@@ -3717,8 +3737,11 @@ bootvid_entry:
                           /* ☠️ EXPERIMENTAL - 13 boots straight BLACK with
                              this enabled (2026-08-06 night, offsets 0-1904);
                              mechanism unfound by inspection. Bisect with
-                             border crumbs before trusting. */
-                          if (remain > 0 && have < 31488 - 7168) {
+                             border crumbs before trusting.
+                             SRGUARD: volatile gate keeps the code in the
+                             image (same layout) but never executes it -
+                             boots=runtime fault, black=layout. */
+                          if (g_sr_on && remain > 0 && have < 31488 - 7168) {
                               int want = 7168;
                               if (pos) { int mv = have - pos, k3;
                                   for (k3 = 0; k3 < mv; k3++)

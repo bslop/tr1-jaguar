@@ -84,7 +84,9 @@ def encode_vq():
     with tempfile.TemporaryDirectory() as td:
         apath = os.path.join(td, "a.raw")
         r2 = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", SRC, "-vn",
-                             "-f", "s8", "-ar", "11025", "-ac", "1", apath])
+                             "-af", os.environ.get("JV_AF", "afade=t=in:d=0.12,dynaudnorm=p=0.75:m=12"),
+                             "-af", os.environ.get("JV_AF", "afade=t=in:d=0.12,dynaudnorm=p=0.75:m=12"),
+                         "-f", "s8", "-ar", "11025", "-ac", "1", apath])
         audio = open(apath, "rb").read() if r2.returncode == 0 and os.path.exists(apath) else b""
         subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", SRC,
                         "-vf", ("crop=%d:%d:%d:%d,hqdn3d=4:3:12:12,fps=%d,"
