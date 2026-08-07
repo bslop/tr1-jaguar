@@ -3433,6 +3433,47 @@ int main(void)
 #ifdef CAVETEST
           g_useset = 0; goto menu_done;   /* test: boot straight into the caves */
 #endif
+#if !defined(NO_GAMEDRIVE) && defined(GDPROBE)
+          /* rig-only: measure gd_fread cost vs size ON SILICON. Reads
+             INTRO.JV sequentially, 8 reps per size, draws field-count
+             bars (2px per field) the capture rig reads off. Freezes. */
+          { static uint8_t pb[24576] __attribute__((aligned(4)));
+            extern volatile uint32_t frame_count;
+            static const int SZ[5] = { 512, 2048, 6144, 12288, 24576 };
+            int rez[5], si, rp, ph = -1, mi9;
+            for (mi9 = 0; mi9 < 2 && ph < 0; mi9++)
+                ph = gd_fopen(mi9 ? "/INTRO.JV" : "INTRO.JV",
+                              GD_FOPEN_READ | GD_FOPEN_OPEN_EXISTING);
+            if (ph >= 0) {
+                (void)gd_fsize((unsigned)ph);
+                for (si = 0; si < 5; si++) {
+                    uint32_t p0 = frame_count;
+                    for (rp = 0; rp < 8; rp++)
+                        if (gd_fread((unsigned)ph, pb, (unsigned)SZ[si],
+                                     GD_FREAD_CPU) != 0) break;
+                    rez[si] = (int)(frame_count - p0);
+                }
+                gd_fclose((unsigned)ph);
+                { fbpix *pf9 = (fbpix *)video_backbuffer();
+                  volatile uint16_t *cl9 = (volatile uint16_t *)0xF00400u;
+                  uint8_t *f9 = (uint8_t *)pf9; int x9, y9;
+                  cl9[254] = 0x0000; cl9[255] = 0xFFFE;
+                  for (y9 = 0; y9 < 240; y9++)
+                      for (x9 = 0; x9 < 320; x9++) f9[y9*320+x9] = 254;
+                  for (si = 0; si < 5; si++) {
+                      int h9 = rez[si] * 2; if (h9 > 200) h9 = 200;
+                      for (y9 = 0; y9 < h9; y9++)
+                          for (x9 = 0; x9 < 30; x9++)
+                              f9[(230 - y9)*320 + 20 + si*55 + x9] = 255;
+                      /* exact value as a dot column: one 4px dot per field */
+                      for (y9 = 0; y9 < rez[si] && y9 < 50; y9++)
+                          for (x9 = 0; x9 < 4; x9++)
+                              f9[(230 - y9*4)*320 + 20 + si*55 + 36 + x9] = 255;
+                  }
+                  video_flip(); }
+                for (;;) ;         /* park: capture at leisure */
+            } }
+#endif
 #if !defined(NO_GAMEDRIVE) && defined(BOOTVID)
           /* INTRO ON START GAME (2026-08-06): the PSX plays the intro
              cinematic on New Game, not at boot - the boot chain is
@@ -3664,19 +3705,20 @@ bootvid_entry:
                               gpu_jvdec_kick(ptk, 0, ptk, L, cbk, bb);
                               kicked = 1;
                           }
-                          /* BULK low-water refill: with the ISR presenting
-                             frames at their scheduled fields (video_pend_at)
-                             the cadence is immune to 68k stalls, so reads
-                             go back to the GD's efficient size. Runs while
-                             the GPU decodes. */
-                          if (remain > 0 && have - pos < 12288) {
-                              int want;
+                          /* STEADY-RATE refill (GDPROBE-measured, 2026-08:
+                             gd_fread = ~3.5ms fixed + 193KB/s - small reads
+                             are CHEAP; the '24KB-only' premise was false).
+                             7KB every frame = 38ms, fits every 66.7ms slot
+                             beside the ~20ms decode/parse, sustains 107KB/s
+                             against the stream's 84KB/s - the buffer never
+                             drains and the big stalls never happen. Runs
+                             while the GPU decodes from the stash. */
+                          if (remain > 0 && have < 31488 - 7168) {
+                              int want = 7168;
                               if (pos) { int mv = have - pos, k3;
                                   for (k3 = 0; k3 < mv; k3++)
                                       vb[k3] = vb[pos + k3];
                                   have = mv; pos = 0; }
-                              want = (31488 - have) & ~511;
-                              if (want > 24576) want = 24576;
                               if (want > remain) want = remain;
                               if (want > 0 &&
                                   gd_fread((unsigned)vh, vb + have,

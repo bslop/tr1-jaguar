@@ -1171,6 +1171,11 @@ ifdef PASSSWEEP
 CFLAGS   += -DPASSSWEEP=$(PASSSWEEP)
 CXXFLAGS += -DPASSSWEEP=$(PASSSWEEP)
 endif
+# GDPROBE=1: measure gd_fread cost vs size, draw bars, park (rig only)
+ifdef GDPROBE
+CFLAGS   += -DGDPROBE=$(GDPROBE)
+CXXFLAGS += -DGDPROBE=$(GDPROBE)
+endif
 # VIDCAD=1: per-frame parity block in the FMV for cadence measurement
 ifdef VIDCAD
 CFLAGS   += -DVIDCAD=$(VIDCAD)
