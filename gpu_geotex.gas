@@ -842,6 +842,38 @@ vc_loop:
 	sharq	#12,r24			; ry
 	sharq	#12,r25			; rz2
 	.else
+	.if INLINEMUL=1
+	; INLINEMUL (2026-08-06): every rotate operand is s16 on silicon
+	; (MMXDIAG cap $7FFF; coeffs Q12 <= 4096), so one signed 16x16 imult
+	; is exact where imul32 did a full 32x32 — the 8 call/returns
+	; (16 taken jumps = pipeline refills each vertex) collapse to 8
+	; inline imults, interleaved so no product is read within 2 instrs.
+	move	r8,r21			; dx
+	imult	r11,r21			; dx*cY
+	move	r20,r0			; dz
+	imult	r12,r0			; dz*sY
+	move	r8,r23			; dx
+	imult	r12,r23			; dx*sY
+	sub	r0,r21			; rx = dx*cY - dz*sY
+	move	r20,r0			; dz
+	imult	r11,r0			; dz*cY
+	sharq	#12,r21			; rx
+	move	r9,r24			; dy
+	imult	r13,r24			; dy*cP
+	add	r0,r23			; rzt = dx*sY + dz*cY
+	sharq	#12,r23
+	move	r23,r0
+	imult	r14,r0			; rzt*sP
+	move	r9,r25			; dy
+	imult	r14,r25			; dy*sP
+	sub	r0,r24			; ry = dy*cP - rzt*sP
+	move	r23,r0
+	imult	r13,r0			; rzt*cP
+	sharq	#12,r24			; ry
+	nop
+	add	r0,r25			; rz2 = dy*sP + rzt*cP
+	sharq	#12,r25
+	.else
 	move	r8,r0
 	movei	#vcf1,r28
 	.if BANKDIET=1
@@ -943,6 +975,7 @@ vcf8:
 	add	r0,r25
 	sharq	#12,r25			; rz2
 	.endif
+	.endif
 	; NEAR-SNAP REVERTED (task 19 postponed): every clamp variant drew
 	; wrong-but-on-screen geometry (ceiling flashes / smear plates /
 	; stretch, all HW-seen 2026-07-11). Pop-in (clean cull) is the
@@ -954,6 +987,13 @@ vcf8:
 	nop
 	; (FARDIAL per-vert far cull lived here 2026-07-21 only: measured NULL
 	; on silicon, removed same day for the XCULL x SHADEPASS byte budget.)
+	.if INLINEMUL=1
+	movei	#FOCAL,r1		; FOCAL=190 s16, rx s16 -> imult exact
+	move	r21,r0
+	imult	r1,r0
+	nop
+	nop
+	.else
 	movei	#FOCAL,r1
 	movei	#vcf9,r28
 	.if BANKDIET=1
@@ -965,6 +1005,7 @@ vcf8:
         move	r21,r0
 	nop
 vcf9:
+	.endif
 	move	r0,r29
 	abs	r0
 	div	r25,r0
@@ -976,6 +1017,13 @@ vc_sxp:
 	movei	#CENTER_X,r1
 	add	r1,r0
 	store	r0,(r18)		; cache sx
+	.if INLINEMUL=1
+	movei	#FOCAL_Y,r1		; FOCAL_Y<=190 s16, ry s16 -> imult exact
+	move	r24,r0
+	imult	r1,r0
+	nop
+	nop
+	.else
 	movei	#FOCAL_Y,r1
 	movei	#vcf10,r28
 	.if BANKDIET=1
@@ -987,6 +1035,7 @@ vc_sxp:
         move	r24,r0
 	nop
 vcf10:
+	.endif
 	move	r0,r29
 	abs	r0
 	div	r25,r0
