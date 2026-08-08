@@ -4040,6 +4040,20 @@ bootvid_entry:
                              kernel verify square is dark, the corruption is
                              in the ROM SOURCE reads (GD-served), not the
                              SRAM writes. */
+                          /* ☠️ gok/hello/verify are ALL inside `if (gpu_ok)`,
+                             so "all three dark" is ALSO exactly what
+                             gpu_ok==0 looks like - and I read it as "Tom
+                             won't start" without ever checking gpu_ok.
+                             Square 8 = gpu_ok, square 9 = the verified load.
+                             Measure the premise, not just the conclusion. */
+                          { uint8_t g8 = gpu_ok ? 255 : 64;
+                            uint8_t g9 = g_jv_ok ? 255 : 64;
+                            for (my = 184; my < 192; my++)
+                                for (mx = 0; mx < 12; mx++)
+                                    mb[my*320 + 296 + mx] = g8;
+                            for (my = 196; my < 204; my++)
+                                for (mx = 0; mx < 12; mx++)
+                                    mb[my*320 + 296 + mx] = g9; }
                           { uint8_t s6 = (g_sr[0] == 0) ? 255 : 64;
                             uint8_t s7 = (g_sr[introplay ? 2 : 1] == 0)
                                          ? 255 : 64;
