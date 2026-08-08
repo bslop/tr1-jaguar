@@ -177,6 +177,19 @@ void jerry_sfx_queue(const void *pcm, uint32_t bytes)
    from his local SRAM. The 68k cannot reliably read a running JRISC's SRAM
    (proved on Tom, then heard on Jerry as a machine-gun re-trigger), so these
    are the only honest way to ask "is the voice idle / is the queue free". */
+/* Mark the published state STALE. Jerry only refreshes it every 64 DAC
+   ticks, so for a few ms after the 68k arms or queues a buffer the mailbox
+   still holds the PRE-WRITE values - read them and the player concludes the
+   voice is idle and re-arms, restarting the buffer. That is the stutter at
+   the start of a clip. Callers must ignore the counters until Jerry has
+   published over this sentinel. */
+#define JERRY_AUD_STALE 0xFFFFFFFFu
+void jerry_audio_stale(void)
+{
+    dsp_mailbox[2] = JERRY_AUD_STALE;
+    dsp_mailbox[3] = JERRY_AUD_STALE;
+}
+
 uint32_t jerry_v0_cnt(void)  { return dsp_mailbox[2]; }
 uint32_t jerry_v0_ncnt(void) { return dsp_mailbox[3]; }
 

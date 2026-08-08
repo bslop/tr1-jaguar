@@ -71,6 +71,8 @@ void jerry_sfx(int voice, const void *pcm, uint32_t bytes, int loop);
 void jerry_sfx_queue(const void *pcm, uint32_t bytes);
 uint32_t jerry_v0_cnt(void);
 uint32_t jerry_v0_ncnt(void);
+void jerry_audio_stale(void);
+#define JERRY_AUD_STALE 0xFFFFFFFFu
 void video_set_disp240(int on);
 void video_pin_start(void);
 uint32_t joypad_read(void);
@@ -479,8 +481,10 @@ static int play_clip(const char *name)
                     jerry_sfx_queue(aring + rslot*4096, (uint32_t)alen[rslot]);
                     rslot = (rslot + 1) % 6; pend--;
                     astarted = 1; d_abatch += 2;
+                    jerry_audio_stale();
                 }
-            } else if (pend > 0 && jerry_v0_ncnt() == 0) {
+            } else if (pend > 0 && jerry_v0_ncnt() == 0
+                       && jerry_v0_cnt() != JERRY_AUD_STALE) {
                 /* ☠️ NEVER read F1C378/F1C340 directly: those are Jerry's
                    LOCAL SRAM and the 68k cannot read a running JRISC's SRAM
                    honestly. A spurious zero re-arms the voice every frame -
@@ -492,6 +496,7 @@ static int play_clip(const char *name)
                 else
                     jerry_sfx_queue(aring + rslot*4096, (uint32_t)alen[rslot]);
                 rslot = (rslot + 1) % 6; pend--; d_abatch++;
+                jerry_audio_stale();
             }
             p_audio += vtick() - tau;
         }
@@ -685,6 +690,31 @@ int main(void)
     d_selftest = jvdec_selftest();
 #endif
     d_phrase = (uint32_t)phrase_selftest();
+#ifdef VR_SHOW
+    /* SHOW MODE: the front end as it is meant to be seen - EIDOS, CORE, the
+       attract cinematic, then the pre-Caves cinematic, back to back with
+       sound and nothing painted over them. Ends on black rather than the
+       read-out panel. This is the viewing build, not an instrument. */
+    {
+        static const char *const show[4] = {
+            "EIDOS.JV", "CORE.JV", "INTRO.JV", "CAVES.JV" };
+        int c;
+        for (c = 0; c < 4; c++)
+            play_clip(show[c]);
+        for (;;) {
+            uint8_t *bb = (uint8_t *)video_backbuffer();
+            uint32_t *w = (uint32_t *)bb, k;
+            extern volatile uint32_t frame_count;
+            uint32_t t = frame_count;
+            clut_markers();
+            for (k = 0; k < (320u*240u)/4u; k++)
+                w[k] = (uint32_t)MK_OFF * 0x01010101u;
+            video_flip();
+            while ((int)(frame_count - t) < 30)
+                ;
+        }
+    }
+#endif
     /* PLAY ONCE, THEN HOLD - never touch the GameDrive again.
        ☠️ The looping version wedged the USB link twice (LIBUSB_ERROR_TIMEOUT,
        console left on the RetroHQ logo, and every roll after it read dark

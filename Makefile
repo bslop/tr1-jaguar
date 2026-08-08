@@ -1353,3 +1353,9 @@ endif
 ifdef VR_BOOTTRACE
 CFLAGS   += -DVR_BOOTTRACE
 endif
+
+# VR_SHOW=1: the viewing build - EIDOS, CORE, INTRO, CAVES back to back with
+# sound, nothing painted over them, ending on black. Not an instrument.
+ifdef VR_SHOW
+CFLAGS   += -DVR_SHOW
+endif
