@@ -3757,9 +3757,21 @@ bootvid_entry:
                                (arm + queue together - the early-start buzz
                                fix), then push one whenever the DSP slot is
                                free. Never spins. */
-                            { volatile uint32_t *ncnt =
-                                  (volatile uint32_t *)0xF1C378u;
-                              extern void jerry_sfx_queue(const void*, uint32_t);
+                            /* ☠️☠️ NEVER READ F1C378/F1C340 DIRECTLY. Those
+                               are JERRY'S LOCAL SRAM, and the 68k cannot read
+                               a running JRISC honestly - the same law that
+                               forced Tom's jvdec handshake into DRAM. A
+                               spurious zero here RE-ARMS the voice, so the
+                               buffer restarts from the top every frame and
+                               the clip comes out as a machine-gun stutter
+                               (user, 2026-08-08). Jerry publishes both
+                               counters into the DRAM mailbox; read those.
+                               jerry_audio_stale() stamps them after every
+                               write so we never act on a pre-write value. */
+                            { extern void jerry_sfx_queue(const void*, uint32_t);
+                              extern uint32_t jerry_v0_cnt(void);
+                              extern uint32_t jerry_v0_ncnt(void);
+                              extern void jerry_audio_stale(void);
                               if (!astarted) {
                                   if (pend >= 2) {
                                       jerry_sfx(0, aring + rslot*4096,
@@ -3769,23 +3781,24 @@ bootvid_entry:
                                                       (uint32_t)alen[rslot]);
                                       rslot = (rslot + 1) % 6; pend--;
                                       astarted = 1;
+                                      jerry_audio_stale();
                                   }
-                              } else if (pend > 0 && *ncnt == 0) {
+                              } else if (pend > 0 && jerry_v0_ncnt() == 0
+                                         && jerry_v0_cnt() != 0xFFFFFFFFu) {
                                   /* ☠️ a queue NEVER restarts an idle
                                      voice (music-engine law): after any
                                      stall > the DSP's ~744ms of buffered
                                      audio (clip transitions!), the voice
                                      dies and stays dead - RE-ARM when
                                      V0_CNT reads 0 */
-                                  volatile uint32_t *vcnt =
-                                      (volatile uint32_t *)0xF1C340u;
-                                  if (*vcnt == 0)
+                                  if (jerry_v0_cnt() == 0)
                                       jerry_sfx(0, aring + rslot*4096,
                                                 (uint32_t)alen[rslot], 0);
                                   else
                                       jerry_sfx_queue(aring + rslot*4096,
                                                       (uint32_t)alen[rslot]);
                                   rslot = (rslot + 1) % 6; pend--;
+                                  jerry_audio_stale();
                               } }
                         }
                         pos += (int)AL;
@@ -3826,11 +3839,14 @@ bootvid_entry:
                              68k token walk below remains as the verified
                              fallback if Tom's wait ever fails. */
                           if (gpu_ok) {
-                              uint32_t k2, nw = ((L + 3u) & ~3u) >> 2;
-                              const uint32_t *ts = (const uint32_t *)tk;
-                              uint32_t *td = (uint32_t *)pcur;
-                              for (k2 = 0; k2 < nw; k2++) td[k2] = ts[k2];
-                              gpu_jvdec_kick(pcur, 0, pcur, L, cbk, vshadow);
+                              /* KICK STRAIGHT OFF THE STREAM BUFFER (vidrom,
+                                 2026-08-08): the stash copy was for the ASYNC
+                                 player, where the 68k refilled while Tom
+                                 decoded. This kick is synchronous - wait()
+                                 returns before anything can touch the buffer -
+                                 so copying ~3.5KB a frame into pcur was pure
+                                 68k errand-running. */
+                              gpu_jvdec_kick(tk, 0, tk, L, cbk, vshadow);
                               tomok = gpu_jvdec_wait();
                           }
                           if (!tomok)
@@ -3855,10 +3871,15 @@ bootvid_entry:
                                     if (++bx == 80) { bx = 0; dA += 960; }
                                 }
                             } }
-                          { const uint32_t *sv = (const uint32_t *)vshadow;
-                            uint32_t *dv = (uint32_t *)bb; uint32_t k9;
-                            for (k9 = 0; k9 < (320u*240u)/4u; k9++)
-                                dv[k9] = sv[k9]; }
+                          /* THE BLITTER MOVES THE FRAME, IN PHRASE MODE.
+                             This 19200-long software copy measured 95ms a
+                             frame on silicon - three times Tom's whole
+                             decode. blit_copy (pixel mode) took it to 38ms;
+                             blit_copy_phrase (XADDPHR, 8 bytes a step) to
+                             5ms. Falls back to the pixel-mode copy if the
+                             Blitter ever fails to report idle. */
+                          if (!blit_copy_phrase(vshadow, bb, 240))
+                              blit_copy(vshadow, bb, 240);
                           gok = tomok; kicked = tomok;
                           (void)pprev;
                           /* STEADY-RATE refill (GDPROBE-measured, 2026-08:
