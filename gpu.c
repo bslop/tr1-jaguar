@@ -163,9 +163,15 @@ int gpu_jvdec_wait(void)
 {
     uint32_t i;
     /* sparse poll of the DRAM mailbox (NOT GPU SRAM - see gpu_jvdec_kick) */
-    for (i = 0; i < 80000; i++) {
+    for (i = 0; i < 240000; i++) {
         volatile uint32_t d;
-        for (d = 0; d < 40; d++)
+        /* POLL GRANULARITY (2026-08-08): 40 iterations is ~240us of 68k spin
+           between checks when the bus is quiet, and far more once Jerry is
+           mixing - so the wait routinely OVERSHOOTS Tom's actual finish by
+           milliseconds. 12 keeps the DRAM poll sparse enough not to starve
+           Tom (the porting-notes law) while cutting the overshoot. The bound
+           is scaled to keep the same wall-clock timeout. */
+        for (d = 0; d < 12; d++)
             ;
         if (mailbox[0] == MAGIC_DONE) {
             G_CTRL = 0;

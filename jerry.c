@@ -173,6 +173,13 @@ void jerry_sfx_queue(const void *pcm, uint32_t bytes)
     *(volatile uint32_t *)0xF1C378u = bytes;
 }
 
+/* Jerry's voice state, read from the DRAM MAILBOX he publishes into - never
+   from his local SRAM. The 68k cannot reliably read a running JRISC's SRAM
+   (proved on Tom, then heard on Jerry as a machine-gun re-trigger), so these
+   are the only honest way to ask "is the voice idle / is the queue free". */
+uint32_t jerry_v0_cnt(void)  { return dsp_mailbox[2]; }
+uint32_t jerry_v0_ncnt(void) { return dsp_mailbox[3]; }
+
 int jerry_pose_sync(void)
 {
     uint32_t i;

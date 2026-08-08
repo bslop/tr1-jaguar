@@ -205,6 +205,46 @@ pdac\~:
 	jump	NE,(r0)			; more samples due -> mix another
 	nop
 	nop
+	; ---- PUBLISH THE VOICE STATE TO DRAM (2026-08-08) -------------------
+	; ☠️ The 68k CANNOT reliably READ a running JRISC's local SRAM - the same
+	; law that forced Tom's jvdec handshake into a DRAM mailbox. The players
+	; polled V0_CNT/V0_NCNT here directly, and a spurious zero RE-ARMS the
+	; voice: the buffer restarts from the top every frame, which is exactly
+	; the "machine gun" the user heard instead of the clip. So Jerry writes
+	; his own state where the 68k can read it honestly.
+	;   mailbox[2] = V0_CNT (bytes left, 0 = idle)
+	;   mailbox[3] = V0_NCNT (queued slot, 0 = empty)
+	; r0-r3 are still saved here, and this runs once per pump entry.
+	; ☠️ RATE-LIMITED. The first version published on EVERY pump entry -
+	; 11k DRAM round-trips a second from the machine's highest-priority bus
+	; master - and Tom's decode went from 18ms to 35-81ms a frame. The 68k
+	; only consults this once per video frame (15Hz), so once every 64 ticks
+	; (~170Hz) is still ~11x oversampled and costs 64x less bus.
+	movei	#PUB_TICK,r0
+	load	(r0),r1
+	nop
+	nop
+	addq	#1,r1
+	store	r1,(r0)
+	movei	#63,r2
+	and	r2,r1
+	movei	#ppub\~,r22
+	jump	NE,(r22)
+	nop
+	nop
+	movei	#D_PARAMS,r0
+	load	(r0),r0			; DRAM mailbox base
+	movei	#V0_CNT,r1
+	load	(r1),r2
+	movei	#V0_NCNT,r1
+	load	(r1),r3
+	nop
+	nop
+	addq	#8,r0
+	store	r2,(r0)
+	addq	#4,r0
+	store	r3,(r0)
+ppub\~:
 pfall\~:
 	movei	#PUMP_SAVE,r22
 	load	(r22),r0
@@ -284,6 +324,10 @@ PUMP_SAVE	.equ	$F1C360		; 6 longs: pump register save area
 V0_NCNT		.equ	$F1C378		; voice 0 QUEUED next-buffer len (0=empty)
 V0_NPTR		.equ	$F1C37C		;   queued next-buffer DRAM address
 LOOP_COUNT	.equ	$F1C0B0		; main-loop heartbeat (probe)
+; ☠️ $F1C0B4 is WAKE_D - the ISR->main sample-due flag. The first draft of
+; this counter aliased it, which would have corrupted the audio ISR handshake.
+; Next free long after it:
+PUB_TICK	.equ	$F1C0B8		; audio-state publish divider (AUDIO_PUMP)
 D_FLAGS_R	.equ	$F1A100
 JPIT1_R		.equ	$F10000		; Jerry PIT: prescale-1
 JPIT2_R		.equ	$F10002		;   divide-1: f = 26.59MHz/((p+1)*(d+1))

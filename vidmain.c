@@ -69,6 +69,8 @@ int  gd_input_init(void);
 int  jerry_init(void);
 void jerry_sfx(int voice, const void *pcm, uint32_t bytes, int loop);
 void jerry_sfx_queue(const void *pcm, uint32_t bytes);
+uint32_t jerry_v0_cnt(void);
+uint32_t jerry_v0_ncnt(void);
 void video_set_disp240(int on);
 void video_pin_start(void);
 uint32_t joypad_read(void);
@@ -460,8 +462,6 @@ static int play_clip(const char *name)
 #ifdef VR_AUDIO
         if (AL && d_sfx) {
             uint32_t tau = vtick();
-            volatile uint32_t *ncnt = (volatile uint32_t *)0xF1C378u;
-            volatile uint32_t *vcnt = (volatile uint32_t *)0xF1C340u;
             if (acc + (int)AL > 4096) {
                 if (pend >= 5) { rslot = (rslot + 1) % 6; pend--; }
                 alen[wslot] = acc; pend++;
@@ -480,8 +480,14 @@ static int play_clip(const char *name)
                     rslot = (rslot + 1) % 6; pend--;
                     astarted = 1; d_abatch += 2;
                 }
-            } else if (pend > 0 && *ncnt == 0) {
-                if (*vcnt == 0)
+            } else if (pend > 0 && jerry_v0_ncnt() == 0) {
+                /* ☠️ NEVER read F1C378/F1C340 directly: those are Jerry's
+                   LOCAL SRAM and the 68k cannot read a running JRISC's SRAM
+                   honestly. A spurious zero re-arms the voice every frame -
+                   the buffer restarts from the top and the clip comes out as
+                   a machine-gun stutter. Jerry publishes both counters into
+                   the DRAM mailbox; read them from there. */
+                if (jerry_v0_cnt() == 0)
                     jerry_sfx(0, aring + rslot*4096, (uint32_t)alen[rslot], 0);
                 else
                     jerry_sfx_queue(aring + rslot*4096, (uint32_t)alen[rslot]);
@@ -503,12 +509,14 @@ static int play_clip(const char *name)
           bb = (uint8_t *)video_backbuffer();
           d_tomok = 0;
           if (d_loaded) {
-              uint32_t k, nw = ((L + 3u) & ~3u) >> 2;
-              const uint32_t *ts = (const uint32_t *)tk;
-              uint32_t *td = (uint32_t *)pcur;
-              for (k = 0; k < nw; k++) td[k] = ts[k];
+              /* KICK STRAIGHT OFF THE STREAM BUFFER. The stash copy existed
+                 for the ASYNC player, where the 68k refilled while Tom
+                 decoded; this kick is synchronous - wait() returns before
+                 anything touches the buffer - so copying ~3.5KB per frame
+                 into pcur was pure 68k work for nothing. The 68000 is the
+                 slowest thing on the machine; do not give it errands. */
               { uint32_t ta = vtick();
-                gpu_jvdec_kick(pcur, 0, pcur, L, cbk, vshadow);
+                gpu_jvdec_kick(tk, 0, tk, L, cbk, vshadow);
                 d_tomok = (uint32_t)gpu_jvdec_wait();
                 p_tom += vtick() - ta; }
               d_hello = gpu_jvdec_hello();
@@ -601,7 +609,9 @@ static int play_clip(const char *name)
           d_fields = frame_count - t0;
           video_flip(); }
 
-        if (joypad_read() & 0x800000u)      /* A skips */
+        /* the pad strobe is MMIO and costs 68k time every frame for an
+           input that only has to feel instant; a quarter of that is plenty */
+        if ((fi & 3) == 0 && (joypad_read() & 0x800000u))
             break;
     }
     gd_fclose((unsigned)vh);
