@@ -672,7 +672,7 @@ CXXFLAGS += -DBEACON_AT=$(BEACON_AT)
 ASFLAGS  += -DBEACON_AT=$(BEACON_AT)
 endif
 OBJS := $(BUILD)/startup.o $(BUILD)/cpu68k.o $(BUILD)/main.o $(BUILD)/video.o \
-        $(BUILD)/blit.o $(BUILD)/joypad.o \
+        $(BUILD)/blit.o $(BUILD)/joypad.o $(BUILD)/vidpanel.o \
         $(BUILD)/gd_input.o $(BUILD)/gdbios.o \
         $(BUILD)/gpu.o $(BUILD)/gpu_blob.o \
         $(BUILD)/jerry.o $(BUILD)/dsp_blob.o $(OBJS_BEACON)
@@ -1282,7 +1282,7 @@ ifdef VR_NO68K
 CFLAGS   += -DVR_NO68K
 endif
 
-VIDOBJS := $(BUILD)/startup.o $(BUILD)/cpu68k.o $(BUILD)/vidmain.o \
+VIDOBJS := $(BUILD)/startup.o $(BUILD)/cpu68k.o $(BUILD)/vidmain.o $(BUILD)/vidpanel.o \
            $(BUILD)/video.o $(BUILD)/blit.o $(BUILD)/joypad.o \
            $(BUILD)/gd_input.o $(BUILD)/gdbios.o \
            $(BUILD)/gpu.o $(BUILD)/gpu_blob.o \
@@ -1358,4 +1358,12 @@ endif
 # sound, nothing painted over them, ending on black. Not an instrument.
 ifdef VR_SHOW
 CFLAGS   += -DVR_SHOW
+endif
+
+# VIDPANEL=1: the self-calibrating read-out in the GAME's boot video block
+# (same geometry as vidrom, same host decoder). The old VIDDIAG squares are
+# unreadable off a capture - they cost two wrong diagnoses.
+ifdef VIDPANEL
+CFLAGS   += -DVIDPANEL
+CXXFLAGS += -DVIDPANEL
 endif

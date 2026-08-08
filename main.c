@@ -18,6 +18,7 @@
 #include "jaguar.h"
 #include "video.h"
 #include "blit.h"
+#include "vidpanel.h"
 #include "joypad.h"
 #include "gd_input.h"
 #include "gdbios.h"
@@ -592,6 +593,20 @@ static int g_jvmin_game;              /* context probe: 1=ran at game entry,
                                          2=failed there too, 0=not run yet */
 static int g_jvmin2;                  /* ...after a verify-retry load       */
 static int g_jv_d240;                 /* load-under-disp240: 1 ok, 2 corrupt */
+#endif
+#ifdef VIDPANEL
+/* the same counters vidrom reports, so the SAME host decoder reads both */
+/* ☠️ BSS IS FULL - even SIX longs here overflows the 16KB stack-headroom
+   check. The diagnostic counters live in the CRASH SCRATCH instead: startup.S
+   reserves $800-$8FF for exception dumps ($820..$844 used), so $880 up is
+   free whenever the game is not already dead. Costs no BSS at all. */
+#define VPC ((volatile uint32_t *)0x880u)
+#define vp_frames  VPC[0]
+#define vp_fields  VPC[1]
+#define vp_read    VPC[2]
+#define vp_tom     VPC[3]
+#define vp_copy    VPC[4]
+#define vp_tomfail VPC[5]
 #endif
 static int g_jv_ok;                   /* jvdec kernel VERIFIED in GPU SRAM:
                                          gate the Tom kick on it, or a bad
@@ -3694,6 +3709,9 @@ bootvid_entry:
                 }
                 remain -= 4096;
                 have = 0; pos = 0;
+#ifdef VIDPANEL
+                { int z9; for (z9 = 0; z9 < 6; z9++) VPC[z9] = 0; }
+#endif
                 t0 = frame_count;
                 { int dprev = 0;                  /* last display tick: min-
                                                      spacing scheduler, no
@@ -3737,8 +3755,16 @@ bootvid_entry:
                           if (want > 24576) want = 24576;     /* >24KB cliffs */
                           if (want > remain) want = remain;
                           if (want <= 0) { fi = vnf; break; }
+#ifdef VIDPANEL
+                          { uint32_t ta = vp_tick();
+                            int rr9 = gd_fread((unsigned)vh, vb + have,
+                                               (unsigned)want, GD_FREAD_CPU);
+                            vp_read += vp_tick() - ta;
+                            if (rr9 != 0) { fi = vnf; break; } }
+#else
                           if (gd_fread((unsigned)vh, vb + have, (unsigned)want,
                                        GD_FREAD_CPU) != 0) { fi = vnf; break; }
+#endif
                           have += want; remain -= want; }
                     }
                     if (fi >= vnf) break;
@@ -3867,8 +3893,15 @@ bootvid_entry:
                                  returns before anything can touch the buffer -
                                  so copying ~3.5KB a frame into pcur was pure
                                  68k errand-running. */
+#ifdef VIDPANEL
+                              { uint32_t ta = vp_tick();
+                                gpu_jvdec_kick(tk, 0, tk, L, cbk, vshadow);
+                                tomok = gpu_jvdec_wait();
+                                vp_tom += vp_tick() - ta; }
+#else
                               gpu_jvdec_kick(tk, 0, tk, L, cbk, vshadow);
                               tomok = gpu_jvdec_wait();
+#endif
                           }
                           if (!tomok)
                           { const uint8_t *s = tk, *e = tk + L;
@@ -3899,8 +3932,15 @@ bootvid_entry:
                              blit_copy_phrase (XADDPHR, 8 bytes a step) to
                              5ms. Falls back to the pixel-mode copy if the
                              Blitter ever fails to report idle. */
+#ifdef VIDPANEL
+                          { uint32_t ta = vp_tick();
+                            if (!blit_copy_phrase(vshadow, bb, 240))
+                                blit_copy(vshadow, bb, 240);
+                            vp_copy += vp_tick() - ta; }
+#else
                           if (!blit_copy_phrase(vshadow, bb, 240))
                               blit_copy(vshadow, bb, 240);
+#endif
                           gok = tomok; kicked = tomok;
                           (void)pprev;
                           /* STEADY-RATE refill (GDPROBE-measured, 2026-08:
@@ -3992,6 +4032,36 @@ bootvid_entry:
 #endif
                       }
                       (void)kfonly;   /* shadow path: every frame complete */
+#ifdef VIDPANEL
+                      /* THE CALIBRATED PANEL (2026-08-08). Replaces the 8px
+                         VIDDIAG squares, which have no border and no
+                         calibration word and produced two wrong diagnoses
+                         when read off a capture. scratchpad/readout.py
+                         decodes this identically to vidrom's. */
+                      { uint8_t lamps[8]; uint32_t rows[12]; int q;
+                        extern volatile uint32_t frame_count;
+                        if (!gok) vp_tomfail++;   /* gok = tomok, hoisted */
+                        vp_frames++;
+                        vp_fields = frame_count - t0;
+                        lamps[0] = (uint8_t)(vp_frames & 1);
+                        lamps[1] = (uint8_t)(gpu_ok != 0);
+                        lamps[2] = (uint8_t)(g_jv_ok != 0);
+                        lamps[3] = (uint8_t)(g_jv_ok != 0);
+                        { extern uint32_t gpu_jvdec_hello(void);
+                          lamps[4] = (uint8_t)(gpu_jvdec_hello() == 0x0A3D0001u); }
+                        lamps[5] = (uint8_t)(gok != 0);
+                        { extern uint32_t gpu_pc_read(void); uint32_t pc9 = gpu_pc_read();
+                          lamps[6] = (uint8_t)(pc9 >= 0xF03000u && pc9 < 0xF04000u);
+                          rows[8] = pc9; }
+                        lamps[7] = 1;
+                        for (q = 0; q < 12; q++) rows[q] = 0;
+                        rows[1] = vp_frames;  rows[2] = vp_fields;
+                        rows[3] = vp_read;    rows[4] = vp_tom;
+                        rows[5] = vp_copy;
+                        rows[9] = vp_tomfail; rows[10] = 6;
+                        vp_clut();
+                        vp_paint((uint8_t *)bb, lamps, rows); }
+#endif
 #ifdef VIDDIAG
                       /* DECODE-STATUS MARKER (2026-08-07 ghost hunt): 8x8 at
                          top-right. Bright white = Tom wrote DONE; dark grey =
