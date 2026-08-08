@@ -617,12 +617,28 @@ int main(void)
        cannot distinguish a hang from a starved A10 miss, which is exactly
        how the jerry_init investigation stalled. */
     BGC(BG_YELLOW);
+#ifdef VR_BOOTTRACE
+    /* ☠️ A HELD CRUMB AND A CRAWLING 68k LOOK IDENTICAL. Under a runaway OP
+       the 68k is starved ~100x, so a 440k-iteration loop can outlast a
+       60-second capture - which is how "the screen holds YELLOW" was read as
+       "it hangs before jerry_init" when it may simply be an A10 miss. ramp()
+       steps BG as it counts, so two captures a few seconds apart settle it:
+       DIFFERENT colours = alive but starved, SAME colour = a real hang. */
+    ramp(400000u);
+    BGC(BG_CYAN);
+#endif
     video_set_clut(holdpal);
+#ifdef VR_BOOTTRACE
+    BGC(BG_MAG);
+#endif
     /* NOT optional: gd_install() is what maps the GameDrive BIOS in. Without
        it every gd_fopen refuses and the clip silently never opens (the first
        lit vidrom roll sat on the hold screen with stage=1 for exactly this
        reason). File access is boot code, not a context ingredient. */
     gd_input_init();
+#ifdef VR_BOOTTRACE
+    BGC(BG_GREEN);            /* gd_install returned */
+#endif
 #ifdef VR_GPUINIT
     d_gpu_ok = gpu_init();
 #else

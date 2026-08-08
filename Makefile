@@ -1347,3 +1347,9 @@ endif
 ifdef VR_MAXF
 CFLAGS   += -DVR_MAXF=$(VR_MAXF)
 endif
+
+# VR_BOOTTRACE=1: BG crumbs + a ramp through the boot sequence, so a held
+# colour can be told from a crawling 68k (they look identical otherwise).
+ifdef VR_BOOTTRACE
+CFLAGS   += -DVR_BOOTTRACE
+endif
