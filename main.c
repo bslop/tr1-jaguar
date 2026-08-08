@@ -593,6 +593,10 @@ static int g_jvmin_game;              /* context probe: 1=ran at game entry,
 static int g_jvmin2;                  /* ...after a verify-retry load       */
 static int g_jv_d240;                 /* load-under-disp240: 1 ok, 2 corrupt */
 #endif
+static int g_jv_ok;                   /* jvdec kernel VERIFIED in GPU SRAM:
+                                         gate the Tom kick on it, or a bad
+                                         load silently costs every frame the
+                                         68k fallback walk */
 static int g_jv_early;                /* jvdec kernel loaded at boot (skip
                                          the video-block load entirely)    */
 #ifdef VIDDIAG
@@ -3607,7 +3611,16 @@ bootvid_entry:
                 { extern uint32_t gpu_sram_test(void);
                   g_sr[introplay ? 2 : 1] = gpu_sram_test(); }
 #endif
-                if (!g_jv_early) {
+                /* ☠️ LOAD AND VERIFY HERE, EVERY TIME. The g_jv_early
+                   experiment loaded the kernel once at boot and the block
+                   then only ever KICKED - so anything that disturbed GPU
+                   SRAM in between left Tom running garbage, the wait timed
+                   out, and every frame fell back to the 68k token walk.
+                   That is the "chugging, sounds like it's running off the
+                   68k" the user heard (2026-08-08). vidrom loads+verifies
+                   immediately before the clip and GATES the kick on it;
+                   this now does the same. The load is ~50us. */
+                {
                   volatile uint32_t *v0 = (volatile uint32_t *)0xF1C340u;
                   volatile uint32_t *nq = (volatile uint32_t *)0xF1C378u;
                   extern uint32_t gpu_jvdec_verify(void);
@@ -3617,6 +3630,7 @@ bootvid_entry:
                       gpu_jvdec_load();
                       if (gpu_jvdec_verify() == 0) break;
                   }
+                  g_jv_ok = (gpu_jvdec_verify() == 0);
 #ifdef VIDDIAG
                   g_jv_vfy = gpu_jvdec_verify();
 #endif
@@ -3838,6 +3852,13 @@ bootvid_entry:
                              no prev re-apply is needed (prevlen 0). The
                              68k token walk below remains as the verified
                              fallback if Tom's wait ever fails. */
+                          /* ☠️ do NOT gate the kick on g_jv_ok. The verify
+                             is a READ of GPU SRAM, and reads are the
+                             unreliable direction (writes land - the F03800
+                             corruption proved that). Gating on a flaky read
+                             can suppress a kick that would have worked; the
+                             DRAM mailbox (tomok) is the honest verdict, and
+                             the 68k walk is still there if it fails. */
                           if (gpu_ok) {
                               /* KICK STRAIGHT OFF THE STREAM BUFFER (vidrom,
                                  2026-08-08): the stash copy was for the ASYNC
