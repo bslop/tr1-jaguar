@@ -40,6 +40,25 @@ int jerry_init(void)
     *(volatile uint16_t *)0xF14000u = 0x0100;  /* JOYSTICK: unmute DAC   */
 #endif  /* NOSOUND: never start the DAC clock, so no ticks for Jerry to service
          * (the DSP kernel also compiles AUDIO_PUMP out — see dsp_pose.das) */
+    /* ☠️ SILENCE THE VOICES BEFORE THE DAC EVER TICKS.
+       The voice registers live in Jerry's SRAM and hold POWER-ON GARBAGE.
+       jerry_init programs SCLK/SMODE and unmutes the DAC, then starts the
+       DSP - and the pump immediately begins mixing from a garbage V0_PTR
+       for a garbage V0_CNT bytes. Measured on silicon: 3.7 SECONDS of flat
+       ~500-RMS buzz at the head of the first clip (the source audio there
+       is RMS 1-80 and rising), which the user heard as the clip "trying to
+       start". Zero them here, while the DSP is still stopped and the 68k
+       can write his SRAM safely. V0 = 4 longs, V1_CNT stops voice 1, and
+       the queued-buffer slot must start empty too.
+       ☠️ Do NOT blanket-clear 14 longs from D_VOICES: PUMP_SAVE ($F1C360)
+       overlaps voice 1's tail. */
+    *(volatile uint32_t *)0xF1C340u = 0;   /* V0_CNT  */
+    *(volatile uint32_t *)0xF1C344u = 0;   /* V0_LANE */
+    *(volatile uint32_t *)0xF1C348u = 0;   /* V0_PTR  */
+    *(volatile uint32_t *)0xF1C34Cu = 0;   /* V0_CVAL */
+    *(volatile uint32_t *)0xF1C350u = 0;   /* V1_CNT  */
+    *(volatile uint32_t *)0xF1C378u = 0;   /* V0_NCNT */
+    *(volatile uint32_t *)0xF1C37Cu = 0;   /* V0_NPTR */
     *(volatile uint32_t *)(D_PARAMS + 0) = (uint32_t)dsp_mailbox;
     *(volatile uint32_t *)(D_PARAMS + 60) = 0;   /* mcount=0 -> hello mode */
     dsp_mailbox[0] = 0;
