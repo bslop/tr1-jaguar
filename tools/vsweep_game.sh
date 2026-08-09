@@ -19,7 +19,11 @@ for p in "${PADS[@]}"; do
     tools/vroll_game.sh "$rom" "$OUT/p$p" "$SECS" | tail -3
     # lit = any second above the black floor; a whole run of zeros is either an
     # A10 miss or a dead Cam Link, and only the control roll can tell them apart
-    if grep -qE ':[1-9][0-9]*( |$)' "$OUT/p$p/brightness.txt" 2>/dev/null; then
+    # ☠️ LIT MEANS SUSTAINED, NOT A FLASH.  A build that shows 3 seconds of
+    # boot flash and then dies read as LIT and cost a whole measurement roll:
+    # require 5+ non-black seconds before believing it.
+    if [ "$(tr ' ' '\n' < "$OUT/p$p/brightness.txt" 2>/dev/null |
+            grep -cE ':[1-9][0-9]*$')" -ge 5 ]; then
         echo "==> pad $p LIT"; exit 0
     fi
 done

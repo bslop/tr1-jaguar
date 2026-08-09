@@ -1902,6 +1902,17 @@ static uint32_t g_stageck, g_stagecam, g_stagechg;
  *   bar 1 = mean asleep halflines per frame (0 => the 68k is the bottleneck)
  * A halfline is ~31.7us; a whole 60Hz field is 525. */
 static uint32_t bp_t0, bp_active, bp_sleep, bp_safe, bp_blit, bp_n;
+/* PHASE BREAKDOWN of the 68000's frame.  The active window is ~130ms and Tom
+   idles through most of it, so this is where the frame rate lives.  Marks are
+   taken at the loop's existing HLP() sites so the phases line up with the
+   profiler's own vocabulary:
+     p1 = loop top -> pre-collect   : game logic (pad, camera, Lara, collision,
+                                      entities) - the part that runs UNDER Tom
+     p2 = pre-collect -> post-clear : collect, flip, safe-vc, clear blit
+     p3 = post-clear -> rooms done  : visibility walk, display-list build,
+                                      Jerry pose + lara_finish, dispatch
+     p4 = rooms done -> loop top    : HUD, overlays, tail */
+static uint32_t bp_m, bp_p1, bp_p2, bp_p3, bp_p4, bp_frames;
 #endif
 static int  g_health = 1000;             /* TR1 full health              */
 
@@ -3884,7 +3895,13 @@ bootvid_entry:
 #endif
                 }
             }
-#ifdef NOBOOTCLIPS
+#ifdef FASTBOOT
+            /* FASTBOOT: straight into the level.  No boot logos, no Start Game
+               cinematic, no title splash, no loading art - a test roll should
+               reach the area under test in seconds, not after two minutes of
+               boot chain.  The level load itself is untouched. */
+            for (vc = 3; vc < 3; vc++) {
+#elif defined(NOBOOTCLIPS)
             for (vc = 3; vc < (introplay ? 4 : 3); vc++) {
 #else
             for (vc = introplay ? 3 : 0; vc < (introplay ? 4 : 3); vc++) {
@@ -4533,7 +4550,9 @@ bootvid_entry:
           /* PS1 ORDER: the disc shows its title splash with a filling
              progress bar between the attract videos and the title menu, and
              the ring staging below is exactly the gap it covers. */
+#ifndef FASTBOOT
           show_title_load(120u);          /* ~2s, matching the reference */
+#endif
           /* RING ORDER: 0 = Game (passport), 1 = Controls, 2 = Lara's Home.
              Slot 3 is the OPENED passport - staged like the rest but not a
              ring item. (Sound is deferred - user 2026-07-29.) */
@@ -5676,7 +5695,7 @@ bootvid_entry:
              bss guard tripped) in 15360B chunks (48 rows each, 512-
              aligned), row-decimated into the panel buffer. Palettes are
              resident. Any failure falls through to the text panel. */
-#ifndef NO_GAMEDRIVE
+#if !defined(NO_GAMEDRIVE) && !defined(FASTBOOT)
           { extern const uint16_t cavesload_pal[], gymload_pal[];
             const uint16_t *lp = g_useset ? gymload_pal : cavesload_pal;
             /* 24 rows a chunk, not 48: this buffer is BSS that exists only
@@ -6254,11 +6273,13 @@ bootvid_entry:
            to black, and only THEN change the palette. */
         load_prog(8, 8);                      /* bar reaches the end, in the
                                                  art's own palette */
+#ifndef FASTBOOT
         { extern volatile uint32_t frame_count;
           uint32_t h0 = frame_count;
           while (frame_count - h0 < 96u)      /* ~1.6s at 60Hz */
               ;
         }
+#endif
         /* black on every buffer, and index 0 IS black in the level palette
            (mrt_pal[0] = 0,0,0), so this stays black across the swap */
         { extern uint8_t *const crash_fbs[3]; int b4;
@@ -6299,6 +6320,9 @@ bootvid_entry:
         for (;;) {
             uint32_t pad;
             HLP(0);
+#ifdef BUSPROBE
+            { uint32_t _m = vp_tick(); bp_p4 += _m - bp_m; bp_m = _m; }
+#endif
 #ifdef PROFILE
             { uint32_t _fc = frame_count;
               if (pftop) pftt2 += _fc - pftop;
@@ -6492,6 +6516,31 @@ bootvid_entry:
                   touri++;
               }
               pad = 0;   /* no player control during the tour */
+            }
+#endif
+#if defined(PIPELINE) && defined(COLLECTEARLY)
+            /* COLLECT HERE, NOT AT THE END OF THE LOGIC.
+             *
+             * Tom renders in ~33ms; the 68000's frame is ~130ms; the 68k
+             * never waits at the old collect because Tom finished long
+             * before.  So the whole of Lara's movement, collision, climbing
+             * and the portal walk - the DRAM-hungry part - runs ON TOP of
+             * Tom's render, and that bus pressure is what knocks faces out
+             * (PIPESTAGE=0, which keeps the 68k off the bus entirely, cut the
+             * flicker 549 -> 43).
+             *
+             * Collecting here costs whatever Tom still owes after the light
+             * head of the frame, and buys a quiet bus for everything after.
+             * Whether that is a better trade than PIPESTAGE=0's flat 25% is a
+             * MEASUREMENT, not an argument - build both and compare. */
+            if (g_tominflight) {
+#ifdef BUSPROBE
+                { uint32_t _s0 = vp_tick();
+                  gpu_sync(); g_tominflight = 0;
+                  bp_sleep += vp_tick() - _s0; }
+#else
+                gpu_sync(); g_tominflight = 0;
+#endif
             }
 #endif
 #ifdef MV_SIDE
@@ -7401,9 +7450,10 @@ bootvid_entry:
 #endif
             HLP(1);
 #ifdef BUSPROBE
+            { uint32_t _m = vp_tick(); bp_p1 += _m - bp_m; bp_m = _m; }
             bp_active += vp_tick() - bp_t0;      /* loop top -> here: ACTIVE */
 #endif
-#if defined(PIPELINE) && PIPESTAGE >= 1
+#if defined(PIPELINE) && PIPESTAGE >= 1 && !defined(COLLECTEARLY)
             /* PIPELINE collect point: the logic above ran while Tom finished
                the previous frame. Present it before any blitter (clear) or
                pose (lara_blob) work — both would collide with a live render. */
@@ -7435,12 +7485,13 @@ bootvid_entry:
 #endif
             }
 #ifdef BUSPROBE
-            bp_n++;
+            bp_n++; bp_frames++;
             /* ☠️ THROW THE FIRST WINDOWS AWAY.  bp_t0 starts at zero, so the
                first sample is "time since boot" - seconds - and it dominated
                the running mean forever (the first reading came back as 1.8s a
                frame, which is nonsense on its face). */
-            if (bp_n == 8) { bp_active = bp_sleep = bp_safe = bp_blit = 0; bp_n = 1; }
+            if (bp_n == 8) { bp_active = bp_sleep = bp_safe = bp_blit = 0;
+                             bp_p1 = bp_p2 = bp_p3 = bp_p4 = 0; bp_n = 1; }
             bp_t0 = vp_tick();                   /* next window starts here */
 #endif
 #ifdef JLOOPS
@@ -7522,10 +7573,16 @@ bootvid_entry:
             { uint8_t *pb2 = (uint8_t *)video_backbuffer();
               uint32_t v2[5]; int nb2 = 0, bq, by4, bx4, row;
 #ifdef BUSPROBE
-              v2[nb2++] = bp_n ? bp_active / bp_n : 0;   /* halflines ACTIVE */
-              v2[nb2++] = bp_n ? bp_sleep  / bp_n : 0;   /* halflines ASLEEP */
-              v2[nb2++] = bp_n ? bp_safe   / bp_n : 0;   /* stall: VC window  */
-              v2[nb2++] = bp_n ? bp_blit   / bp_n : 0;   /* stall: clear blit */
+              v2[nb2++] = bp_n ? bp_p1 / bp_n : 0;   /* game logic        */
+              v2[nb2++] = bp_n ? bp_p2 / bp_n : 0;   /* collect+flip+clear */
+              v2[nb2++] = bp_n ? bp_p3 / bp_n : 0;   /* stage + dispatch   */
+              v2[nb2++] = bp_n ? bp_p4 / bp_n : 0;   /* HUD + tail         */
+              /* FREE-RUNNING FRAME COUNT.  fps_measure.py locates its beacon
+                 as the highest-variance pixel cluster, and the flickering
+                 faces out-vary the beacon - it reported 0.93 and 0.48 fps for
+                 a game running near 7.  A counter decoded at two known
+                 capture times cannot be fooled that way. */
+              v2[nb2++] = bp_frames & 0xFFFFu;
 #endif
 #ifdef STAGECHK
               v2[nb2++] = g_stagechg;                    /* staging drifts   */
@@ -7636,6 +7693,9 @@ bootvid_entry:
 #endif /* NOCLEAR */
 #endif /* PACEPROBE */
             HLP(2);
+#ifdef BUSPROBE
+            { uint32_t _m = vp_tick(); bp_p2 += _m - bp_m; bp_m = _m; }
+#endif
 #ifdef PROFILE
             pfB = frame_count;
 #endif
@@ -8164,6 +8224,9 @@ bootvid_entry:
 #endif
                       } }
                     HLP(6);
+#ifdef BUSPROBE
+                    { uint32_t _m = vp_tick(); bp_p3 += _m - bp_m; bp_m = _m; }
+#endif
                     HB(12);  /* stage 12: Tom done (all rooms) */
                     RP(7);
                 } else if (posed < 2) {

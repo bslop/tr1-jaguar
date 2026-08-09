@@ -1393,6 +1393,25 @@ CFLAGS   += -DBUSPROBE
 CXXFLAGS += -DBUSPROBE
 endif
 
+# COLLECTEARLY=1: take the PIPELINE collect after the light head of the frame
+# instead of after all the logic, so Lara's collision + the portal walk do not
+# run on top of Tom's render.  Trades a little frame time for a quiet bus.
+ifdef COLLECTEARLY
+CFLAGS   += -DCOLLECTEARLY
+CXXFLAGS += -DCOLLECTEARLY
+endif
+
+# FASTBOOT=1: boot STRAIGHT into the level - no logos, no title splash, no
+# Start Game cinematic, no loading art or dwell.  Implies AUTOSTART.  For test
+# rolls: the boot chain is ~130s and every capture was mostly boot.
+ifdef FASTBOOT
+# ☠️ define AUTOSTART here, not by setting the variable: the ifdef that turns
+# AUTOSTART into -DAUTOSTART is parsed EARLIER in this file, so a late
+# assignment would never reach the compiler.
+CFLAGS   += -DFASTBOOT -DAUTOSTART
+CXXFLAGS += -DFASTBOOT -DAUTOSTART
+endif
+
 ifdef VIDPANEL
 CFLAGS   += -DVIDPANEL
 CXXFLAGS += -DVIDPANEL
