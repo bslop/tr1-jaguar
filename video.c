@@ -285,7 +285,17 @@ static void build_object_list(uint32_t fb_addr)
     /* task #4 TITLE 240: SAME scaled TYPE-1 machinery, but scale 1.0x over the
        240-tall fb (a 1:1 "scaled" object IS a plain display, and the entire
        proven repair/OPDBL structure stays byte-identical in layout). */
-    { uint32_t t_srcl  = g_disp240 ? 239u : (uint32_t)(RENDER_H - 1);
+    /* ☠️ HEIGHT IS A COUNT, NOT AN INDEX (2026-08-08, user: "at the bottom
+       there are lines that extend across").  The OP's bitmap HEIGHT field is
+       the number of lines to display - it counts DOWN to zero - and for a
+       scaled object it counts SOURCE lines.  This branch wrote one less than
+       that ("source lines - 1"), while the plain-bitmap branch a few lines up
+       writes RENDER_H.  One of the two is wrong, and it is this one: at the
+       2.0x vertical scale the game uses, one missing source line is TWO TV
+       lines with no data at the bottom of the frame - which is why the band
+       shows in the loading screen and in the game (both scaled 120->240) but
+       never on the title or the FMVs (plain 240, 1.0x). */
+    { uint32_t t_srcl  = g_disp240 ? 240u : (uint32_t)RENDER_H;
       fs_ph5 = g_disp240 ? 0x2020u                       /* 1.0x V, 1.0x H */
                          : (((uint32_t)FS_VSCALE << 8) | (uint32_t)FS_HSCALE);
     /* FIX (HW-verified 2026-07-08): a BARE scaled object (scaled bitmap ->

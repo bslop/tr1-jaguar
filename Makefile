@@ -1363,6 +1363,21 @@ endif
 # VIDPANEL=1: the self-calibrating read-out in the GAME's boot video block
 # (same geometry as vidrom, same host decoder). The old VIDDIAG squares are
 # unreadable off a capture - they cost two wrong diagnoses.
+# BANDPROBE=1: paint the two candidate owners of the bottom scanlines in flat
+# values just before the flip, so one capture says which region the frozen
+# band at the bottom of the screen comes from.  Diagnostic only.
+ifdef BANDPROBE
+CFLAGS   += -DBANDPROBE
+CXXFLAGS += -DBANDPROBE
+endif
+
+# DARTS=1: TRAP_DART_EMITTER entities fire darts across the corridor and hurt
+# Lara on contact (TR1 damage 50/1000).  Room-0 pass, 2026-08-09.
+ifdef DARTS
+CFLAGS   += -DDARTS
+CXXFLAGS += -DDARTS
+endif
+
 ifdef VIDPANEL
 CFLAGS   += -DVIDPANEL
 CXXFLAGS += -DVIDPANEL

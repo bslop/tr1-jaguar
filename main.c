@@ -812,6 +812,65 @@ static int g_fardist = 9000;   /* per-vert kernel far cull; OPTION+UP/DOWN */
    render loop has not started — so the bar is painted DIRECTLY into that same
    buffer.  No second buffer, no flips, no race, and it appears immediately.
    load_prog(num,den) is safe to call before the panel exists (g_loadfb is 0). */
+/* Streaming buffer for the PS1 loading art, shared by the pre-title screen
+   and the in-game loading panel.  24 rows a chunk = ten whole 512-byte
+   sectors; it was 48 rows, and halving it is what let DBGROOM fit again. */
+static uint8_t g_artbuf[7680] __attribute__((aligned(4)));
+
+/* show_title_load: the PSX's pre-title loading screen.
+ *
+ * The disc shows the TOMB RAIDER splash with a red progress bar filling along
+ * the bottom, between the attract videos and the title menu (user reference,
+ * 2026-08-09).  We already ship that exact art - title.bin / title_pal.bin,
+ * down to the "TM & (C) Core Design Ltd 1996" line - and the title screen
+ * paints it with blit_copy straight out of ROM, so this is the same paint one
+ * step earlier, plus the bar.  Geometry was measured off the reference frames:
+ * the bar runs x 56..250, y 206..216 in 320x240 space, and title_pal index 80
+ * is rgb(160,8,8) against the disc's rgb(157,16,1).
+ *
+ * The art is 320x240 and the boot display is still plain-240 here (g_disp240
+ * is 1 until the game takes over), so it copies 1:1 - no decimation.
+ */
+/* Jaguar RGB16 is R<<11 | B<<6 | G<<1 (green and blue swapped vs 565), so
+   the disc's bar red rgb(160,8,8) is 20<<11 | 1<<6 | 1<<1. */
+#define LOADBAR_IDX 253
+#define LOADBAR_RGB 0xA042u
+#define TL_X0 56
+#define TL_X1 250
+#define TL_Y0 206
+#define TL_Y1 217
+#define TL_IDX 80
+static void show_title_load(uint32_t fields)
+{
+    extern const uint8_t title_img[];
+    extern const uint16_t title_pal[];
+    extern volatile uint32_t frame_count;
+    uint8_t *fb = (uint8_t *)video_backbuffer();
+    uint32_t t0;
+    int done = TL_X0;
+
+    blit_copy(title_img, fb, 240);        /* Blitter, straight out of ROM -
+                                             the title screen's own paint */
+    video_set_clut(title_pal);
+    video_flip();
+    t0 = frame_count;
+    for (;;) {
+        uint32_t el = frame_count - t0;
+        int w, y3, x3;
+        if (el > fields) el = fields;
+        w = TL_X0 + (int)(((uint32_t)(TL_X1 - TL_X0) * el) / fields);
+        /* fill only the newly-uncovered columns - a few dozen bytes a step,
+           into the buffer already on screen (no flip runs during the fill,
+           exactly as the in-game load_prog bar works) */
+        for (y3 = TL_Y0; y3 < TL_Y1; y3++)
+            for (x3 = done; x3 < w; x3++)
+                fb[y3 * RENDER_W + x3] = TL_IDX;
+        done = w;
+        if (el >= fields)
+            break;
+    }
+}
+
 static uint8_t *g_loadfb;
 static int g_loadlh, g_loadbx0, g_loadbx1, g_loadby, g_loadbh;
 static void load_prog(int num, int den)
@@ -823,9 +882,9 @@ static void load_prog(int num, int den)
     inner0 = g_loadbx0 + 1;
     inner1 = g_loadbx1 - 1;
     w = ((inner1 - inner0) * num) / den;
-    for (y = g_loadby + 1; y < g_loadby + g_loadbh - 1; y++)
+    for (y = g_loadby; y < g_loadby + g_loadbh; y++)
         for (x = inner0; x < inner0 + w; x++)
-            g_loadfb[y*RENDER_W + x] = 255;
+            g_loadfb[y*RENDER_W + x] = LOADBAR_IDX;
 }
 
 #ifdef HOPDIAL
@@ -1821,6 +1880,16 @@ static uint8_t ent_sw_blob[ENT_SW_MAXDRAW][640] __attribute__((aligned(8)));
 static uint8_t ent_br_blob[ENT_BR_MAXDRAW][384] __attribute__((aligned(8)));
 #define ENT_PK_MAXDRAW 3
 static uint8_t ent_pk_blob[ENT_PK_MAXDRAW][384] __attribute__((aligned(8)));
+#ifdef DARTS
+#define ENT_DART_MAXDRAW 8
+static uint8_t ent_dart_blob[ENT_DART_MAXDRAW][384] __attribute__((aligned(8)));
+#endif
+/* Lara's health is a GAME concept, not an enemy one: it lived inside the
+   ENEMIES block, so anything else that can hurt her - the dart trap - could
+   not even compile against it.  (And ENEMIES itself is not plumbed in the
+   Makefile at all, so that block has never been built; see the note there.) */
+static int  g_health = 1000;             /* TR1 full health              */
+
 #if defined(ENEMIES)
 /* THE BAT (enemy model 9): 45 verts, 41 faces, 8 fly-cycle frames baked by the
    extractor (mrt_bat.h). Flat dark swatch (door grey cell). First real enemy;
@@ -1838,7 +1907,6 @@ static uint8_t g_batframe;               /* shared fly-cycle frame    */
 static int g_batx[MRT_ENTCOUNT], g_baty[MRT_ENTCOUNT], g_batz[MRT_ENTCOUNT];
 static uint8_t g_batinit;                /* positions seeded from spawn  */
 static uint8_t g_batdead[MRT_ENTCOUNT];  /* killed by Lara               */
-static int  g_health = 1000;             /* TR1 full health              */
 static int  g_firecd;                    /* fire cooldown ticks          */
 static int  g_kills;                     /* enemies killed (stats)       */
 static int ent_is_bat(int t) { return t == 9; }
@@ -1937,6 +2005,110 @@ static void build_ent_pickup(uint8_t *buf, int atlasW, int e)
         w += 12;
     }
 }
+
+#ifdef DARTS
+/* ---- DART TRAP (user 2026-08-09, the room-0 pass) -------------------------
+ * TR1's TRAP_DART_EMITTER (type 40) is a wall socket that spits a dart across
+ * the corridor.  Level 1 has ten of them; the four the player meets first sit
+ * in pairs facing each other across the passage past the start room -
+ * emitters 5..8, at x=73216 (yaw 64) and x=76288 (yaw 192), which is +X and
+ * -X: TR yaw 0 faces +Z, so the byte yaw maps to (sin, cos) directly and the
+ * pairs fire INTO the corridor, exactly as the geometry implies.
+ *
+ * A dart is a thin box built along its own flight axis, so it reads as a
+ * needle rather than a cube, and it is drawn through the same shared display
+ * list every other entity uses.  It expires on a life counter rather than a
+ * wall test: the corridor is three sectors wide and DART_LIFE * DART_SPEED
+ * covers just over that, so a dart that misses dies about where the far wall
+ * is anyway.  Damage is TR1's: 50 of 1000.
+ */
+#define DART_MAX    8
+#define DART_SPEED  190          /* world units per tick                     */
+#define DART_LIFE   26           /* ticks alive: ~3.5 sectors of travel      */
+#define DART_HALF   13           /* half thickness                           */
+#define DART_LEN    50           /* half length along the flight axis        */
+#define DART_DMG    50           /* TR1 dart damage, out of 1000             */
+#define DART_PERIOD 26           /* ticks between shots from one emitter     */
+#define DART_RANGE  5120         /* emitter sleeps until Lara is this close  */
+static struct { int x, y, z; short vx, vz; unsigned char life; } g_dart[DART_MAX];
+static unsigned char g_dartcd[MRT_ENTCOUNT];   /* per-emitter cooldown */
+static int ent_is_dart_emitter(int t) { return t == 40; }
+
+/* thin box along the flight axis; same blob layout as the pickup cube */
+static void build_ent_dart(uint8_t *buf, int atlasW, int d)
+{
+    int wx = g_dart[d].x, wz = g_dart[d].z, y = g_dart[d].y;
+    int offX = wx >> 8, offZ = wz >> 8, rx0 = wx & 255, rz0 = wz & 255;
+    int ax = g_dart[d].vx > 0 ? 1 : (g_dart[d].vx < 0 ? -1 : 0);
+    int az = g_dart[d].vz > 0 ? 1 : (g_dart[d].vz < 0 ? -1 : 0);
+    int px = -az, pz = ax;              /* perpendicular, in the floor plane */
+    uint16_t *h = (uint16_t *)buf; uint16_t *w; int i;
+    h[0]=8; h[1]=6; h[2]=0; h[3]=(uint16_t)atlasW; h[4]=(uint16_t)g_ltx_atH;
+    h[5]=(uint16_t)offX; h[6]=0; h[7]=(uint16_t)offZ;
+    w = (uint16_t *)(buf + 16);
+    for (i = 0; i < 8; i++) {
+        int lo = (item_v[i][2] > 0) ?  DART_LEN : -DART_LEN;   /* along flight */
+        int si = (item_v[i][0] > 0) ?  DART_HALF : -DART_HALF; /* across       */
+        int hi = (item_v[i][1] > 0) ?  DART_HALF : -DART_HALF; /* vertical     */
+        w[0]=(uint16_t)(int16_t)(rx0 + ax*lo + px*si);
+        w[1]=(uint16_t)(int16_t)(y + hi);
+        w[2]=(uint16_t)(int16_t)(rz0 + az*lo + pz*si);
+        w[3]=255; w += 4;
+    }
+    for (i = 0; i < 6; i++) {
+        EMIT_PLANE(w);
+        w[0]=item_q[i][0]; w[1]=item_q[i][1]; w[2]=item_q[i][2]; w[3]=item_q[i][3];
+        w[4]=ITEM_UL;w[5]=ITEM_VL; w[6]=ITEM_UH;w[7]=ITEM_VL;
+        w[8]=ITEM_UH;w[9]=ITEM_VH; w[10]=ITEM_UL;w[11]=ITEM_VH;
+        w += 12;
+    }
+}
+
+/* fire, fly, hit.  Called once per frame from the game loop. */
+static void darts_update(int ticks, int room)
+{
+    int i, e;
+    for (i = 0; i < DART_MAX; i++) {
+        if (!g_dart[i].life) continue;
+        g_dart[i].x += (int)g_dart[i].vx * ticks;
+        g_dart[i].z += (int)g_dart[i].vz * ticks;
+        if (g_dart[i].life <= ticks) { g_dart[i].life = 0; continue; }
+        g_dart[i].life = (unsigned char)(g_dart[i].life - ticks);
+        { int hx = g_lax - g_dart[i].x, hz = g_laz - g_dart[i].z;
+          int hy = g_lay - g_dart[i].y;
+          if (hx < 0) hx = -hx; if (hz < 0) hz = -hz; if (hy < 0) hy = -hy;
+          if (hx < 200 && hz < 200 && hy < 620) {
+              g_dart[i].life = 0;
+              if (g_health > 0) g_health -= DART_DMG;
+          } }
+    }
+    for (e = 0; e < MRT_ENTCOUNT; e++) {
+        int dx, dz, si, ci, slot;
+        if (!ent_is_dart_emitter(mrt_ent[e].type)) continue;
+        dx = g_lax - mrt_ent[e].x; dz = g_laz - mrt_ent[e].z;
+        if (dx < 0) dx = -dx; if (dz < 0) dz = -dz;
+        if (dx + dz > DART_RANGE) { g_dartcd[e] = 0; continue; }
+        (void)room;
+        if (g_dartcd[e] > ticks) {
+            g_dartcd[e] = (unsigned char)(g_dartcd[e] - ticks);
+            continue;
+        }
+        g_dartcd[e] = DART_PERIOD;
+        for (slot = 0; slot < DART_MAX && g_dart[slot].life; slot++)
+            ;
+        if (slot >= DART_MAX) continue;          /* all in flight - skip a shot */
+        /* TR yaw: 0 faces +Z, and the byte is a full turn in 256 steps */
+        si = (int)SIN((int)mrt_ent[e].yaw << 8);
+        ci = (int)COS((int)mrt_ent[e].yaw << 8);
+        g_dart[slot].x = mrt_ent[e].x;
+        g_dart[slot].y = mrt_ent[e].y - 256;     /* socket height, not the floor */
+        g_dart[slot].z = mrt_ent[e].z;
+        g_dart[slot].vx = (short)((si * DART_SPEED) >> 16);
+        g_dart[slot].vz = (short)((ci * DART_SPEED) >> 16);
+        g_dart[slot].life = DART_LIFE;
+    }
+}
+#endif /* DARTS */
 
 /* one bridge as a THIN SLAB (box, 1 sector wide, ~90 thick) so it is visible
    from ANY angle - a zero-thickness quad vanishes edge-on when Lara stands at
@@ -4322,16 +4494,31 @@ bootvid_entry:
                pinned to two buffers - stale rows/pixels otherwise ghost into
                the title and show as LINES below the game's 120-line window
                (user 2026-08-07). crash_fbs[] names every buffer. */
-            { extern uint8_t *const crash_fbs[3]; int b3; uint32_t k3;
-              for (b3 = 0; b3 < 3; b3++) {
-                  uint32_t *fw = (uint32_t *)crash_fbs[b3];
-                  for (k3 = 0; k3 < (320u*240u)/4u; k3++) fw[k3] = 0; } }
+            /* ☠️☠️ SCRUBBING TO "BLACK" MEANT SCRUBBING TO WHITE (user,
+               2026-08-09: "when we hit the end of the attract video there's a
+               white flash").  The buffers are filled with palette index 0 -
+               and index 0 is PURE WHITE in EIDOS, CORE and CAVES, near-white
+               in INTRO, because the encoder had no reason to reserve it.  So
+               every clip ended on a full-screen white frame.  Force entry 0
+               black BEFORE the fill; the title/level set_clut rewrites
+               0..253 straight after, so nothing else notices.
+               The fill itself is 57,600 long stores across three buffers -
+               the Blitter's job, not the 68000's. */
+            { volatile uint16_t *cl0 = (volatile uint16_t *)0xF00400u;
+              cl0[0] = 0x0000; }
+            { extern uint8_t *const crash_fbs[3]; int b3;
+              for (b3 = 0; b3 < 3; b3++)
+                  blit_band(crash_fbs[b3], 0, 240, 0); }
             if (gpu_ok)
                 gpu_jvdec_done();   /* restore the init-once kernel params
                                        (mailbox ptr) the video block used */
           }
           if (introplay) goto bv_done;   /* Start Game: intro played, go */
 #endif
+          /* PS1 ORDER: the disc shows its title splash with a filling
+             progress bar between the attract videos and the title menu, and
+             the ring staging below is exactly the gap it covers. */
+          show_title_load(120u);          /* ~2s, matching the reference */
           /* RING ORDER: 0 = Game (passport), 1 = Controls, 2 = Lara's Home.
              Slot 3 is the OPENED passport - staged like the rest but not a
              ring item. (Sound is deferred - user 2026-07-29.) */
@@ -5477,7 +5664,12 @@ bootvid_entry:
 #ifndef NO_GAMEDRIVE
           { extern const uint16_t cavesload_pal[], gymload_pal[];
             const uint16_t *lp = g_useset ? gymload_pal : cavesload_pal;
-            static uint8_t artbuf[15360] __attribute__((aligned(4)));
+            /* 24 rows a chunk, not 48: this buffer is BSS that exists only
+               while the loading art streams, and 7680 is still ten whole
+               512-byte sectors, so the GD sector discipline is untouched.
+               Halving it bought back the headroom that let DBGROOM build -
+               the stack guard was 96 bytes short across every pad. */
+            uint8_t *artbuf = g_artbuf;   /* file-scope: 24-row chunks, ten sectors */
             int lh2 = -1, mi8, k8, ck;
             for (mi8 = 0; mi8 < 2 && lh2 < 0; mi8++)
                 lh2 = gd_fopen(g_useset ? (mi8 ? "/GYMLOAD.DAT" : "GYMLOAD.DAT")
@@ -5487,12 +5679,12 @@ bootvid_entry:
                 int okart = 1;
                 /* size-before-read, like every working GD reader */
                 if (gd_fsize((unsigned)lh2) != 76800) okart = 0;
-                for (ck = 0; ck < 5 && okart; ck++) {
-                    if (gd_fread((unsigned)lh2, artbuf, 15360u,
+                for (ck = 0; ck < 10 && okart; ck++) {
+                    if (gd_fread((unsigned)lh2, artbuf, 7680u,
                                  GD_FREAD_CPU) != 0) { okart = 0;
                         break; }
-                    for (py2 = 0; py2 < 48; py2++) {
-                        int sy8 = ck*48 + py2;
+                    for (py2 = 0; py2 < 24; py2++) {
+                        int sy8 = ck*24 + py2;
                         int dy8 = sy8 * LH / 240;
                         const uint8_t *sr = artbuf + py2*320;
                         for (px2 = 0; px2 < RENDER_W; px2++)
@@ -5571,18 +5763,24 @@ bootvid_entry:
              3-row bar at LH=120 left ONE row of fill and read as a solid line
              whatever the progress was.  8 rows (LOWRES) / 14 (240) leaves a
              readable interior in both. */
-          { int bh = (LH >= 240) ? 14 : 8;
-            int by = LH - bh - 4, bx0 = 10, bx1 = RENDER_W - 10, xx2;
+          /* SAME BAR AS THE TITLE SPLASH (user, 2026-08-09: "can we get the
+             same progress bar from the game?").  The disc draws no outline at
+             all - just a solid red bar growing left to right - so the white
+             box-and-caps is gone and the geometry is the title's, scaled from
+             the 240-line art space into whatever height this panel is
+             painted at (LOWRES paints 120 and the OP scaler doubles it).
+             The cave art has NO red anywhere near the disc's rgb(157,16,1) -
+             its reddest entry is rgb(8,0,0) - but indices 250..253 are unused
+             by both loading images, so 253 is reserved for the bar and poked
+             straight into the CLUT after the art's palette lands. */
+          { int by = TL_Y0 * LH / 240, bh = (TL_Y1 - TL_Y0) * LH / 240;
+            int bx0 = TL_X0, bx1 = TL_X1;
+            volatile uint16_t *clut2 = (volatile uint16_t *)0xF00400u;
+            if (bh < 3) bh = 3;                /* stays legible at LH=120 */
+            clut2[LOADBAR_IDX] = LOADBAR_RGB;
             g_loadfb = lfb; g_loadlh = LH;
             g_loadbx0 = bx0; g_loadbx1 = bx1; g_loadby = by; g_loadbh = bh;
-            for (xx2 = bx0; xx2 < bx1; xx2++) {         /* top+bottom rules */
-                lfb[by*RENDER_W+xx2] = 255;
-                lfb[(by+bh-1)*RENDER_W+xx2] = 255;
-            }
-            for (py2 = by; py2 < by+bh; py2++) {        /* end caps */
-                lfb[py2*RENDER_W+bx0] = 255;
-                lfb[py2*RENDER_W+bx1-1] = 255;
-            } }
+            (void)py2; }
           CRUMB(0xFFFE);               /* WHITE: panel painted */
 #ifdef HALFRES
           video_flip_hi(lfb);
@@ -6030,6 +6228,34 @@ bootvid_entry:
 #ifdef SKUNK_CONSOLE
         dbg_kv("bc_pokes", 1);
 #endif
+        /* ☠️ THE PALETTE SWAP MUST NOT LAND ON THE LOADING ART (user,
+           2026-08-09: "discoloration in between the loading screen and when
+           we're actually in the game").  video_set_clut(S_pal) rewrites
+           0..253 while the cave-mouth art is still the displayed image, so
+           for the rest of the load the art is drawn in the LEVEL's palette -
+           the discoloured frames the user sees.  So: finish the bar, let the
+           finished screen stand for a beat (the user asked for 1-2s - the
+           load is quick enough that the panel otherwise blinks past), blank
+           to black, and only THEN change the palette. */
+        load_prog(8, 8);                      /* bar reaches the end, in the
+                                                 art's own palette */
+        { extern volatile uint32_t frame_count;
+          uint32_t h0 = frame_count;
+          while (frame_count - h0 < 96u)      /* ~1.6s at 60Hz */
+              ;
+        }
+        /* black on every buffer, and index 0 IS black in the level palette
+           (mrt_pal[0] = 0,0,0), so this stays black across the swap */
+        { extern uint8_t *const crash_fbs[3]; int b4;
+          volatile uint16_t *cl0 = (volatile uint16_t *)0xF00400u;
+          cl0[0] = 0x0000;
+          for (b4 = 0; b4 < 3; b4++)
+              blit_band(crash_fbs[b4], 0, 240, 0);
+          video_flip();
+          { extern volatile uint32_t frame_count; uint32_t h1 = frame_count;
+            while (frame_count - h1 < 2u) ; } }
+        g_loadfb = 0;                         /* nothing may draw into the
+                                                 panel buffer from here on */
         video_set_clut(S_pal);
         { volatile uint16_t *clut=(volatile uint16_t*)0xF00400u;
           clut[254]=0x0000; clut[255]=0xFFFF;
@@ -6050,10 +6276,9 @@ bootvid_entry:
              "gold pickup") is free in this build because the pickup lives in
              DEMO_PROPS, which is never defined. */
           clut[g_dooridx]=0x6296; }                  /* carved stone door */
-        /* load complete: fill the bar, and drop the panel pointer so no
-           later call can scribble into a buffer the renderer now owns. */
-        load_prog(8, 8);
-        g_loadfb = 0;
+        /* (the bar was filled and the panel retired above, before the palette
+           swap - doing it here meant the last thing the player saw of the
+           loading screen was the art in the wrong palette) */
 
 
         for (;;) {
@@ -6574,6 +6799,9 @@ bootvid_entry:
                     }
                     if (g_health <= 0) g_dead = 1;   /* killed by damage */
                   }
+#endif
+#ifdef DARTS
+                  darts_update(g_ticks, g_curroom);
 #endif
                   for (pe = 0; pe < MRT_ENTCOUNT; pe++) {
                       int pdx, pdz, pdy;
@@ -7619,6 +7847,23 @@ bootvid_entry:
                       displist[1+ndrawn*4+3] = 0;
                       np++; ndrawn++;
                   } }
+#ifdef DARTS
+                /* darts in flight: no room gate - a dart is only ever alive
+                   for a few sectors of travel, and it is fired from an
+                   emitter that already checked Lara's distance */
+                { int d, nq2 = 0;
+                  for (d = 0; d < DART_MAX; d++) {
+                      if (!g_dart[d].life) continue;
+                      if (ndrawn >= 37) break;
+                      if (nq2 >= ENT_DART_MAXDRAW) break;
+                      build_ent_dart(ent_dart_blob[nq2], atlasW, d);
+                      displist[1+ndrawn*4+0] = (uint32_t)ent_dart_blob[nq2];
+                      displist[1+ndrawn*4+1] = 319u;
+                      displist[1+ndrawn*4+2] = (uint32_t)(RENDER_H-1);
+                      displist[1+ndrawn*4+3] = 0;
+                      nq2++; ndrawn++;
+                  } }
+#endif
 #ifdef ENEMIES
                 /* bats: flying enemies, near Lara, wing-flapping */
                 { int e, na = 0;
@@ -7933,6 +8178,33 @@ bootvid_entry:
               for (yy = 190; yy < 199; yy++)
                 for (xx = 0; xx < RENDER_W; xx++)
                   fb[yy*RENDER_W+xx] = (fbpix)((xx*240)/RENDER_W); }
+#endif
+#ifdef BANDPROBE
+            /* WHO OWNS THE BOTTOM LINES? (2026-08-08, user: "at the bottom
+               there are lines that extend across")  The band is FROZEN while
+               the picture animates - measured off the screencast - so those
+               rows are never redrawn, yet the per-frame clear covers rows
+               0..RENDER_H.  Rather than reason about the OP height field,
+               paint the two candidate regions in flat, unmistakable values
+               as the LAST writes before the flip and let one capture say it:
+                 white band  -> the tail of the RENDER area (rows 116..119)
+                 grey band   -> the OP is reading PAST the render area into
+                                rows 120+, which still hold the loading
+                                screen / video frame
+                 unchanged   -> neither: something else owns those scanlines */
+            /* v2: stay INSIDE the render area.  The first probe also painted
+               rows 120..239 every frame and the console came up with a
+               corrupt display on TWO different pads - so that write, not the
+               A10 lottery, was the problem, and a diagnostic that breaks the
+               thing it measures is worthless.  Index 232 is the brightest
+               entry in the level palette (near-white); 4 rows of it at the
+               very bottom of the RENDER area cannot be missed.
+                 white band at the bottom -> those scanlines ARE render rows
+                                             116..119, and the fault is that
+                                             the game never draws them
+                 band unchanged           -> the display is showing something
+                                             past the render area entirely */
+            blit_band((uint8_t *)fb, RENDER_H - 4, RENDER_H, 232);
 #endif
 #ifdef PIPELINE
             /* flip deferred: Tom may still be drawing this frame. The next
