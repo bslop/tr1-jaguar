@@ -1412,6 +1412,21 @@ CFLAGS   += -DFASTBOOT -DAUTOSTART
 CXXFLAGS += -DFASTBOOT -DAUTOSTART
 endif
 
+# TRAVDIAG=1: print what the ledge in front of Lara allows (rise, verdict,
+# grab reach, state) so a screencast says WHICH traversal rule refuses.
+ifdef TRAVDIAG
+CFLAGS   += -DTRAVDIAG
+CXXFLAGS += -DTRAVDIAG
+endif
+
+# GDPAD=1: drive the game remotely - gd_input reads INPUT.BIN off the SD as a
+# pad mask, written by the host with `jaggd -wf`.  TEST BUILDS ONLY (an SD
+# open/read/close every 4th frame).
+ifdef GDPAD
+CFLAGS   += -DGDPAD
+CXXFLAGS += -DGDPAD
+endif
+
 ifdef VIDPANEL
 CFLAGS   += -DVIDPANEL
 CXXFLAGS += -DVIDPANEL

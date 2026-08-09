@@ -6436,6 +6436,22 @@ bootvid_entry:
             }
 #endif
             pad = joypad_read();  /* no per-frame SD poll (see menu note) */
+#ifdef GDPAD
+            /* REMOTE CONTROL FOR TESTING (user, 2026-08-09: "you can control -
+             * GameDrive has facilities for that").  gd_input reads INPUT.BIN
+             * off the SD as a PAD_* mask; the host writes it with
+             * `jaggd -wf INPUT.BIN`, which uses the control endpoint and does
+             * NOT reset the running game.  It was pulled from play builds for
+             * good reason - an SD open+read+close EVERY frame, plus two failed
+             * directory searches when the file is absent - so this is a TEST
+             * flag and it polls every 4th frame, not every frame.
+             * ☠️ Never -wf while a build is streaming video or music from the
+             * same cart: the write races its gd_freads and locks the console.
+             * FASTBOOT builds stream neither. */
+            { static uint32_t gdp, gdc;
+              if ((gdc++ & 3u) == 0) gdp = gd_input_poll();
+              pad |= gdp; }
+#endif
 #ifdef TIMESTEP
             { static uint32_t ts_last;
               uint32_t f = frame_count;      /* 60 Hz, incremented by the ISR */
@@ -7577,6 +7593,55 @@ bootvid_entry:
               for (xx = 0; xx < br; xx++) cfb[16*RENDER_W+xx] = 255;
               for (xx = 0; xx < bc; xx++) cfb[20*RENDER_W+xx] = 255;
               lc[0] = 0; lc[1] = 0; }     /* per-FRAME counts, not cumulative */
+#endif
+#ifdef TRAVDIAG
+            /* WHAT DOES THE LEDGE IN FRONT OF LARA ALLOW?
+             * The opening canyon asks for a vault ~100 times and a
+             * jump-grab-pull-up ~48 times (step census off the level data), so
+             * "traversal is broken" has several possible links.  This probes
+             * the same spot the vault check probes and prints the verdict, so
+             * one screencast says WHICH rule is refusing rather than leaving
+             * it to be guessed:
+             *   R    = rise in front, in world units (256 = one click)
+             *   V    = verdict: 0 nothing/flat, 1 walk-up, 2 VAULT,
+             *          3 needs jump+grab, 4 too tall (wall), 9 no floor found
+             *   G    = grab state: hands would reach a ledge this frame
+             *   S    = Lara's state: 1 vaulting, 2 airborne, 3 hanging
+             * Thresholds shown so the numbers can be read against them:
+             * step 256, vault 768, hang reach 720. */
+            { uint8_t *dfb3 = (uint8_t *)video_backbuffer();
+              char tds[40]; int tdp = 0, k6;
+              int px6 = g_lax + (int)(((int32_t)SIN(g_layaw)*(WALK_SPEED*2))>>16);
+              int pz6 = g_laz + (int)(((int32_t)COS(g_layaw)*(WALK_SPEED*2))>>16);
+              int lf6 = 0, rise6 = 0, ok6, verdict;
+              uint32_t vals[4];
+              g_flr_grab = 1;
+              ok6 = room_floor_mr(rsect, roomCount, px6, pz6, &lf6);
+              g_flr_grab = 0;
+              if (!ok6) verdict = 9;
+              else {
+                  rise6 = g_lafloor - lf6;
+                  if (rise6 <= 0)                    verdict = 0;
+                  else if (rise6 <= LARA_STEPUP)     verdict = 1;
+                  else if (rise6 <= LARA_CLIMB)      verdict = 2;
+                  else if (rise6 <= 2048)            verdict = 3;
+                  else                               verdict = 4;
+              }
+              vals[0] = (uint32_t)(rise6 < 0 ? -rise6 : rise6);
+              vals[1] = (uint32_t)verdict;
+              vals[2] = (uint32_t)(rise6 > 0 && rise6 <= LARA_GRABREACH + 64);
+              vals[3] = (uint32_t)(g_vault ? 1 : (g_lavy != 0 ? 2 :
+                                   (g_autograb ? 3 : 0)));
+              for (k6 = 0; k6 < 4 && tdp < 34; k6++) {
+                  uint32_t v = vals[k6]; char dd[8]; int nd = 0;
+                  tds[tdp++] = (char)("RVGS"[k6]);
+                  if (!v) dd[nd++] = '0';
+                  while (v && nd < 7) { dd[nd++] = (char)('0' + v % 10u); v /= 10u; }
+                  while (nd) tds[tdp++] = dd[--nd];
+                  tds[tdp++] = ' ';
+              }
+              tds[tdp] = 0;
+              menu_text(dfb3, RENDER_W, RENDER_H, tds, 4, 14, 1, 2, 255); }
 #endif
 #ifdef FPSBEACON
             /* content-independent frame clock: a 32x8 block toggling on every
