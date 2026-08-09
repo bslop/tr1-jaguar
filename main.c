@@ -815,7 +815,7 @@ static int g_fardist = 9000;   /* per-vert kernel far cull; OPTION+UP/DOWN */
 /* Streaming buffer for the PS1 loading art, shared by the pre-title screen
    and the in-game loading panel.  24 rows a chunk = ten whole 512-byte
    sectors; it was 48 rows, and halving it is what let DBGROOM fit again. */
-static uint8_t g_artbuf[7680] __attribute__((aligned(4)));
+static uint8_t g_artbuf[7680] __attribute__((aligned(8)));   /* 8: blit_bytes phrase mode */
 
 /* show_title_load: the PSX's pre-title loading screen.
  *
@@ -848,6 +848,7 @@ static void show_title_load(uint32_t fields)
     uint8_t *fb = (uint8_t *)video_backbuffer();
     uint32_t t0;
     int done = TL_X0;
+    (void)0;
 
     blit_copy(title_img, fb, 240);        /* Blitter, straight out of ROM -
                                              the title screen's own paint */
@@ -862,9 +863,8 @@ static void show_title_load(uint32_t fields)
         /* fill only the newly-uncovered columns - a few dozen bytes a step,
            into the buffer already on screen (no flip runs during the fill,
            exactly as the in-game load_prog bar works) */
-        for (y3 = TL_Y0; y3 < TL_Y1; y3++)
-            for (x3 = done; x3 < w; x3++)
-                fb[y3 * RENDER_W + x3] = TL_IDX;
+        if (w > done)
+            blit_fill_rect(fb, done, TL_Y0, w - done, TL_Y1 - TL_Y0, TL_IDX);
         done = w;
         if (el >= fields)
             break;
@@ -882,9 +882,8 @@ static void load_prog(int num, int den)
     inner0 = g_loadbx0 + 1;
     inner1 = g_loadbx1 - 1;
     w = ((inner1 - inner0) * num) / den;
-    for (y = g_loadby; y < g_loadby + g_loadbh; y++)
-        for (x = inner0; x < inner0 + w; x++)
-            g_loadfb[y*RENDER_W + x] = LOADBAR_IDX;
+    if (w > 0)
+        blit_fill_rect(g_loadfb, inner0, g_loadby, w, g_loadbh, LOADBAR_IDX);
 }
 
 #ifdef HOPDIAL
@@ -5721,8 +5720,17 @@ bootvid_entry:
                         int sy8 = ck*24 + py2;
                         int dy8 = sy8 * LH / 240;
                         const uint8_t *sr = artbuf + py2*320;
-                        for (px2 = 0; px2 < RENDER_W; px2++)
-                            lfb[dy8*RENDER_W+px2] = sr[px2];
+                        /* ☠️ THE 68000 WAS CARRYING THE PICTURE.  76,800 bytes
+                           a load, one byte per instruction - and with LH=120
+                           every second source row is immediately overwritten
+                           by the next, so half of it was wasted as well.
+                           Skip the doomed rows and let the Blitter move the
+                           rest; blit_bytes is the silicon-verified phrase
+                           mover and one row is exactly its 320-byte unit. */
+                        if (LH < 240 && (sy8 & 1)) continue;
+                        if (!blit_bytes(sr, lfb + dy8*RENDER_W, RENDER_W))
+                            for (px2 = 0; px2 < RENDER_W; px2++)
+                                lfb[dy8*RENDER_W+px2] = sr[px2];
                     }
                 }
                 gd_fclose((unsigned)lh2);
@@ -7562,39 +7570,32 @@ bootvid_entry:
                   for (bx = 32; bx < 64; bx++) bfb[by*RENDER_W + bx] = v; }
 #endif
 #if defined(BUSPROBE) || defined(STAGECHK)
-            /* PROBE BARS, drawn where DBGROOM's label is drawn - into the
-             * finished back buffer AFTER the collect, so Tom is idle and
-             * cannot paint over them.  My first attempt drew them at the end
-             * of the loop into a buffer still being rendered, with BLACK for
-             * a zero bit, so "value 0" and "never drawn" looked identical and
-             * I read a whole run as "no drift" that proved nothing.
-             * ☠️ CELL 0 IS ALWAYS ON: if the leading cell is dark the bar was
-             * not painted and the reading must be thrown away, not believed. */
-            { uint8_t *pb2 = (uint8_t *)video_backbuffer();
-              uint32_t v2[5]; int nb2 = 0, bq, by4, bx4, row;
-#ifdef BUSPROBE
-              v2[nb2++] = bp_n ? bp_p1 / bp_n : 0;   /* game logic        */
-              v2[nb2++] = bp_n ? bp_p2 / bp_n : 0;   /* collect+flip+clear */
-              v2[nb2++] = bp_n ? bp_p3 / bp_n : 0;   /* stage + dispatch   */
-              v2[nb2++] = bp_n ? bp_p4 / bp_n : 0;   /* HUD + tail         */
-              /* FREE-RUNNING FRAME COUNT.  fps_measure.py locates its beacon
-                 as the highest-variance pixel cluster, and the flickering
-                 faces out-vary the beacon - it reported 0.93 and 0.48 fps for
-                 a game running near 7.  A counter decoded at two known
-                 capture times cannot be fooled that way. */
-              v2[nb2++] = bp_frames & 0xFFFFu;
-#endif
-#ifdef STAGECHK
-              v2[nb2++] = g_stagechg;                    /* staging drifts   */
-#endif
-              for (row = 0; row < nb2; row++)
-                for (bq = 0; bq < 17; bq++) {
-                    uint8_t v = (bq == 0) ? 255            /* calibration */
-                              : (uint8_t)(((v2[row] >> (16-bq)) & 1) ? 255 : 254);
-                    for (by4 = 2 + row*8; by4 < 8 + row*8; by4++)
-                        for (bx4 = 0; bx4 < 3; bx4++)
-                            pb2[by4*RENDER_W + 240 + bq*4 + bx4] = v;
-                } }
+            /* READ THE NUMBERS, DO NOT DECODE THEM.
+             * Three bar-decoders failed today - black-for-zero bars that could
+             * not be told from "never painted", a sampler that read the
+             * capture's pillarbox, and a cell decoder that reported 711 fps.
+             * menu_text already renders "R0" legibly in every capture, so the
+             * counters go through the SAME renderer and I read them off the
+             * frame.  Nothing to misdecode.
+             * ☠️ keep it left of x~240: menu_text past that does not display. */
+            { uint8_t *tfb2 = (uint8_t *)video_backbuffer();
+              char ts[40]; int tp = 0, ti;
+              uint32_t tv[5];
+              tv[0] = bp_frames;                          /* frames since boot */
+              tv[1] = bp_n ? (bp_p1 / bp_n) * 317u / 10000u : 0;   /* ms */
+              tv[2] = bp_n ? (bp_p2 / bp_n) * 317u / 10000u : 0;
+              tv[3] = bp_n ? (bp_p3 / bp_n) * 317u / 10000u : 0;
+              tv[4] = bp_n ? (bp_p4 / bp_n) * 317u / 10000u : 0;
+              for (ti = 0; ti < 5 && tp < 34; ti++) {
+                  uint32_t v = tv[ti]; char d[8]; int nd = 0;
+                  ts[tp++] = (char)("FABCD"[ti]);
+                  if (!v) d[nd++] = '0';
+                  while (v && nd < 7) { d[nd++] = (char)('0' + v % 10u); v /= 10u; }
+                  while (nd) ts[tp++] = d[--nd];
+                  ts[tp++] = ' ';
+              }
+              ts[tp] = 0;
+              menu_text(tfb2, RENDER_W, RENDER_H, ts, 4, 14, 1, 2, 255); }
 #endif
 #ifdef DBGROOM
             /* ROOM AUDIT (2026-08-03): draw Lara's LOCAL room index top-left so

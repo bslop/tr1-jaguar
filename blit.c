@@ -91,6 +91,38 @@ void blit_band(void *fb, int y0, int y1, uint32_t c)
     B_CMD    = BLIT_UPDA1 | BLIT_LFU_REP;
 }
 
+/* blit_fill_rect: solid rectangle, x0..x0+w-1 by y0..y0+h-1.
+ *
+ * blit_band fills WHOLE rows, so anything narrower than the screen was being
+ * painted with 68000 byte stores - both loading bars were written that way
+ * (user, 2026-08-09: "what did I say about the 68000?").  Same A1 setup as
+ * blit_band with the x origin and the inner count bounded, so it inherits a
+ * path already proven on silicon rather than inventing a new one.
+ */
+void blit_fill_rect(void *fb, int x0, int y0, int w, int h, uint32_t c)
+{
+#ifdef FB8
+    uint8_t  idx = (uint8_t)c;
+    uint32_t cc  = idx | (idx << 8) | (idx << 16) | (idx << 24);
+    uint32_t pixflag = BLIT_PIX8;
+#else
+    uint16_t c16 = (uint16_t)c;
+    uint32_t cc  = ((uint32_t)c16 << 16) | c16;
+    uint32_t pixflag = BLIT_PIX16;
+#endif
+    if (w <= 0 || h <= 0)
+        return;
+    blit_wait();
+    A1_BASE  = (uint32_t)fb;
+    A1_FLAGS = pixflag | BLIT_WID320 | BLIT_XPIX;
+    A1_PIXEL = ((uint32_t)y0 << 16) | (uint32_t)x0;
+    A1_STEP  = (1u << 16) | ((uint32_t)(-w) & 0xFFFFu);
+    B_SRCD   = cc;
+    B_SRCD1  = cc;
+    B_COUNT  = ((uint32_t)h << 16) | (uint32_t)w;
+    B_CMD    = BLIT_UPDA1 | BLIT_LFU_REP;
+}
+
 /* blit_copy: full-width Blitter image copy, src -> dst, `h` rows.
  * Replaces the 68k byte loop that repainted the title art every frame
  * (76800 x `moveb (a0)+,(a1)+`; 21.9% of all awake 68k cycles in a boot
