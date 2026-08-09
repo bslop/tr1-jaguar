@@ -54,3 +54,6 @@ jsim_*.err
 # transient diagnostic screenshots
 probes/*.png
 probes/**/*.png
+
+# per-tag ROM sets from tools/gbuild.sh (one .cof per A10 pad)
+build_*/

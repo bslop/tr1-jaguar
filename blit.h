@@ -17,6 +17,12 @@ void blit_rect(const void *src, void *dst, int x0, int y0, int w, int h);
    0 if the Blitter never reported idle */
 int  blit_copy_phrase(const void *src, void *dst, int h);
 
+/* linear block move (phrase mode).  Returns the number of bytes the Blitter
+   actually moved - 0 if it declined (misalignment) or never idled, so the
+   caller must always keep a fallback for the remainder.  Safe for overlapping
+   moves DOWNWARD only (src above dst). */
+unsigned blit_bytes(const void *src, void *dst, unsigned n);
+
 #ifdef HALFRES
 /* Line-double an 8bpp RENDER_W x srch source into a RENDER_W x 2*srch dest. */
 void blit_double(const void *src, void *dst, int srch);

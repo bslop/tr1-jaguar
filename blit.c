@@ -144,6 +144,39 @@ int blit_copy_phrase(const void *src, void *dst, int h)
     return 0;
 }
 
+/* blit_bytes: LINEAR block move, src -> dst, in PHRASE mode.
+ *
+ * WHY (user, 2026-08-08): "the 68000 is the enemy - boot code runs on it,
+ * everything else is Tom and Jerry."  The video player was still carrying two
+ * bulk moves on the 68k every frame - the stream-buffer compaction and the
+ * audio chunk copy into the DSP ring - and the 68k is the slowest thing on the
+ * machine, an order of magnitude worse than the hardware that exists to do
+ * exactly this.
+ *
+ * It reuses the PROVEN 320-wide geometry rather than inventing a new Blitter
+ * setup: a contiguous block is just N rows of 320 bytes, and the row step in
+ * blit_copy_phrase already advances exactly one row, so consecutive rows are
+ * contiguous.  A mis-set Blitter runs away over DRAM (the first phrase-mode
+ * build came back black and looked identical to an A10 miss), so this
+ * DECLINES rather than guesses: it returns 0 unless both ends are 8-aligned,
+ * and the caller keeps its own tail path for the last <320 bytes.
+ *
+ * Overlap: the Blitter copies in INCREASING address order, so a move DOWN
+ * (src above dst) is safe - which is the only direction compaction uses.
+ */
+unsigned blit_bytes(const void *src, void *dst, unsigned n)
+{
+    unsigned rows = n / RENDER_W;
+    if (rows == 0)
+        return 0;
+    if ((((uint32_t)src | (uint32_t)dst) & 7u) != 0)
+        return 0;                       /* phrase mode needs 8-alignment */
+    if (!blit_copy_phrase(src, dst, (int)rows))
+        return 0;                       /* Blitter never idled - caller falls
+                                           back; never silently half-move */
+    return rows * RENDER_W;
+}
+
 /* blit_rect: sub-rectangle Blitter copy between two RENDER_W-wide 8bpp
  * images (same layout both sides). The title's dirty-rect repaint uses
  * this to restore the art behind a moving ring item without erasing the

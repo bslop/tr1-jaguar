@@ -607,6 +607,52 @@ static int g_jv_d240;                 /* load-under-disp240: 1 ok, 2 corrupt */
 #define vp_tom     VPC[3]
 #define vp_copy    VPC[4]
 #define vp_tomfail VPC[5]
+/* the untimed remainder is where the game's chug hid, so EVERY phase of the
+   frame is bracketed now - read/tom/copy/pace/audio/paint. Anything still
+   left over is parse + flip + loop overhead. $880..$8A3 (scratch runs to
+   $8FF; exc_catch owns $820..$844). */
+#define vp_pace    VPC[6]
+#define vp_audio   VPC[7]
+#define vp_pnt     VPC[8]   /* the instrument's own cost */
+/* why the clip loop ended: 1 = played every frame, 2 = corrupt record header,
+   3 = gd_fread failed, 4 = stream exhausted early, 5 = pad skip.  Colour
+   timing off a capture cannot tell "played fast" from "ended early", and
+   guessing between them wasted a roll. */
+#define vp_exit    VPC[9]
+#define VP_EXIT(c) do { vp_exit = (uint32_t)(c); } while (0)
+#else
+#define VP_EXIT(c) do { } while (0)
+#endif
+
+#ifdef BOOTVID
+/* THE 68000 DOES NOT CARRY BYTES (user, 2026-08-08: "the 68000 is the enemy -
+ * boot code runs on it, everything else should use Tom/Jerry exclusively").
+ *
+ * Compacting the video stream buffer is a bulk move, so the Blitter does it.
+ * The move must start from an 8-aligned source for phrase mode, so the phase
+ * (pos & 7) is carried across rather than squeezed out - records stay
+ * 4-aligned relative to vb either way, which is what the audio long-reads and
+ * the Tom kick need.  The Blitter moves whole 320-byte rows; the <320 tail is
+ * moved as LONGS.  If the Blitter declines (misaligned) or never idles, the
+ * long path covers the whole move - slower, but never wrong and never the old
+ * byte-at-a-time loop that cost 478ms a frame.
+ *
+ * Returns the new `have`; *pos becomes the carried phase (0 or 4).
+ */
+static int stream_compact(uint8_t *vb, int have, int *pos)
+{
+    int p = *pos, keep = p & 7;
+    const uint8_t *s = vb + (p - keep);
+    int mv = have - p + keep;
+    int moved = (int)blit_bytes(s, vb, (unsigned)mv);
+    { int nl = (mv - moved) >> 2, i, k;
+      uint32_t *d4 = (uint32_t *)(vb + moved);
+      const uint32_t *s4 = (const uint32_t *)(s + moved);
+      for (i = 0; i < nl; i++) d4[i] = s4[i];
+      for (k = moved + (nl << 2); k < mv; k++) vb[k] = s[k]; }
+    *pos = keep;
+    return mv;
+}
 #endif
 static int g_jv_ok;                   /* jvdec kernel VERIFIED in GPU SRAM:
                                          gate the Tom kick on it, or a bad
@@ -3710,7 +3756,7 @@ bootvid_entry:
                 remain -= 4096;
                 have = 0; pos = 0;
 #ifdef VIDPANEL
-                { int z9; for (z9 = 0; z9 < 6; z9++) VPC[z9] = 0; }
+                { int z9; for (z9 = 0; z9 < 9; z9++) VPC[z9] = 0; }
 #endif
                 t0 = frame_count;
                 { int dprev = 0;                  /* last display tick: min-
@@ -3743,27 +3789,26 @@ bootvid_entry:
                             AL = ((uint32_t)vb[pos+4] << 24) | ((uint32_t)vb[pos+5] << 16)
                                | ((uint32_t)vb[pos+6] << 8) | vb[pos+7];
                             if (L == 0 || L > 24576u || AL > 4096u || (AL & 3)) {
-                                fi = vnf; break;
+                                VP_EXIT(2); fi = vnf; break;
                             }
                             need = 8 + (int)AL + (int)((L + 3u) & ~3u);
                             if (have - pos >= need) break;
                         }
-                        if (pos) { int mv = have - pos, k2;
-                            for (k2 = 0; k2 < mv; k2++) vb[k2] = vb[pos + k2];
-                            have = mv; pos = 0; }
+                        if (pos) { int mv2 = stream_compact(vb, have, &pos);
+                            have = mv2; }
                         { int want = (31488 - have) & ~511;   /* sector-sized */
                           if (want > 24576) want = 24576;     /* >24KB cliffs */
                           if (want > remain) want = remain;
-                          if (want <= 0) { fi = vnf; break; }
+                          if (want <= 0) { VP_EXIT(4); fi = vnf; break; }
 #ifdef VIDPANEL
                           { uint32_t ta = vp_tick();
                             int rr9 = gd_fread((unsigned)vh, vb + have,
                                                (unsigned)want, GD_FREAD_CPU);
                             vp_read += vp_tick() - ta;
-                            if (rr9 != 0) { fi = vnf; break; } }
+                            if (rr9 != 0) { VP_EXIT(3); fi = vnf; break; } }
 #else
                           if (gd_fread((unsigned)vh, vb + have, (unsigned)want,
-                                       GD_FREAD_CPU) != 0) { fi = vnf; break; }
+                                       GD_FREAD_CPU) != 0) { VP_EXIT(3); fi = vnf; break; }
 #endif
                           have += want; remain -= want; }
                     }
@@ -3777,6 +3822,9 @@ bootvid_entry:
                        Deep buffers ride out any refill. First batch goes
                        early (~2 chunks) so the whoosh isn't late. */
                     if (AL) {
+#ifdef VIDPANEL
+                        uint32_t tau = vp_tick();
+#endif
                         if (g_sfx_ok) {
                             /* close the slot when the next chunk won't
                                fit; a saturated ring drops its OLDEST
@@ -3787,11 +3835,18 @@ bootvid_entry:
                                 alen[wslot] = acc; pend++;
                                 wslot = (wslot + 1) % 6; acc = 0;
                             }
+                            /* the audio chunk is a bulk move too - hand it to
+                               the Blitter whenever the phase allows, and only
+                               walk the remainder on the 68k */
                             { int8_t *ab = aring + wslot*4096 + acc;
-                              const uint32_t *as2 = (const uint32_t *)(vb + pos);
-                              uint32_t *ad = (uint32_t *)ab;
+                              const uint8_t *asrc = vb + pos;
+                              uint32_t mvd = blit_bytes(asrc, ab, AL);
+                              const uint32_t *as2 =
+                                  (const uint32_t *)(asrc + mvd);
+                              uint32_t *ad = (uint32_t *)(ab + mvd);
                               uint32_t k2;
-                              for (k2 = 0; k2 < AL >> 2; k2++) ad[k2] = as2[k2];
+                              for (k2 = 0; k2 < (AL - mvd) >> 2; k2++)
+                                  ad[k2] = as2[k2];
                               acc += (int)AL; }
                             /* NON-BLOCKING service: prime with two batches
                                (arm + queue together - the early-start buzz
@@ -3842,9 +3897,16 @@ bootvid_entry:
                               } }
                         }
                         pos += (int)AL;
+#ifdef VIDPANEL
+                        vp_audio += vp_tick() - tau;
+#endif
                     }
                     { uint8_t *tk = vb + pos;
-                      uint8_t *bb = (uint8_t *)video_backbuffer();
+                      /* ☠️ take the back buffer AFTER the pending flip has
+                         retired (vidrom order). Reading it while a flip is
+                         still queued names the buffer that is about to go on
+                         screen. */
+                      uint8_t *bb = 0;
                       int gok = 0, kicked = 0;
                       pos += (int)((L + 3u) & ~3u);
                       /* BACK BUFFER ONLY (user: 'a lot of flashes' - the
@@ -3866,8 +3928,16 @@ bootvid_entry:
                          legacy two-pass path keeps the serial order. */
                       {
                           int tomok = 0;
+#ifdef VIDPANEL
+                          { uint32_t ta = vp_tick();
+                            while (pending_fb)
+                                ;
+                            vp_pace += vp_tick() - ta; }
+#else
                           while (pending_fb)
                               ;
+#endif
+                          bb = (uint8_t *)video_backbuffer();
                           /* TOM DECODE INTO THE SHADOW (2026-08-07, user:
                              "video runs off Tom"): with the DSP-quiesced
                              load fixed (context probe J11V0), Tom applies
@@ -3987,40 +4057,51 @@ bootvid_entry:
                              sustains ~60KB/s - above every delta clip's
                              rate. The 24KB bulk read remains ONLY as the
                              critical-low rescue (start-up, seeks). */
+                          /* ☠️☠️ THE GAME'S CHUG WAS HERE (2026-08-08).
+                             The old shape ran its refill whenever
+                             have-pos < 26624 - which in steady state is
+                             EVERY FRAME - and each pass first compacted the
+                             whole ~26KB remainder BYTE BY BYTE. That is a
+                             26214-iteration indexed byte loop on a 68000
+                             sharing the bus with Tom, Jerry and a 240-line
+                             OP: hundreds of ms a frame, and it sat outside
+                             every instrumented phase, which is exactly the
+                             478ms of "other" the panel reported (1.94 fps in
+                             the game vs 14.90 in vidrom, same decoder).
+                             This is vidrom's v9 shape verbatim: refill only
+                             when the buffer is actually running low (so the
+                             compaction moves <=8KB, not 26KB), move LONGS,
+                             and TIME the read. */
                           if (remain > 0 && have - pos < 8192) {
-                              /* CRITICAL: not even one frame ahead - bulk */
-                              int want;
-                              if (pos) { int mv = have - pos, k3;
-                                  for (k3 = 0; k3 < mv; k3++)
-                                      vb[k3] = vb[pos + k3];
-                                  have = mv; pos = 0; }
-                              want = (31488 - have) & ~511;
-                              if (want > 24576) want = 24576;
+                              int want = (have - pos < 4096) ? 24576 : 4096;
+                              if (pos) have = stream_compact(vb, have, &pos);
+                              if (want > (int)((31488 - have) & ~511))
+                                  want = (31488 - have) & ~511;
                               if (want > remain) want = remain;
-                              if (want > 0 &&
-                                  gd_fread((unsigned)vh, vb + have,
-                                           (unsigned)want,
-                                           GD_FREAD_CPU) == 0) {
-                                  have += want; remain -= want;
-                              } else remain = 0;
-                          } else if (remain > 0 && have - pos < 26624) {
-                              /* steady state: one 4KB sector per frame */
-                              int want = 4096;
-                              if (pos) { int mv = have - pos, k3;
-                                  for (k3 = 0; k3 < mv; k3++)
-                                      vb[k3] = vb[pos + k3];
-                                  have = mv; pos = 0; }
-                              if (want > remain) want = remain;
-                              if (31488 - have < want) want = 31488 - have;
-                              if (want > 0 &&
-                                  gd_fread((unsigned)vh, vb + have,
-                                           (unsigned)want,
-                                           GD_FREAD_CPU) == 0) {
-                                  have += want; remain -= want;
-                              } else remain = 0;
+                              if (want > 0) {
+#ifdef VIDPANEL
+                                  uint32_t ta = vp_tick();
+                                  int rr8 = gd_fread((unsigned)vh, vb + have,
+                                                     (unsigned)want,
+                                                     GD_FREAD_CPU);
+                                  vp_read += vp_tick() - ta;
+#else
+                                  int rr8 = gd_fread((unsigned)vh, vb + have,
+                                                     (unsigned)want,
+                                                     GD_FREAD_CPU);
+#endif
+                                  if (rr8 == 0) { have += want; remain -= want; }
+                                  else remain = 0;
+                              }
                           }
 #endif
-                          if (kicked) gok = gpu_jvdec_wait();
+                          /* the SECOND wait per frame is gone (2026-08-08):
+                             the kick is synchronous, so gpu_jvdec_wait()
+                             already returned DONE above. It should return
+                             at once, but if it ever missed the mailbox the
+                             bound is 240000 polls - seconds of stall for a
+                             value we already hold. */
+                          (void)kicked;
 #ifdef VIDCAD
                           /* cadence ground truth: 16x8 parity block the
                              capture rig reads - immune to clip content */
@@ -4038,29 +4119,21 @@ bootvid_entry:
                          calibration word and produced two wrong diagnoses
                          when read off a capture. scratchpad/readout.py
                          decodes this identically to vidrom's. */
-                      { uint8_t lamps[8]; uint32_t rows[12]; int q;
-                        extern volatile uint32_t frame_count;
+                      /* ☠️☠️ THE INSTRUMENT MUST NOT BE THE EXPERIMENT.
+                         Painting this panel every frame cost 329ms a frame on
+                         silicon - measured, and larger than every real phase
+                         of the player put together (read 16, tom 20, copy 7).
+                         Same paint costs 62ms in vidrom: identical code, 5.3x,
+                         because the game keeps the bus hot and the 68000 is
+                         starved in proportion.  So the frame loop now only
+                         BUMPS COUNTERS, and the panel is painted ONCE on the
+                         hold screen after the clip - where its cost is
+                         nobody's frame time.  (User: the 68000 is for boot
+                         code, nothing else - diagnostics included.) */
+                      { extern volatile uint32_t frame_count;
                         if (!gok) vp_tomfail++;   /* gok = tomok, hoisted */
                         vp_frames++;
-                        vp_fields = frame_count - t0;
-                        lamps[0] = (uint8_t)(vp_frames & 1);
-                        lamps[1] = (uint8_t)(gpu_ok != 0);
-                        lamps[2] = (uint8_t)(g_jv_ok != 0);
-                        lamps[3] = (uint8_t)(g_jv_ok != 0);
-                        { extern uint32_t gpu_jvdec_hello(void);
-                          lamps[4] = (uint8_t)(gpu_jvdec_hello() == 0x0A3D0001u); }
-                        lamps[5] = (uint8_t)(gok != 0);
-                        { extern uint32_t gpu_pc_read(void); uint32_t pc9 = gpu_pc_read();
-                          lamps[6] = (uint8_t)(pc9 >= 0xF03000u && pc9 < 0xF04000u);
-                          rows[8] = pc9; }
-                        lamps[7] = 1;
-                        for (q = 0; q < 12; q++) rows[q] = 0;
-                        rows[1] = vp_frames;  rows[2] = vp_fields;
-                        rows[3] = vp_read;    rows[4] = vp_tom;
-                        rows[5] = vp_copy;
-                        rows[9] = vp_tomfail; rows[10] = 6;
-                        vp_clut();
-                        vp_paint((uint8_t *)bb, lamps, rows); }
+                        vp_fields = frame_count - t0; }
 #endif
 #ifdef VIDDIAG
                       /* DECODE-STATUS MARKER (2026-08-07 ghost hunt): 8x8 at
@@ -4150,10 +4223,22 @@ bootvid_entry:
                       if (tgt < dprev + 60 / vfps) tgt = dprev + 60 / vfps;
                       if (tgt < nowr + 1)          tgt = nowr + 1;
                       video_pend_at = t0 + (uint32_t)tgt;
-                      dprev = tgt; }
-                    video_flip();
+                      dprev = tgt;
+                      video_flip();
+                      /* ☠️ AND WAIT FOR THE FIELD OURSELVES.  Handing the
+                         schedule to the ISR via video_pend_at is not a
+                         guarantee: not every compiled ISR path checks it (one
+                         flips unconditionally), so the clip displayed as fast
+                         as it decoded - measured 152 frames in 469 fields =
+                         19.45 fps for a 15fps clip, a quarter too fast, with
+                         the audio pushed along at the same rate.  vidrom
+                         always waited on frame_count itself and always ran at
+                         exactly 15.00; do that here too.  The deferred flip
+                         still smooths the cadence, this only floors it. */
+                      while ((int)(frame_count - t0) < tgt)
+                          ; }
                     { uint32_t vp2 = joypad_read();
-                      if (vp2 & ~vpp & (PAD_A | PAD_B | PAD_C)) break;
+                      if (vp2 & ~vpp & (PAD_A | PAD_B | PAD_C)) { VP_EXIT(5); break; }
                       vpp = vp2; }
                 }
                 }
@@ -4187,7 +4272,46 @@ bootvid_entry:
                         }
                         rslot = (rslot + 1) % 6; pend--;
                     }
-                } } } }
+                }
+#ifdef VIDPANEL
+                /* ONE paint per clip, on a hold screen the capture can read at
+                   leisure.  Whole-clip totals, so no single frame's noise can
+                   masquerade as the average, and the exit code says whether
+                   the clip PLAYED OUT or died on a bad record. */
+                { uint8_t lamps[8]; uint32_t rows[12]; int q;
+                  extern volatile uint32_t frame_count;
+                  uint8_t *hb2 = (uint8_t *)video_backbuffer();
+                  uint32_t h0;
+                  for (q = 0; q < 12; q++) rows[q] = 0;
+                  lamps[0] = (uint8_t)(vc & 1);
+                  lamps[1] = (uint8_t)(gpu_ok != 0);
+                  lamps[2] = (uint8_t)(g_jv_ok != 0);
+                  lamps[3] = (uint8_t)(vp_tomfail == 0);
+                  { extern uint32_t gpu_jvdec_hello(void);
+                    lamps[4] = (uint8_t)(gpu_jvdec_hello() == 0x0A3D0001u); }
+                  lamps[5] = (uint8_t)(vp_frames != 0);
+                  { extern uint32_t gpu_pc_read(void); uint32_t pc9 = gpu_pc_read();
+                    lamps[6] = (uint8_t)(pc9 >= 0xF03000u && pc9 < 0xF04000u);
+                    rows[8] = pc9; }
+                  lamps[7] = 1;
+                  rows[1] = vp_frames;  rows[2] = vp_fields;
+                  rows[3] = vp_read;    rows[4] = vp_tom;
+                  rows[5] = vp_copy;
+                  rows[6] = vp_pace;    rows[7] = vp_audio;
+                  rows[9] = vp_tomfail;
+                  rows[10] = 0x80000000u | (uint32_t)(vnf & 0xFFFF)
+                                         | ((vp_exit & 0xFu) << 16);
+                  rows[11] = (uint32_t)fi;
+                  vp_clut();
+                  vp_paint(hb2, lamps, rows);
+                  video_pend_at = 0;          /* flip NOW, not on a schedule */
+                  video_flip();
+                  h0 = frame_count;
+                  while (frame_count - h0 < 180u)   /* 3s: two capture stills */
+                      ;
+                  vp_exit = 0; }
+#endif
+                } } }
                 gd_fclose((unsigned)vh);
             }
             video_pend_at = 0;     /* every later flip is immediate again */

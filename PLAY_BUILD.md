@@ -29,6 +29,33 @@ Without `MOVESET=1` this reproduces `probes/PLAY_MOVESET2.cof` exactly
 (md5 `b56b103aef657e29e1cbe02aa880b9f0`, 1482088 bytes) when `MOVESET=1` is
 added — that identity is what pins the list down.
 
+
+## ★★★★★ 2026-08-08 — THE DEMO ROM WITH THE VIDEO FIX: `demo11_p272`
+
+```
+tools/gbuild.sh demo11 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1
+tools/vsweep_game.sh build_demo11 demo11 <outdir> 40      # rolls pads until one lights
+```
+`tools/gbuild.sh` carries the recipe (ship list + BOOTVID + JVFASTKICK +
+INLINEMUL/OFFHOIST/VPACK, AUTOSTART on).  **Lit pad: 272.**  ☠️ pad 816 (and
+544/408 with some flag sets) OVERFLOWS the 16KB stack-headroom guard, because
+PADTEXT pads TEXT and BSS sits above it - gbuild.sh skips those and says so, so
+the A10 lottery is only 4-5 pads wide for the demo set.
+
+### what changed in the video block (all silicon-verified)
+1. The stream-buffer refill compacted ~26KB **byte by byte every frame** on the
+   68000 - 478ms/frame of work outside every instrumented phase, and the whole
+   reason the boot clips chugged at 1.94 fps.  Now vidrom's shape: refill under
+   8192, and the move goes through the **Blitter** (`blit_bytes()`).
+2. The audio chunk copy into the DSP ring goes through the Blitter too.
+3. `video_pend_at` alone does not pace anything - not every compiled ISR path
+   honours it, so frames went out as fast as they decoded (19.45 fps for a
+   15fps clip).  The player now waits on `frame_count` itself.
+4. The read-out panel is painted ONCE per clip on a hold screen: painted every
+   frame it cost **329ms/frame** and dominated its own measurement.
+
+Result: EIDOS 152/152 frames at 14.23 fps, CORE 193/193 at 14.88, tomfail 0.
+
 ## ★★★★★ THE CURRENT RECIPE (2026-08-02) — SOUND ON, USE THIS ONE
 The list above is the July build and is now **superseded**. This is what the
 user has actually been playing:
