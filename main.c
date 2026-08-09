@@ -1888,6 +1888,21 @@ static uint8_t ent_dart_blob[ENT_DART_MAXDRAW][384] __attribute__((aligned(8)));
    ENEMIES block, so anything else that can hurt her - the dart trap - could
    not even compile against it.  (And ENEMIES itself is not plumbed in the
    Makefile at all, so that block has never been built; see the note there.) */
+#ifdef STAGECHK
+static uint32_t g_stageck, g_stagecam, g_stagechg;
+#endif
+#ifdef BUSPROBE
+/* WHO OWNS THE BUS, AND FOR HOW LONG?
+ * The flicker scales with 68k bus pressure during Tom's render, so before
+ * moving any work we need the split: how many halflines the 68000 spends
+ * ACTIVE in the overlap window (loop top -> collect) versus how many it
+ * spends ASLEEP in the collect waiting for Tom.  Sleep is free - STOP
+ * releases the bus entirely.  Active time is what costs Tom his reads.
+ *   bar 0 = mean active halflines per frame (the exposure window)
+ *   bar 1 = mean asleep halflines per frame (0 => the 68k is the bottleneck)
+ * A halfline is ~31.7us; a whole 60Hz field is 525. */
+static uint32_t bp_t0, bp_active, bp_sleep, bp_safe, bp_blit, bp_n;
+#endif
 static int  g_health = 1000;             /* TR1 full health              */
 
 #if defined(ENEMIES)
@@ -7385,6 +7400,9 @@ bootvid_entry:
             pfA = frame_count;
 #endif
             HLP(1);
+#ifdef BUSPROBE
+            bp_active += vp_tick() - bp_t0;      /* loop top -> here: ACTIVE */
+#endif
 #if defined(PIPELINE) && PIPESTAGE >= 1
             /* PIPELINE collect point: the logic above ran while Tom finished
                the previous frame. Present it before any blitter (clear) or
@@ -7407,9 +7425,24 @@ bootvid_entry:
                     if (_w < 60000u && _w > pp_wmax) pp_wmax = _w;
                     if (_s < 60000u && _s > pp_smax) pp_smax = _s; } }
 #else
+#ifdef BUSPROBE
+                { uint32_t _s0 = vp_tick();
+                  gpu_sync(); g_tominflight = 0;
+                  bp_sleep += vp_tick() - _s0; }
+#else
                 gpu_sync(); g_tominflight = 0;
 #endif
+#endif
             }
+#ifdef BUSPROBE
+            bp_n++;
+            /* ☠️ THROW THE FIRST WINDOWS AWAY.  bp_t0 starts at zero, so the
+               first sample is "time since boot" - seconds - and it dominated
+               the running mean forever (the first reading came back as 1.8s a
+               frame, which is nonsense on its face). */
+            if (bp_n == 8) { bp_active = bp_sleep = bp_safe = bp_blit = 0; bp_n = 1; }
+            bp_t0 = vp_tick();                   /* next window starts here */
+#endif
 #ifdef JLOOPS
             /* JERRY HEARTBEAT, ON-SCREEN (2026-07-25).  Console readout is not
                available: a NOGD build black-screened the board — SKUNK_CONSOLE's
@@ -7477,6 +7510,35 @@ bootvid_entry:
               for (by = 24; by < 32; by++)
                   for (bx = 32; bx < 64; bx++) bfb[by*RENDER_W + bx] = v; }
 #endif
+#if defined(BUSPROBE) || defined(STAGECHK)
+            /* PROBE BARS, drawn where DBGROOM's label is drawn - into the
+             * finished back buffer AFTER the collect, so Tom is idle and
+             * cannot paint over them.  My first attempt drew them at the end
+             * of the loop into a buffer still being rendered, with BLACK for
+             * a zero bit, so "value 0" and "never drawn" looked identical and
+             * I read a whole run as "no drift" that proved nothing.
+             * ☠️ CELL 0 IS ALWAYS ON: if the leading cell is dark the bar was
+             * not painted and the reading must be thrown away, not believed. */
+            { uint8_t *pb2 = (uint8_t *)video_backbuffer();
+              uint32_t v2[5]; int nb2 = 0, bq, by4, bx4, row;
+#ifdef BUSPROBE
+              v2[nb2++] = bp_n ? bp_active / bp_n : 0;   /* halflines ACTIVE */
+              v2[nb2++] = bp_n ? bp_sleep  / bp_n : 0;   /* halflines ASLEEP */
+              v2[nb2++] = bp_n ? bp_safe   / bp_n : 0;   /* stall: VC window  */
+              v2[nb2++] = bp_n ? bp_blit   / bp_n : 0;   /* stall: clear blit */
+#endif
+#ifdef STAGECHK
+              v2[nb2++] = g_stagechg;                    /* staging drifts   */
+#endif
+              for (row = 0; row < nb2; row++)
+                for (bq = 0; bq < 17; bq++) {
+                    uint8_t v = (bq == 0) ? 255            /* calibration */
+                              : (uint8_t)(((v2[row] >> (16-bq)) & 1) ? 255 : 254);
+                    for (by4 = 2 + row*8; by4 < 8 + row*8; by4++)
+                        for (bx4 = 0; bx4 < 3; bx4++)
+                            pb2[by4*RENDER_W + 240 + bq*4 + bx4] = v;
+                } }
+#endif
 #ifdef DBGROOM
             /* ROOM AUDIT (2026-08-03): draw Lara's LOCAL room index top-left so
                every capture is labelled while walking the whole level looking
@@ -7543,9 +7605,21 @@ bootvid_entry:
                   PPADD(pp_safe, _tb - _ta);
                   PPADD(pp_blit, _tc - _tb); } } }
 #else
+#ifdef BUSPROBE
+            { uint32_t _q0 = vp_tick();
+              { extern void video_wait_safe_vc(void); video_wait_safe_vc(); }
+              bp_safe += vp_tick() - _q0; }
+#else
             { extern void video_wait_safe_vc(void); video_wait_safe_vc(); }
+#endif
 #ifndef NOCLEAR
+#ifdef BUSPROBE
+            { uint32_t _q1 = vp_tick();
+              blit_band(fb, 0, RENDER_H, CLEAR_IDX);
+              bp_blit += vp_tick() - _q1; }
+#else
             blit_band(fb, 0, RENDER_H, CLEAR_IDX);
+#endif
 #else /* NOCLEAR */
             /* NOCLEAR (2026-07-31): do not clear the framebuffer. The missing
                faces show BLACK only because we clear to CLEAR_IDX and the
@@ -8042,6 +8116,24 @@ bootvid_entry:
                        (painter order preserved: far batch first). Dropping
                        rooms instead made them BLINK at the cap boundary
                        (flashing "ceiling" floors) + black holes. */
+#ifdef STAGECHK
+                    /* IS THE 68000 STAGING THE SAME FRAME TWICE?
+                     * With the camera still and the world static, the display
+                     * list the 68k hands Tom - room pointers plus clip rects -
+                     * must be identical frame to frame.  If it is, the faces
+                     * are being lost INSIDE the render (bus contention - the
+                     * documented "Tom mis-reads DRAM shortly after branches")
+                     * and no amount of double-buffering on this side helps.
+                     * If it drifts, the race is 68k-side and findable here.
+                     * One XOR pass over ~40 longs: it does not meaningfully
+                     * perturb the timing it is measuring. */
+                    { uint32_t ck = displist[0], ci;
+                      uint32_t cam = camblk[0]^camblk[4]^camblk[5]^camblk[6];
+                      for (ci = 0; ci < displist[0]*4u; ci++)
+                          ck = (ck * 33u) ^ displist[1+ci];
+                      if (cam == g_stagecam && ck != g_stageck) g_stagechg++;
+                      g_stageck = ck; g_stagecam = cam; }
+#endif
                     { uint32_t total = displist[0], base = 0;
                       static uint32_t batch[1+8*4];
                       while (base < total) {
@@ -8178,6 +8270,18 @@ bootvid_entry:
               for (yy = 190; yy < 199; yy++)
                 for (xx = 0; xx < RENDER_W; xx++)
                   fb[yy*RENDER_W+xx] = (fbpix)((xx*240)/RENDER_W); }
+#endif
+#ifdef STAGECHK
+            /* 16-bit bar, top-right, white=1: how many frames restaged an
+               IDENTICAL camera.  Zero bar = the 68k is deterministic and the
+               loss is Tom-side. */
+            { uint8_t *sb = (uint8_t *)fb; int bq, by4, bx4;
+              for (bq = 0; bq < 16; bq++) {
+                  uint8_t v = (uint8_t)((g_stagechg >> (15-bq)) & 1 ? 255 : 254);
+                  for (by4 = 2; by4 < 8; by4++)
+                      for (bx4 = 0; bx4 < 3; bx4++)
+                          sb[by4*RENDER_W + 250 + bq*4 + bx4] = v;
+              } }
 #endif
 #ifdef BANDPROBE
             /* WHO OWNS THE BOTTOM LINES? (2026-08-08, user: "at the bottom

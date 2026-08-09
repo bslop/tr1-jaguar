@@ -1378,6 +1378,21 @@ CFLAGS   += -DDARTS
 CXXFLAGS += -DDARTS
 endif
 
+# STAGECHK=1: checksum the display list the 68k stages each frame and count
+# how often it changes while the CAMERA is unchanged.  Answers whether the
+# flickering faces are lost 68k-side or inside Tom's render.
+ifdef STAGECHK
+CFLAGS   += -DSTAGECHK
+CXXFLAGS += -DSTAGECHK
+endif
+
+# BUSPROBE=1: on-screen split of the 68000's frame - halflines ACTIVE during
+# Tom's render (the flicker exposure window) vs halflines ASLEEP in the collect.
+ifdef BUSPROBE
+CFLAGS   += -DBUSPROBE
+CXXFLAGS += -DBUSPROBE
+endif
+
 ifdef VIDPANEL
 CFLAGS   += -DVIDPANEL
 CXXFLAGS += -DVIDPANEL

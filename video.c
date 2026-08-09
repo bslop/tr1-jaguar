@@ -932,8 +932,14 @@ void video_wait_safe_vc(void)
     /* block starts in [0,48] too close AFTER the wrap, AND in [400,wrap]
        too close BEFORE it — a ~2ms Blitter fill started at VC 5 straddled
        the window (probe caught ISR exits at VC 80) */
+    /* ☠️ MASK THE COUNTER.  VC carries a flag above the half-line count, so a
+       RAW read is >= 2048 for a whole field and the window test below can
+       never be true - the loop then spins out the ENTIRE field.  Measured on
+       silicon 2026-08-09: 12-22ms a frame in here, 8-15% of the frame, for a
+       blit that takes 2-4ms.  vp_tick() in vidpanel.c always masked; this one
+       never did.  Masked, the wait is bounded by the window itself (~4ms). */
     for (;;) {
-        uint16_t v = VC;
+        uint16_t v = (uint16_t)(VC & 0x7FFu);
         if (v > 48 && v < 400)
             break;
     }
