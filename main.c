@@ -1912,6 +1912,11 @@ static uint32_t bp_t0, bp_active, bp_sleep, bp_safe, bp_blit, bp_n;
                                       Jerry pose + lara_finish, dispatch
      p4 = rooms done -> loop top    : HUD, overlays, tail */
 static uint32_t bp_m, bp_p1, bp_p2, bp_p3, bp_p4, bp_frames;
+/* p1 (the game logic, ~36% of the frame) split by what it does, to find out
+   whether the eleven per-frame passes over the 60-entity table are actually
+   where the time goes - before handing anything to Jerry across a protocol
+   that has produced hardware-visible corruption once already. */
+static uint32_t bp_s0, bp_sA, bp_sB, bp_sC, bp_sD;
 #endif
 static int  g_health = 1000;             /* TR1 full health              */
 
@@ -6329,7 +6334,7 @@ bootvid_entry:
             uint32_t pad;
             HLP(0);
 #ifdef BUSPROBE
-            { uint32_t _m = vp_tick(); bp_p4 += _m - bp_m; bp_m = _m; }
+            { uint32_t _m = vp_tick(); if (bp_m) bp_p4 += _m - bp_m; bp_m = _m; bp_s0 = _m; }
 #endif
 #ifdef PROFILE
             { uint32_t _fc = frame_count;
@@ -6550,6 +6555,9 @@ bootvid_entry:
                 gpu_sync(); g_tominflight = 0;
 #endif
             }
+#endif
+#ifdef BUSPROBE
+            { uint32_t _k = vp_tick(); if (bp_s0) bp_sA += _k - bp_s0; bp_s0 = _k; }
 #endif
 #ifdef MV_SIDE
               /* NOT a local.  As a local, `side` is live across the whole
@@ -6808,6 +6816,9 @@ bootvid_entry:
               if (!g_useset)
                   ent_update(rsect, g_curroom, g_lax, g_laz,
                              (pad & PAD_B) != 0);
+#ifdef BUSPROBE
+            { uint32_t _k = vp_tick(); if (bp_s0) bp_sB += _k - bp_s0; bp_s0 = _k; }
+#endif
               /* PICKUPS: spin them, and collect any Lara walks over */
               if (!g_useset) {
                   int pe; g_pickspin += 4;
@@ -7308,6 +7319,9 @@ bootvid_entry:
 #ifdef HEADSPIN
             cY = COS(0); sY = SIN(0);   /* diagnostic: pinned camera, Lara spins */
 #else
+#ifdef BUSPROBE
+            { uint32_t _k = vp_tick(); if (bp_s0) bp_sC += _k - bp_s0; bp_s0 = _k; }
+#endif
             /* CAMERA LAG (2026-08-07, user: PSX turns are smooth/incremental,
                ours jerky): the camera used to be WELDED to Lara's yaw, so a
                turn snapped the whole world by the frame's full step. The PSX
@@ -7456,9 +7470,12 @@ bootvid_entry:
 #ifdef PROFILE
             pfA = frame_count;
 #endif
+#ifdef BUSPROBE
+            { uint32_t _k = vp_tick(); if (bp_s0) bp_sD += _k - bp_s0; bp_s0 = _k; }
+#endif
             HLP(1);
 #ifdef BUSPROBE
-            { uint32_t _m = vp_tick(); bp_p1 += _m - bp_m; bp_m = _m; }
+            { uint32_t _m = vp_tick(); if (bp_m) bp_p1 += _m - bp_m; bp_m = _m; }
             bp_active += vp_tick() - bp_t0;      /* loop top -> here: ACTIVE */
 #endif
 #if defined(PIPELINE) && PIPESTAGE >= 1 && !defined(COLLECTEARLY)
@@ -7499,7 +7516,8 @@ bootvid_entry:
                the running mean forever (the first reading came back as 1.8s a
                frame, which is nonsense on its face). */
             if (bp_n == 8) { bp_active = bp_sleep = bp_safe = bp_blit = 0;
-                             bp_p1 = bp_p2 = bp_p3 = bp_p4 = 0; bp_n = 1; }
+                             bp_p1 = bp_p2 = bp_p3 = bp_p4 = 0;
+                             bp_sA = bp_sB = bp_sC = bp_sD = 0; bp_n = 1; }
             bp_t0 = vp_tick();                   /* next window starts here */
 #endif
 #ifdef JLOOPS
@@ -7579,23 +7597,41 @@ bootvid_entry:
              * frame.  Nothing to misdecode.
              * ☠️ keep it left of x~240: menu_text past that does not display. */
             { uint8_t *tfb2 = (uint8_t *)video_backbuffer();
-              char ts[40]; int tp = 0, ti;
+              char ts[44]; int tp, ti, ln;
               uint32_t tv[5];
-              tv[0] = bp_frames;                          /* frames since boot */
-              tv[1] = bp_n ? (bp_p1 / bp_n) * 317u / 10000u : 0;   /* ms */
-              tv[2] = bp_n ? (bp_p2 / bp_n) * 317u / 10000u : 0;
-              tv[3] = bp_n ? (bp_p3 / bp_n) * 317u / 10000u : 0;
-              tv[4] = bp_n ? (bp_p4 / bp_n) * 317u / 10000u : 0;
-              for (ti = 0; ti < 5 && tp < 34; ti++) {
-                  uint32_t v = tv[ti]; char d[8]; int nd = 0;
-                  ts[tp++] = (char)("FABCD"[ti]);
-                  if (!v) d[nd++] = '0';
-                  while (v && nd < 7) { d[nd++] = (char)('0' + v % 10u); v /= 10u; }
-                  while (nd) ts[tp++] = d[--nd];
-                  ts[tp++] = ' ';
-              }
-              ts[tp] = 0;
-              menu_text(tfb2, RENDER_W, RENDER_H, ts, 4, 14, 1, 2, 255); }
+              /* ☠️ CLAMP BEFORE SCALING.  (sum/n)*317 overflowed 32 bits and
+                 printed a six-digit millisecond count; 60000 halflines is
+                 1.9s, far past any real phase, and 60000*317 still fits. */
+              for (ln = 0; ln < 2; ln++) {
+                if (ln == 0) {
+                    tv[0] = bp_frames;
+                    tv[1] = bp_n ? bp_p1 / bp_n : 0;
+                    tv[2] = bp_n ? bp_p2 / bp_n : 0;
+                    tv[3] = bp_n ? bp_p3 / bp_n : 0;
+                    tv[4] = bp_n ? bp_p4 / bp_n : 0;
+                } else {
+                    tv[0] = bp_n ? bp_sA / bp_n : 0;
+                    tv[1] = bp_n ? bp_sB / bp_n : 0;
+                    tv[2] = bp_n ? bp_sC / bp_n : 0;
+                    tv[3] = bp_n ? bp_sD / bp_n : 0;
+                    tv[4] = 0;
+                }
+                tp = 0;
+                for (ti = 0; ti < 5 && tp < 38; ti++) {
+                    uint32_t v = tv[ti]; char d[8]; int nd = 0;
+                    if (ln || ti) { if (v > 60000u) v = 60000u;
+                                    v = v * 317u / 10000u; }
+                    ts[tp++] = (char)((ln ? "abcd " : "FPQRS")[ti]);
+                    if (!v) d[nd++] = '0';
+                    while (v && nd < 7) { d[nd++] = (char)('0' + v % 10u); v /= 10u; }
+                    while (nd) ts[tp++] = d[--nd];
+                    ts[tp++] = ' ';
+                }
+                ts[tp] = 0;
+                if ((bp_frames & 3u) == 0)
+                    menu_text(tfb2, RENDER_W, RENDER_H, ts, 4,
+                              (short)(14 + ln*10), 1, 2, 255);
+              } }
 #endif
 #ifdef DBGROOM
             /* ROOM AUDIT (2026-08-03): draw Lara's LOCAL room index top-left so
@@ -7695,7 +7731,7 @@ bootvid_entry:
 #endif /* PACEPROBE */
             HLP(2);
 #ifdef BUSPROBE
-            { uint32_t _m = vp_tick(); bp_p2 += _m - bp_m; bp_m = _m; }
+            { uint32_t _m = vp_tick(); if (bp_m) bp_p2 += _m - bp_m; bp_m = _m; }
 #endif
 #ifdef PROFILE
             pfB = frame_count;
@@ -8226,7 +8262,7 @@ bootvid_entry:
                       } }
                     HLP(6);
 #ifdef BUSPROBE
-                    { uint32_t _m = vp_tick(); bp_p3 += _m - bp_m; bp_m = _m; }
+                    { uint32_t _m = vp_tick(); if (bp_m) bp_p3 += _m - bp_m; bp_m = _m; }
 #endif
                     HB(12);  /* stage 12: Tom done (all rooms) */
                     RP(7);
