@@ -93,7 +93,37 @@ the A10 lottery is only 4-5 pads wide for the demo set.
 Result: EIDOS 152/152 frames at 14.23 fps, CORE 193/193 at 14.88, tomfail 0.
 
 ## ★★★★★ THE CURRENT RECIPE (2026-08-02) — SOUND ON, USE THIS ONE
-The list above is the July build and is now **superseded**. This is what the
+## ★★★★★ CURRENT — verified LIT on silicon 2026-08-10 (`PADTEXT=136`)
+
+```
+make MULTIROOM=1 GEOMDIRECT=1 SHADEPASS=1 JERRYPOSE=1 STAGEDIET=1 \
+     PIPELINE=1 PIPESTAGE=2 HOPDIAL=1 HOPBOOT=1 XCULL=1 BEXIT=1 \
+     ROWDIET=1 STATICS=1 BANKDIET=1 LOWRES=1 FLIPASM=1 \
+     DIVZGUARD=1 MOVESET=1 SPANSHADE=1 SHADEEXCL=1 \
+     TIMESTEP=1 ANIMRATE=1 OPDBL=1 LPLANES=1 AUTOSTART=1 \
+     VCBIG=1 ENTITIES=1 SWANIM=1 DOORTEX=1 \
+     BLOBCACHE=1 JCENT=1 JOVL=1 SECTLONG=1 \
+     INLINEMUL=1 OFFHOIST=1 VPACK=1 PADTEXT=136
+```
+
+Adds to the 2026-08-07 list: the 68k-eviction trio (`BLOBCACHE JCENT JOVL`),
+the long-aligned sector mirror (`SECTLONG`), and the kernel stack
+(`INLINEMUL OFFHOIST VPACK`). Measures **6.67 fps**.
+
+☠️ **`PADTEXT` MOVED 544 -> 136.** Those flags changed the layout, which
+re-rolls the A10 lottery. 0 and 272 both boot BLACK for this exact layout;
+136 lights. Change any flag and walk the rolls again — build 0/136/272/408/544
+and roll until one lights (`scratchpad/walk.sh` does this unattended).
+
+### Measurement arms only — NEVER ship these
+`FPSBEACON=1` (fps block), `PADMUTE=1` (zeroes the in-game pad so both arms
+render the same scene), `FASTBOOT=1` (skip logos, in-game in ~8s),
+`SYNCDRAIN=1` (measured: no effect, leave off). Each has its OWN A10 roll —
+the pad-muted pair lit at 0 and 408, not 136.
+
+---
+
+The list below is the July build and is now **superseded**. This is what the
 user has actually been playing:
 
 ```
