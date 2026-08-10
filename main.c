@@ -458,14 +458,34 @@ static int room_floor_mr(const uint8_t **rsect, int n, int wx, int wz, int *floo
         int xS, zS;
         if (g_flr_limit ? !room_reachable(g_curroom_fwd(), r)
                         : !room_within3(g_curroom_fwd(), r)) continue;
+        int ix, iz;
+#ifdef SECTLONG
+        /* read the LONG-ALIGNED mirror when it built and self-checked; the
+           byte path stays as the fallback so a refused mirror degrades to
+           today's behaviour instead of to wrong collision. */
+        const int32_t *d = g_sectl_ok ? g_sectl_room[r] : (const int32_t *)0;
+        const int32_t *o = 0;
+        if (d) { xS = d[0]; zS = d[1]; ix = d[2]; iz = d[3]; }
+        else
+#endif
+        {
         xS = (sp[0]<<8)|sp[1]; zS = (sp[2]<<8)|sp[3];
-        int ix = (int)(((uint32_t)sp[4]<<24)|((uint32_t)sp[5]<<16)|((uint32_t)sp[6]<<8)|sp[7]);
-        int iz = (int)(((uint32_t)sp[8]<<24)|((uint32_t)sp[9]<<16)|((uint32_t)sp[10]<<8)|sp[11]);
+        ix = (int)(((uint32_t)sp[4]<<24)|((uint32_t)sp[5]<<16)|((uint32_t)sp[6]<<8)|sp[7]);
+        iz = (int)(((uint32_t)sp[8]<<24)|((uint32_t)sp[9]<<16)|((uint32_t)sp[10]<<8)|sp[11]);
+        }
         int lx = wx - ix, lz = wz - iz;
-        const uint8_t *e; int fy, dx, dz, sxs, szs, w;
+        const uint8_t *e = 0; int fy, dx, dz, sxs, szs, w;
         if (lx < 0 || lx >= xS*1024 || lz < 0 || lz >= zS*1024) continue;
+#ifdef SECTLONG
+        if (d) {
+            o = d + 4 + (mul16(lx>>10, zS) + (lz>>10))*3;   /* mirror stride 3 longs */
+            fy = o[0];
+        } else
+#endif
+        {
         e = sp + 12 + (mul16(lx>>10, zS) + (lz>>10))*6;   /* cell stride 6 (slant added) */
         fy = (int16_t)(((uint16_t)e[0]<<8)|e[1]);
+        }
         if (fy >= 0x7FFE) continue;   /* 7FFF wall / 7FFE floor OPENING: the
                                          room below supplies the floor */
         w = fy & 1; fy &= ~1;   /* bit0 = extractor's water-surface mark; take it
@@ -476,7 +496,11 @@ static int room_floor_mr(const uint8_t **rsect, int n, int wx, int wz, int *floo
          * dx/dz = fractional position in the 1024-unit cell; replicate OpenLara
          * getFloorInfo so ramps read as a smooth surface (walk up slanted rock). */
         dx = lx & 1023; dz = lz & 1023;
-        sxs = (int8_t)e[4]; szs = (int8_t)e[5];
+#ifdef SECTLONG
+        if (o) { sxs = (int8_t)(o[2] >> 16); szs = (int8_t)(o[2] & 0xFF); }
+        else
+#endif
+        { sxs = (int8_t)e[4]; szs = (int8_t)e[5]; }
         /* mul16: slant s8 x frac <=1023 both fit s16 — this multiply ran as
            __mulsi3 per CANDIDATE CELL of every floor search (~400/render,
            the pc-histogram's #1 game-code cost after the bars fix) */
