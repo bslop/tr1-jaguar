@@ -1,0 +1,149 @@
+; clip_math_test.gas - prove the near-plane clip arithmetic OFFLINE.
+;
+; WHY THIS EXISTS.  The geotex kernel discards a whole face the moment one
+; vertex crosses NEAR, which is the R4 rock that blinks.  The fix is to clip
+; the crossing edge to z = NEAR, and the risky part is not the control flow -
+; it is the fixed-point: two recovered coordinates, a divide whose operands can
+; be negative, and a reprojection.  Every near-plane attempt this project has
+; made "drew wrong-but-on-screen geometry, all HW-seen", i.e. the arithmetic
+; looked plausible on screen and was wrong.
+;
+; So the maths gets verified against exact integers BEFORE it goes into the hot
+; loop, using jtest at silicon fidelity:
+;
+;   jtest run tools/clip_math_test.gas --assemble --capture 0x100000:64 --budget 20000
+;
+; THE PROBLEM.  For an edge A->B where A is in front (A_z >= NEAR) and B is
+; behind, we need the screen position of the point P where the edge crosses
+; z = NEAR.  B has no projected position (the cache holds a sentinel), and
+; NOTHING keeps view-space x/y for any vertex - only sx, sy and (as of the
+; depth-slot commit) z.
+;
+; THE IDENTITY THAT MAKES IT CHEAP.  A's view-space x is recoverable from what
+; IS cached, because the projection is just a divide:
+;       A_sx = CENTER_X + FOCAL * A_x / A_z   =>   A_x = (A_sx - CENTER_X) * A_z / FOCAL
+; and B's view-space position comes from re-transforming that one vertex (rare
+; path, so cycles there are cheap).  Then
+;       P_x = A_x + (A_z - NEAR) * (B_x - A_x) / (A_z - B_z)
+;       P_sx = CENTER_X + FOCAL * P_x / NEAR
+; NEAR is 64, so that last divide is a shift.
+;
+; The fixture below runs ONE edge through exactly that sequence and stores the
+; intermediates, so a mismatch says WHICH step is wrong rather than "the face
+; looks wrong".
+
+		.org	$F03000
+
+CENTER_X	.equ	160
+FOCAL		.equ	190
+NEAR		.equ	64
+OUT		.equ	$100000		; jtest --capture watches here
+
+start:
+		movei	#tcase,r30		; case cursor
+		movei	#OUT,r31		; output cursor
+		moveq	#6,r29			; case count
+case_loop:
+		; ---- load the test edge -------------------------------------
+		move	r30,r1
+		load	(r1),r2			; A_sx  (screen x of the in-front vert)
+		addq	#4,r1
+		load	(r1),r3			; A_z   (view depth, from the cache)
+		addq	#4,r1
+		load	(r1),r4			; B_x   (view x, re-transformed)
+		addq	#4,r1
+		load	(r1),r5			; B_z   (view depth, behind NEAR)
+
+		; ---- recover A_x = (A_sx - CENTER_X) * A_z / FOCAL ----------
+		movei	#CENTER_X,r0
+		sub	r0,r2			; A_sx - CENTER_X   (signed)
+		move	r2,r6
+		move	r3,r0
+		imult	r0,r6			; (A_sx-CX) * A_z   -- both s16 here
+		nop
+		nop
+		move	r6,r7			; keep the sign
+		abs	r6
+		movei	#FOCAL,r0
+		div	r0,r6			; |..| / FOCAL
+		cmpq	#0,r7
+		jr	PL,ax_pos
+		nop
+		neg	r6
+ax_pos:
+		; r6 = A_x (view space)
+
+		; ---- t numerator / denominator ------------------------------
+		move	r3,r8
+		movei	#NEAR,r0
+		sub	r0,r8			; A_z - NEAR      (>= 0)
+		move	r3,r9
+		sub	r5,r9			; A_z - B_z       (> 0, B is nearer)
+
+		; ---- P_x = A_x + (A_z-NEAR)*(B_x-A_x)/(A_z-B_z) -------------
+		move	r4,r10
+		sub	r6,r10			; B_x - A_x       (signed)
+		move	r10,r11
+		imult	r8,r11			; * (A_z - NEAR)
+		nop
+		nop
+		move	r11,r12			; keep the sign
+		abs	r11
+		div	r9,r11			; / (A_z - B_z)
+		cmpq	#0,r12
+		jr	PL,px_pos
+		nop
+		neg	r11
+px_pos:
+		add	r6,r11			; r11 = P_x
+
+		; ---- P_sx = CENTER_X + FOCAL * P_x / NEAR -------------------
+		movei	#FOCAL,r0
+		move	r11,r13
+		imult	r0,r13			; FOCAL * P_x
+		nop
+		nop
+		move	r13,r14			; sign
+		abs	r13
+		sharq	#6,r13			; / NEAR (64) -- a shift, not a divide
+		cmpq	#0,r14
+		jr	PL,sx_pos
+		nop
+		neg	r13
+sx_pos:
+		movei	#CENTER_X,r0
+		add	r0,r13			; r13 = P_sx
+
+		; ---- publish the intermediates so a failure names its step --
+		move	r31,r0
+		store	r6,(r0)			; [0] A_x recovered
+		addq	#4,r0
+		store	r11,(r0)		; [1] P_x
+		addq	#4,r0
+		store	r13,(r0)		; [2] P_sx  <- the answer
+		addq	#4,r0
+		move	r0,r31
+		addq	#16,r30			; next case (4 longs)
+		subq	#1,r29
+		movei	#case_loop,r22
+		jump	NE,(r22)
+		nop
+
+		moveq	#0,r0
+		movei	#$F02114,r1		; G_CTRL: stop
+		store	r0,(r1)
+		nop
+		nop
+halt:		movei	#halt,r22
+		jump	T,(r22)
+		nop
+
+		.long
+tcase:
+		; A_sx, A_z, B_x, B_z - the cases that break this kind of code:
+		dc.l	217,1000,-200,16	; A right of centre, B left, B behind
+		dc.l	103,1000,200,16		; A LEFT of centre, B right (signs cross)
+		dc.l	217,1000,300,16		; both right - no sign change
+		dc.l	160,1000,0,16		; dead centre - zero numerator
+		dc.l	217,65,-200,0		; A barely in front of NEAR
+		dc.l	217,4000,-2000,-500	; B far behind the eye (negative z)
