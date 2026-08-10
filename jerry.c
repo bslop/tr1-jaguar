@@ -13,7 +13,9 @@
 #define D_CMD    (*(volatile uint32_t *)0xF1C338u)  /* resident: 1 pose, 2 roomx */
 #define D_VOICES 0xF1C340u                          /* 2 x 7 longs */
 
-static volatile uint32_t dsp_mailbox[4] __attribute__((aligned(16)));
+/* [0] pose/overlay done magic, [3] published voice count (see jerry_v0_ncnt),
+   [4..7] OVERLAY params - see the warning in the JOVL block below. */
+static volatile uint32_t dsp_mailbox[8] __attribute__((aligned(16)));
 
 extern const uint8_t dsp_kernel[], dsp_kernel_end[];
 
@@ -220,3 +222,60 @@ int jerry_pose_sync(void)
     }
     return 0;
 }
+
+#ifdef JOVL
+/* ---- JERRY CODE OVERLAYS -------------------------------------------------
+ * Jerry's code window is 4192 bytes and the resident kernel fills most of it,
+ * so work moves across one PHASE at a time: the image is copied into the free
+ * tail once (jerry_ovl_load), then CALLED per frame (jerry_ovl_run).
+ * ☠️ The audio pump does not run while an overlay executes - keep jobs small
+ * or the DAC underruns (crackle, not a hang). */
+#define MAGIC_OVL_DONE 0x0D5BD0E0u      /* must match dsp_ovl_ent.das */
+/* ☠️ Overlay params get their OWN block, NOT D_PARAMS[16..]: jerry_pose_kick
+   copies Lara's angle bytes to D_PARAMS+0x40 one LONG per byte (~45 longs), so
+   params[16..60] are rewritten by every pose.  Parking the job pointer there
+   fed the overlay garbage and drew a spike to infinity on silicon. */
+/* ☠️☠️ These live in the DRAM MAILBOX, not in Jerry's SRAM.  Two SRAM homes
+   were tried and both were occupied:
+     - D_PARAMS[16..] is rewritten by every pose kick (the angle copy);
+     - $F1CB00 lands INSIDE SKV_D, whose comment says 1800B but which actually
+       holds g_lnv*6 bytes (~3000 for Lara, reaching ~$F1CF78) - writing there
+       corrupted her mesh and stretched an arm across the screen on silicon.
+   The mailbox address is already handed to Jerry in params[0], so the kernel
+   and the overlay both reach it with one indirection and it has no neighbours. */
+#define OVL_M_SRC   4                   /* mailbox[4] = overlay image src   */
+#define OVL_M_LONGS 5                   /* mailbox[5] = image length, longs */
+#define OVL_M_JOBS  6                   /* mailbox[6] = job list address    */
+#define OVL_M_NJOB  7                   /* mailbox[7] = job count           */
+
+extern const uint8_t dsp_ovl_ent[], dsp_ovl_ent_end[];
+
+void jerry_ovl_load(void)
+{
+    dsp_mailbox[OVL_M_SRC]   = (uint32_t)dsp_ovl_ent;
+    dsp_mailbox[OVL_M_LONGS] = (uint32_t)(dsp_ovl_ent_end - dsp_ovl_ent) / 4;
+    D_CMD = 3;
+    /* ☠️ Wait until Jerry has CONSUMED the command (it zeroes CMD_D on entry).
+       Without this the next kick can overwrite CMD_D before the resident loop
+       ever sees the 3, and the overlay is silently never loaded - which shows
+       up much later as garbage vertices, not as a failure here. */
+    { uint32_t i; for (i = 0; i < 2000000 && D_CMD != 0; i++) ; }
+}
+
+/* jobs: n * 8 longs {src, count, cos, sin, rx0, y, rz0, dst} */
+void jerry_ovl_run(const void *jobs, uint32_t njobs)
+{
+    dsp_mailbox[OVL_M_JOBS] = (uint32_t)jobs;
+    dsp_mailbox[OVL_M_NJOB] = njobs;
+    dsp_mailbox[0] = 0;
+    D_CMD = 4;
+}
+
+int jerry_ovl_sync(void)
+{
+    uint32_t i;
+    for (i = 0; i < 4000000; i++)
+        if (dsp_mailbox[0] == MAGIC_OVL_DONE) return 1;
+    return 0;
+}
+#endif /* JOVL */

@@ -26,6 +26,7 @@ usage: beacon_fps.py <roll.mkv> [--skip 0.20]
 """
 import glob
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -83,6 +84,12 @@ def main(mkv, skip=0.20):
     print(f"picture {x1-x0}x{y1-y0} of {ims[0].size[0]}x{ims[0].size[1]}")
     print(f"beacon at fb({fx},{fy}), swing {lo}->{hi}")
     print(f"{tr} transitions in {secs:.1f}s  =>  {tr/secs:.2f} fps")
+    # a 50s roll decodes to ~3000 4K PNGs (~6GB).  mkdtemp does not clean up
+    # after itself, so a campaign of arms silently ate tens of GB of /tmp.
+    # Everything above is already computed; the frames are dead weight now.
+    for im in ims:
+        im.close()
+    shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":

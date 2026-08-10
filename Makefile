@@ -671,11 +671,15 @@ CFLAGS   += -DBEACON_AT=$(BEACON_AT)
 CXXFLAGS += -DBEACON_AT=$(BEACON_AT)
 ASFLAGS  += -DBEACON_AT=$(BEACON_AT)
 endif
+# ☠️ MUST be defined BEFORE the OBJS := below - OBJS is immediately expanded,
+# so a definition further down the file reaches it EMPTY (the same trap that
+# made a late `AUTOSTART := 1` never reach the compiler).
+OBJS_OVL := $(if $(JOVL),$(BUILD)/dsp_ovl_blob.o)
 OBJS := $(BUILD)/startup.o $(BUILD)/cpu68k.o $(BUILD)/main.o $(BUILD)/video.o \
         $(BUILD)/blit.o $(BUILD)/joypad.o $(BUILD)/vidpanel.o \
         $(BUILD)/gd_input.o $(BUILD)/gdbios.o \
         $(BUILD)/gpu.o $(BUILD)/gpu_blob.o \
-        $(BUILD)/jerry.o $(BUILD)/dsp_blob.o $(OBJS_BEACON)
+        $(BUILD)/jerry.o $(BUILD)/dsp_blob.o $(OBJS_OVL) $(OBJS_BEACON)
 # The console objects are needed by SKCONONLY too, not just NOGD: SKCONONLY
 # defines SKUNK_CONSOLE (dbg_kv/skunk_init) WITHOUT compiling out the
 # GameDrive path, which is what you want when the console is the instrument
@@ -802,13 +806,25 @@ $(BUILD)/gpu_bltex.bin: gpu_bltex.gas | $(BUILD)
 	$(OBJCOPY) -O binary $(BUILD)/gpu_bltex.elf $@
 
 $(BUILD)/dsp_pose.bin: dsp_pose.das | $(BUILD)
-	$(JAS) $< -o $@ --dsp $(call jasd,$(LOWRES_DEF) -d NOSOUND=$(if $(NOSOUND),1,0) -d AUDIOLITE=$(if $(AUDIOLITE),1,0) -d JDRAIN=$(if $(JDRAIN),1,0) -d NEARLOW=$(if $(NEARLOW),1,0))
+	$(JAS) $< -o $@ --dsp $(call jasd,$(LOWRES_DEF) -d NOSOUND=$(if $(NOSOUND),1,0) -d AUDIOLITE=$(if $(AUDIOLITE),1,0) -d JDRAIN=$(if $(JDRAIN),1,0) -d NEARLOW=$(if $(NEARLOW),1,0) -d JCENT=$(if $(JCENT),1,0) -d JOVL=$(if $(JOVL),1,0))
 	@sz=$$(stat -c%s $@); if [ $$sz -gt 4192 ]; then \
 	  echo "!!! dsp_pose.bin $$sz bytes OVERLAPS MBLK at F1C060 (max 4192 = F1C060-F1B000; OUT_D is dead since direct-DRAM pose)"; \
 	  rm -f $@; exit 1; fi
 
 $(BUILD)/dsp_blob.o: dsp_blob.S $(BUILD)/dsp_pose.bin | $(BUILD)
 	$(CC) $(ASFLAGS) -c dsp_blob.S -o $@
+
+# JERRY OVERLAY (JOVL): assembled to run at `ovl_area` - the first free byte
+# after the resident kernel - so its base address depends on how big
+# dsp_pose.bin came out.  Compute it here and prepend it as an .equ; jas -d
+# only feeds .if conditionals, it does not create symbols usable by .org.
+$(BUILD)/dsp_ovl_ent.bin: dsp_ovl_ent.das $(BUILD)/dsp_pose.bin | $(BUILD)
+	@base=$$(printf '%X' $$(( 0xF1B000 + $$(stat -c%s $(BUILD)/dsp_pose.bin) ))); 	 printf 'OVLBASE\t.equ\t$$%s\n' "$$base" > $(BUILD)/ovlgen.das; 	 cat dsp_ovl_ent.das >> $(BUILD)/ovlgen.das; 	 echo "overlay base = \$$$$base (resident $$(stat -c%s $(BUILD)/dsp_pose.bin) bytes)"
+	$(JAS) $(BUILD)/ovlgen.das -o $@ --dsp
+	@rsz=$$(stat -c%s $(BUILD)/dsp_pose.bin); osz=$$(stat -c%s $@); 	 if [ $$(( rsz + osz )) -gt 4192 ]; then 	   echo "!!! resident $$rsz + overlay $$osz > 4192 - overruns MBLK at F1C060"; 	   rm -f $@; exit 1; fi; 	 echo "overlay $$osz bytes; $$(( 4192 - rsz - osz )) bytes still free"
+
+$(BUILD)/dsp_ovl_blob.o: dsp_ovl_blob.S $(BUILD)/dsp_ovl_ent.bin | $(BUILD)
+	$(CC) $(ASFLAGS) -c dsp_ovl_blob.S -o $@
 
 NOMUL_DEF := -dNOMUL=$(if $(NOMUL),1,0)
 NODIV_DEF := -dNODIV=$(if $(NODIV),1,0)
@@ -1012,7 +1028,7 @@ ifdef TRAPEZOID
 $(error ROWDIET=1 and TRAPEZOID=1 are mutually exclusive (both claim r4/r21 in the span run))
 endif
 endif
-GEOTEX_DEFS := $(LOWRES_DEF) -d VRES60=$(if $(VRES60),1,0) $(NOFILL_DEF) $(NOSPAN_DEF) $(PROFGPU_DEF) $(NOMUL_DEF) $(NODIV_DEF) $(NOSTORE_DEF) $(SHADEPASS_DEF) $(NOCULL_DEF) $(STAGEDIET_DEF) -d NOBLIT=$(if $(NOBLIT),1,0) -d ALLCULL=$(if $(ALLCULL),1,0) -d RUNHIST=$(if $(RUNHIST),1,0) -d TRAPEZOID=$(if $(TRAPEZOID),1,0) -d DRIFTLOOSE=$(if $(DRIFTLOOSE),1,0) -d XCULL=$(if $(XCULL),1,0) -d BEXIT=$(if $(BEXIT),1,0) -d ROWDIET=$(if $(ROWDIET),1,0) -d PHRASESHADE=$(if $(PHRASESHADE),1,0) -d DIVHIDE=$(if $(DIVHIDE),1,0) -d BANKDIET=$(if $(BANKDIET),1,0) -d RUNBATCH=$(if $(RUNBATCH),1,0) -d RBNOUV=$(if $(RBNOUV),1,0) -d CULLCOUNT=$(if $(CULLCOUNT),1,0) -d NOBFCULL=$(if $(NOBFCULL),1,0) -d BEXCNT=$(if $(BEXCNT),1,0) -d SDPROBE=$(if $(SDPROBE),1,0) -d NOSDCULL=$(if $(NOSDCULL),1,0) -d WCCNT=$(if $(WCCNT),1,0) -d NOEMPTYY=$(if $(NOEMPTYY),1,0) -d GPUBG=$(if $(GPUBG),1,0) -d SHADEEXCL=$(if $(SHADEEXCL),1,0) -d NEARLOW=$(if $(NEARLOW),1,0) -d PREPASSONLY=$(if $(PREPASSONLY),1,0) -d MMULTX=$(if $(MMULTX),1,0) -d MMXDIAG=$(if $(MMXDIAG),1,0) -d UVCLAMP=$(if $(UVCLAMP),1,0) -d UVPROBE=$(if $(UVPROBE),1,0) -d UVFIX=$(if $(UVFIX),1,0) -d UVNEG=$(if $(UVNEG),1,0) -d TINYCULL=$(if $(TINYCULL),$(TINYCULL),0) -d JMPDIET=$(if $(JMPDIET),1,0) -d LARACOUNT=$(if $(LARACOUNT),1,0) -d KEEPDEGEN=$(if $(KEEPDEGEN),1,0) -d DIVZGUARD=$(if $(DIVZGUARD),1,0) -d TINYKEEP=$(if $(TINYKEEP),$(TINYKEEP),0) -d BWOVER=$(if $(BWOVER),1,0) -d ODRAW=$(if $(ODRAW),1,0) -d PHRASEDST=$(if $(PHRASEDST),1,0) -d IMULPROBE=$(if $(IMULPROBE),1,0) -d SPANSHADE=$(if $(SPANSHADE),$(SPANSHADE),0) -d FOURBPP=$(if $(FOURBPP),1,0) -d INLINEMUL=$(if $(INLINEMUL),1,0) -d OFFHOIST=$(if $(OFFHOIST),1,0) -d VPACK=$(if $(VPACK),1,0) -d VCJDIET=$(if $(VCJDIET),1,0)
+GEOTEX_DEFS := $(LOWRES_DEF) -d VRES60=$(if $(VRES60),1,0) $(NOFILL_DEF) $(NOSPAN_DEF) $(PROFGPU_DEF) $(NOMUL_DEF) $(NODIV_DEF) $(NOSTORE_DEF) $(SHADEPASS_DEF) $(NOCULL_DEF) $(STAGEDIET_DEF) -d NOBLIT=$(if $(NOBLIT),1,0) -d ALLCULL=$(if $(ALLCULL),1,0) -d RUNHIST=$(if $(RUNHIST),1,0) -d TRAPEZOID=$(if $(TRAPEZOID),1,0) -d DRIFTLOOSE=$(if $(DRIFTLOOSE),1,0) -d XCULL=$(if $(XCULL),1,0) -d BEXIT=$(if $(BEXIT),1,0) -d ROWDIET=$(if $(ROWDIET),1,0) -d PHRASESHADE=$(if $(PHRASESHADE),1,0) -d DIVHIDE=$(if $(DIVHIDE),1,0) -d BANKDIET=$(if $(BANKDIET),1,0) -d RUNBATCH=$(if $(RUNBATCH),1,0) -d RBNOUV=$(if $(RBNOUV),1,0) -d CULLCOUNT=$(if $(CULLCOUNT),1,0) -d NOBFCULL=$(if $(NOBFCULL),1,0) -d BEXCNT=$(if $(BEXCNT),1,0) -d SDPROBE=$(if $(SDPROBE),1,0) -d NOSDCULL=$(if $(NOSDCULL),1,0) -d WCCNT=$(if $(WCCNT),1,0) -d NOEMPTYY=$(if $(NOEMPTYY),1,0) -d GPUBG=$(if $(GPUBG),1,0) -d SHADEEXCL=$(if $(SHADEEXCL),1,0) -d NEARLOW=$(if $(NEARLOW),1,0) -d PREPASSONLY=$(if $(PREPASSONLY),1,0) -d MMULTX=$(if $(MMULTX),1,0) -d MMXDIAG=$(if $(MMXDIAG),1,0) -d UVCLAMP=$(if $(UVCLAMP),1,0) -d UVPROBE=$(if $(UVPROBE),1,0) -d UVFIX=$(if $(UVFIX),1,0) -d UVNEG=$(if $(UVNEG),1,0) -d TINYCULL=$(if $(TINYCULL),$(TINYCULL),0) -d JMPDIET=$(if $(JMPDIET),1,0) -d LARACOUNT=$(if $(LARACOUNT),1,0) -d KEEPDEGEN=$(if $(KEEPDEGEN),1,0) -d DIVZGUARD=$(if $(DIVZGUARD),1,0) -d TINYKEEP=$(if $(TINYKEEP),$(TINYKEEP),0) -d BWOVER=$(if $(BWOVER),1,0) -d ODRAW=$(if $(ODRAW),1,0) -d PHRASEDST=$(if $(PHRASEDST),1,0) -d IMULPROBE=$(if $(IMULPROBE),1,0) -d SPANSHADE=$(if $(SPANSHADE),$(SPANSHADE),0) -d FOURBPP=$(if $(FOURBPP),1,0) -d INLINEMUL=$(if $(INLINEMUL),1,0) -d OFFHOIST=$(if $(OFFHOIST),1,0) -d VPACK=$(if $(VPACK),1,0) -d VCJDIET=$(if $(VCJDIET),1,0) -d NEARCLIP=$(if $(NEARCLIP),1,0)
 $(BUILD)/gpu_geotex.bin: gpu_geotex.gas | $(BUILD)
 	$(JAS) $< -o $@ --gpu $(call jasd,$(GEOTEX_DEFS))
 
@@ -1376,6 +1392,47 @@ endif
 ifdef DARTS
 CFLAGS   += -DDARTS
 CXXFLAGS += -DDARTS
+endif
+
+# make BLOBCACHE=1: stop the 68000 rebuilding static entity blobs every frame.
+# Bridges/doors/levers were re-derived vertex-by-vertex on every frame even
+# though a bridge never moves and a shut door never moves; cache per draw slot
+# and rebuild only when the entity's mutable state changes.
+ifdef BLOBCACHE
+CFLAGS   += -DBLOBCACHE
+CXXFLAGS += -DBLOBCACHE
+endif
+
+# make JCENT=1: Jerry emits each Lara mesh's CENTROID SUMS while it poses the
+# verts, so the 68000 stops walking every posed vertex of every mesh in
+# lara_finish just to re-derive them.  Bit-identical sums => identical painter
+# order (unlike the dormant T-export, which flipped the order and lost fps).
+ifdef JCENT
+CFLAGS   += -DJCENT
+CXXFLAGS += -DJCENT
+endif
+
+# make NOLARA=1: ABLATION ONLY (never ship) - drop every bit of Lara's render
+# work from the 68000's frame (lara_finish + her display-list entry) to size
+# what she actually costs, now that entities have measured at ~0.
+ifdef NOLARA
+CFLAGS   += -DNOLARA
+CXXFLAGS += -DNOLARA
+endif
+
+# make NOMUSIC=1: ABLATION - skip the in-frame 4KB music gd_fread only.
+ifdef NOMUSIC
+CFLAGS   += -DNOMUSIC
+CXXFLAGS += -DNOMUSIC
+endif
+
+# make JOVL=1: Jerry CODE OVERLAY loader (CMD=3).  Jerry's code window is only
+# 4192 bytes and the resident kernel uses 2664, so the game loop cannot be
+# ported into it wholesale - it has to arrive one phase at a time, copied from
+# DRAM into the free tail.  Loader costs 96 bytes, leaving ~1432 per overlay.
+ifdef JOVL
+CFLAGS   += -DJOVL
+CXXFLAGS += -DJOVL
 endif
 
 # STAGECHK=1: checksum the display list the 68k stages each frame and count

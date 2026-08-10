@@ -308,7 +308,15 @@ RX_SENT		.equ	$07FFFFFF
 CAMB_D		.equ	$F1C090		; 7-long camera copy (below MBLK)
 ; ---- RESIDENT AUDIO (2026-07-11) ----
 CMD_D		.equ	$F1C338		; command word: 0 idle / 1 pose / 2 roomx
-					; (AFTER the angle window +40..+F4!)
+					; 3 = load overlay, 4 = call overlay
+; ☠️☠️ OVERLAY PARAMS LIVE IN THE **DRAM MAILBOX** (params[0]), NOT in Jerry
+; SRAM.  Two SRAM homes were tried and both were already occupied:
+;   - D_PARAMS[16..] is rewritten by EVERY pose kick (the angle copy writes
+;     one LONG per angle byte, ~45 longs);
+;   - $F1CB00 lands INSIDE SKV_D - its comment says 1800B but it actually holds
+;     g_lnv*6 bytes (~3000 for Lara, reaching ~$F1CF78), so writing there
+;     corrupted her mesh and stretched an arm across the screen on silicon.
+; mailbox[4]=src mailbox[5]=longs mailbox[6]=joblist mailbox[7]=jobcount
 V0_CNT		.equ	$F1C340		; voice 0: bytes remaining (0 = idle)
 V0_LANE		.equ	$F1C344		;   bytes left in the cached long
 V0_PTR		.equ	$F1C348		;   next long fetch address (DRAM)
@@ -450,10 +458,98 @@ main_loop:
 	; (CMD=2 roomx dispatch DELETED 2026-07-20: the co-transform was
 	;  retired — it bought 0 fps and 0 px — and its loop-carried edges
 	;  tripped the jas hazard checker. make JERRYX=1 is now unsupported.)
+.if JOVL=1
+	cmpq	#3,r1
+	movei	#cmd_ovl,r22
+	jump	EQ,(r22)
+	nop
+	nop
+	cmpq	#4,r1
+	movei	#cmd_ovlrun,r22
+	jump	EQ,(r22)
+	nop
+	nop
+.endif
 	movei	#main_loop,r22
 	jump	T,(r22)
 	nop
 	nop
+
+.if JOVL=1
+;=====================================================================
+; cmd_ovl - JERRY CODE OVERLAY LOADER.
+;
+; WHY THIS EXISTS.  The campaign goal is that the 68000 boots the Jaguar and
+; nothing else, but Jerry's CODE space is only 4192 bytes ($F1B000..$F1C060 -
+; MBLK and every hot buffer live above that), and the resident kernel already
+; spends 2664 of it.  ~1.5KB is nowhere near enough for the game loop, so the
+; loop cannot simply be "ported to JRISC and loaded".  It has to arrive one
+; PHASE at a time: this copies a code image from DRAM into the free tail of
+; Jerry's SRAM and jumps into it.
+;
+; in:  params[16] = DRAM source address (long-aligned)
+;      params[17] = length in LONGS (must be <= ovl_max, caller's contract)
+; The overlay's own last act must be `jump` back to main_loop - it runs with
+; the resident loop's registers, so it owns r0-r29 and must not touch r30/r31
+; (ISR-owned).
+; ☠️ AUDIO_PUMP does NOT run while an overlay executes, so an overlay must be
+; SHORT or the DAC underruns (symptom is crackle, not a hang).
+;=====================================================================
+cmd_ovl:
+	movei	#CMD_D,r0
+	moveq	#0,r1
+	store	r1,(r0)			; consume the command
+	movei	#D_PARAMS,r0
+	load	(r0),r0			; the DRAM mailbox base (params[0])
+	nop
+	nop
+	addq	#16,r0			; mailbox[4] = image src
+	load	(r0),r2
+	addq	#4,r0			; mailbox[5] = length in longs
+	load	(r0),r3
+	nop
+	cmpq	#0,r3
+	movei	#main_loop,r22
+	jump	EQ,(r22)		; nothing to load -> ignore
+	nop
+	nop
+	movei	#ovl_area,r9		; destination in local SRAM
+ovl_copy:
+	load	(r2),r0
+	addq	#4,r2
+	nop
+	store	r0,(r9)
+	addq	#4,r9
+	subq	#1,r3
+	movei	#ovl_copy,r22
+	jump	NE,(r22)
+	nop
+	nop
+	; loaded; go idle.  RUNNING it is a separate command (CMD=4) so the
+	; image is copied ONCE at level start, not re-copied every frame.
+	movei	#main_loop,r22
+	jump	T,(r22)
+	nop
+	nop
+
+;=====================================================================
+; cmd_ovlrun (CMD=4) - call the overlay already resident in ovl_area.
+; The overlay reads its own arguments from params[18..] and MUST end by
+; jumping to main_loop.  It owns r0-r29; r30/r31 are ISR-owned.
+;=====================================================================
+cmd_ovlrun:
+	movei	#CMD_D,r0
+	moveq	#0,r1
+	store	r1,(r0)
+	; hand the overlay its RETURN ADDRESS in r29 so the image never has to
+	; know where main_loop landed - the overlay is assembled separately and
+	; the resident layout shifts every time this kernel changes.
+	movei	#main_loop,r29
+	movei	#ovl_area,r22
+	jump	T,(r22)
+	nop
+	nop
+.endif
 
 cmd_pose:
 	movei	#CMD_D,r0
@@ -776,6 +872,24 @@ rot_row:
 	nop
 
 verts:
+.if JCENT=1
+	; ---- CENTROID SUMS ON JERRY (2026-08-09) ---------------------------
+	; The 68k's lara_finish walked EVERY posed vertex of EVERY mesh, every
+	; frame, just to sum them into a centroid for the painter sort - on the
+	; chip that IS the frame rate, while Jerry had already touched all of
+	; those vertices to produce them.  Accumulate the sums here instead.
+	; ☠️ NOT the same thing as the dormant T-export below: exporting the
+	; JOINT ORIGIN was measured WORSE (4.80 vs 4.56) because it flipped the
+	; sort order ~46/60 frames and the face re-emit dominated.  These are
+	; the CENTROID sums - bit-identical to what the 68k computed - so the
+	; sort order does not change at all.
+	; r15/r28/r29 are do_rot2's temps: dead through the vertex loop and
+	; rewritten per mesh by the rotation code above.
+	moveq	#0,r15			; sum rx
+	moveq	#0,r28			; sum wy
+	moveq	#0,r29			; sum rz
+.endif
+.if JCENT=0
 	; export this mesh's world translation T (r14+9..11) for the 68k
 	; painter sort: params[5] = DRAM int32[3] array (0 = disabled; the
 	; SINTAB slot — the kernel only ever uses its LOCAL sine copy).
@@ -803,6 +917,7 @@ verts:
 	addq	#4,r1
 	store	r3,(r1)
 no_mt:
+.endif
 	; --- per-vert: vlen = skvl[i] (u16) ---
 	movei	#8,r0
 	add	r4,r0
@@ -962,6 +1077,15 @@ lz_hi:
 	; wy = base_y + my
 	move	r25,r2
 	add	r18,r2
+.if JCENT=1
+	; sum the SAME three values the blob is about to carry, while they are
+	; still unshifted and unmasked (r0=rx, r2=wy, r1=rz).  Each fits s16 by
+	; construction - the blob stores them as s16 - so summing the full
+	; 32-bit register gives exactly the 68k's sign-extended sum.
+	add	r0,r15
+	add	r2,r28
+	add	r1,r29
+.endif
 	; pack: long0 = (rx<<16)|(wy&FFFF) ; long1 = (rz<<16)|255
 	shlq	#16,r0
 	movei	#$FFFF,r3
@@ -992,6 +1116,29 @@ lz_hi:
 	nop
 	nop
 mesh_next:
+.if JCENT=1
+	; publish this mesh's sums to params[5][i*3] (0 = feature off)
+	movei	#20,r0
+	add	r4,r0
+	load	(r0),r1			; mtout base (DRAM int32[3] per mesh)
+	cmpq	#0,r1
+	movei	#no_jc,r22
+	jump	EQ,(r22)
+	nop
+	nop
+	move	r5,r0			; idx*12
+	shlq	#3,r0
+	move	r5,r2
+	shlq	#2,r2
+	add	r2,r0
+	add	r0,r1
+	store	r15,(r1)
+	addq	#4,r1
+	store	r28,(r1)
+	addq	#4,r1
+	store	r29,(r1)
+no_jc:
+.endif
 	addq	#1,r5
 	cmp	r6,r5			; i - mcount
 	movei	#mesh_loop,r22
@@ -1009,6 +1156,39 @@ mesh_next:
 	nop
 	or	r0,r0			; consume (order barrier; `or` is the
 					; idiom the hazard checker credits)
+.if JCENT=1
+	; ☠️ The LAST mesh's centroid store happens AFTER its last vertex store,
+	; so draining on the vert long above does NOT cover it - the 68k could
+	; see MAGIC_DONE with the final mesh's sums still posted.  Read the last
+	; centroid long back as well.  (r5 == mcount here: the mesh loop exits
+	; on cmp r6,r5.)
+	cmpq	#0,r5
+	movei	#no_jcd,r22
+	jump	EQ,(r22)
+	nop
+	nop
+	movei	#20,r0
+	add	r4,r0
+	load	(r0),r1			; mtout base (0 = feature off)
+	cmpq	#0,r1
+	movei	#no_jcd,r22
+	jump	EQ,(r22)
+	nop
+	nop
+	move	r5,r0
+	subq	#1,r0			; last mesh index
+	move	r0,r2
+	shlq	#3,r0
+	shlq	#2,r2
+	add	r2,r0			; idx*12
+	add	r0,r1
+	addq	#8,r1			; +8 = the third long, written last
+	load	(r1),r0
+	nop
+	nop
+	or	r0,r0
+no_jcd:
+.endif
 	movei	#MAGIC_DONE,r0
 	movei	#D_PARAMS,r22
 	load	(r22),r22
@@ -1084,3 +1264,14 @@ i2s_isr:
 	bset	#3,r17			; force IMASK held
 	jump	T,(r30)
 	store	r17,(r16)		; ...lands as we leave
+
+.if JOVL=1
+;=====================================================================
+; ovl_area - the free tail of Jerry's 4192-byte code window.  NOT reserved
+; with storage (that would inflate the binary and trip the Makefile's 4192
+; guard); it is simply the address one instruction past the resident image.
+; Overlay images are built separately and copied here at runtime.
+;=====================================================================
+ovl_area:
+.endif
+

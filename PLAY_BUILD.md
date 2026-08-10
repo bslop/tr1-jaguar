@@ -30,7 +30,43 @@ Without `MOVESET=1` this reproduces `probes/PLAY_MOVESET2.cof` exactly
 added — that identity is what pins the list down.
 
 
-## ★★★★★ 2026-08-08 — THE DEMO ROM WITH THE VIDEO FIX: `demo11_p272`
+## ★★★★★ 2026-08-10 — CURRENT DEMO ROM: `demo14_p272`
+```
+tools/gbuild.sh demo14 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 \
+                       BLOBCACHE=1 JCENT=1 JOVL=1
+tools/vsweep_game.sh build_demo14 demo14 <outdir> 45
+```
+`demo12` plus the ANIMATION work on Jerry: the spinning pickups and the swinging
+doors have their vertex transforms done by the `dsp_ovl_ent` overlay, not the
+68000.  **Lit pad: 272.**  Verified on silicon by A/B against the 68k path from
+an identical spawn - door-band mean abs diff 1.1-1.3 vs a 1.2 control, i.e.
+equivalent within rounding (Jerry's cos/sin carry 2 fewer fraction bits).
+
+## ★★★★★ 2026-08-09 — PREVIOUS: `demo12_p0`  (6.28 -> 6.60 fps)
+
+```
+tools/gbuild.sh demo12 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 \
+                       BLOBCACHE=1 JCENT=1 JOVL=1
+tools/vsweep_game.sh build_demo12 demo12 <outdir> 45
+```
+`demo11` plus three flags off the 68k-eviction campaign.  **Lit pad: 0.**
+
+**+5.1% on silicon, measured properly**: 6.28 -> 6.60 fps on the SAME pad, and
+confirmed by two independent instruments (`tools/beacon_fps_fast.py` 6.60 and
+`tools/framechange_fps.py` 6.62, which never looks at the beacon).
+- `BLOBCACHE=1` - the 68k was rebuilding every bridge/door/lever blob EVERY
+  FRAME although none of them had moved.  Cache per draw slot, keyed on the
+  entity plus whatever can actually change.
+- `JCENT=1` - Jerry emits each Lara mesh's centroid SUMS during the pose pass
+  it was already doing, so `lara_finish` stops re-walking ~500 posed verts.
+  Sums are the same quantity the 68k computed => painter order unchanged.
+- `JOVL=1` - Jerry code-overlay loader (CMD=3).  Costs 96 bytes; no overlay is
+  loaded yet, so it is inert in this ROM.
+
+☠️ `ENEMIES=1` IS NOT PLUMBED IN THE MAKEFILE - it expands to nothing.  It is
+carried here only because `demo11` carried it; the bats are NOT in this build.
+
+## ★★★★★ 2026-08-08 — THE PREVIOUS DEMO ROM WITH THE VIDEO FIX: `demo11_p272`
 
 ```
 tools/gbuild.sh demo11 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1

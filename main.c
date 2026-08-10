@@ -1403,6 +1403,14 @@ static void lemit_range(uint8_t *buf, int fd, int ld)
 }
 #endif /* LEMITDIET */
 
+#ifdef JCENT
+/* Jerry's per-mesh centroid SUMS (sum of the posed rx, wy, rz it just wrote).
+   Jerry already visits every one of those vertices; the 68000 was walking all
+   of them a second time purely to re-derive these three numbers per mesh. */
+/* 32, matching jerry.c's mcount guard - Jerry indexes this by mesh with no
+   bound of its own, so it must cover every mcount the kick will accept. */
+static int32_t g_jcent[32][3] __attribute__((aligned(8)));
+#endif
 static void lara_finish(uint8_t *buf, int atlasW)
 {
     int mc = g_sk_mcount, i, k;
@@ -1431,10 +1439,15 @@ static void lara_finish(uint8_t *buf, int atlasW)
         const int16_t *v = (const int16_t *)(buf + 16 + skvb[i]*8);
         int vlen = skvl[i];
         int32_t sx=0, sy=0, sz=0;
+#ifdef JCENT
+        /* Jerry summed these in the same pass that produced the verts */
+        sx = g_jcent[i][0]; sy = g_jcent[i][1]; sz = g_jcent[i][2]; (void)v;
+#else
         for (k = 0; k < vlen; k++) {
             sx += v[0]; sy += v[1]; sz += v[2];
             v += 4;
         }
+#endif
         if (vlen>=3){ int rc=(int)ps_recip[i];
                      int cx=wbaseX+(mul32x16(sx,rc)>>16)-g_camx;
                      int cy=(mul32x16(sy,rc)>>16)-g_camy;
@@ -1449,12 +1462,16 @@ static void lara_finish(uint8_t *buf, int atlasW)
         const uint8_t *v = buf + 16 + skvb[i]*8;
         int vlen = skvl[i];
         int32_t sx=0, sy=0, sz=0;
+#ifdef JCENT
+        sx = g_jcent[i][0]; sy = g_jcent[i][1]; sz = g_jcent[i][2]; (void)v;
+#else
         for (k = 0; k < vlen; k++) {
             sx += (int16_t)((v[0]<<8)|v[1]);
             sy += (int16_t)((v[2]<<8)|v[3]);
             sz += (int16_t)((v[4]<<8)|v[5]);
             v += 8;
         }
+#endif
         if (vlen>0){ int cx=wbaseX+sx/vlen-g_camx, cy=sy/vlen-g_camy, cz=wbaseZ+sz/vlen-g_camz;
                      ps_mdepth[i]=mul16(cx,cx)+mul16(cy,cy)+mul16(cz,cz); } else ps_mdepth[i]=0;
         ps_morder[i]=i;
@@ -1888,6 +1905,28 @@ static uint8_t ent_sw_blob[ENT_SW_MAXDRAW][640] __attribute__((aligned(8)));
 static uint8_t ent_br_blob[ENT_BR_MAXDRAW][384] __attribute__((aligned(8)));
 #define ENT_PK_MAXDRAW 3
 static uint8_t ent_pk_blob[ENT_PK_MAXDRAW][384] __attribute__((aligned(8)));
+#ifdef BLOBCACHE
+/* THE 68000 REBUILT ALL OF THESE EVERY FRAME.  A bridge does not move, a shut
+   door does not move, and an un-pulled lever does not move - yet build_ent_*()
+   re-derived every vertex and every face of every visible entity, every frame,
+   on the chip that IS the frame rate.  Cache per draw slot, keyed on the
+   entity plus whatever about it can actually change, and rebuild only when the
+   key changes.  Key 0 = empty, so BSS zero-init IS the empty cache.
+   ☠️ The key must name EVERY mutable input the builder reads, or the entity
+   freezes on screen: door reads g_dooff (swing) and g_doorsw (which side Lara
+   is on), switch reads g_swpull.  A bridge reads nothing but its own baked
+   position, so its key is the entity alone. */
+static uint32_t br_sig[ENT_BR_MAXDRAW];
+static uint32_t door_sig[ENT_DOOR_MAXDRAW];
+static uint32_t sw_sig[ENT_SW_MAXDRAW];
+/* 1 = slot already holds this exact blob (skip the build); 0 = stale, and the
+   key is stamped so the rebuilt blob is the one cached. */
+static int blob_hit(uint32_t *tab, int slot, uint32_t sig)
+{
+    if (tab[slot] == sig) return 1;
+    tab[slot] = sig; return 0;
+}
+#endif
 #ifdef DARTS
 #define ENT_DART_MAXDRAW 8
 static uint8_t ent_dart_blob[ENT_DART_MAXDRAW][384] __attribute__((aligned(8)));
@@ -2015,6 +2054,44 @@ static void build_ent_bear(uint8_t *buf, int atlasW, int e, int frame)
 static int ent_is_pickup(int t) { return t==83 || t==93 || t==94; }
 static uint8_t g_pickgot[MRT_ENTCOUNT];  /* pickup already collected */
 static uint8_t g_pickspin;               /* shared pickup spin angle */
+#ifdef JOVL
+/* ---- ANIMATED ENTITY VERTS ON JERRY (dsp_ovl_ent) -----------------------
+ * User: "anything having to do with animation" comes off the 68000.  A pickup
+ * SPINS, so its vertex rebuild ran on the 68k every frame and no cache could
+ * ever hit it.  Collect one job per animated entity here, then hand the whole
+ * list to Jerry once per frame (after the pose, which owns Jerry until then).
+ * Job layout is the overlay's contract: 8 longs {src,n,cos,sin,rx0,y,rz0,dst}.
+ * ☠️ src verts are LONGS, not packed s16 - Jerry's byte/word DRAM reads are
+ * unreliable, so item_v is widened once into g_item_vl. */
+#define OVL_MAXJOB 8
+static int32_t g_ovljobs[OVL_MAXJOB][8] __attribute__((aligned(8)));
+static int     g_ovlnjob;
+static int32_t g_item_vl[8][3] __attribute__((aligned(8)));
+static uint8_t g_item_vl_ok;
+static void ovl_push_pickup(uint8_t *buf, int e)
+{
+    int wx = mrt_ent[e].x, wz = mrt_ent[e].z, y = mrt_ent[e].y - 300;
+    int32_t *j; int i;
+    if (!g_item_vl_ok) {
+        for (i = 0; i < 8; i++) { g_item_vl[i][0] = item_v[i][0];
+                                  g_item_vl[i][1] = item_v[i][1];
+                                  g_item_vl[i][2] = item_v[i][2]; }
+        g_item_vl_ok = 1;
+    }
+    if (g_ovlnjob >= OVL_MAXJOB) return;      /* silently capped: say so below */
+    j = g_ovljobs[g_ovlnjob++];
+    j[0] = (int32_t)(uint32_t)(const void *)g_item_vl;
+    j[1] = 8;
+    /* ☠️ >>2 so each fits s16: Jerry's imult is 16x16 and silently uses only
+       the low half - a 16.16 cosine renders the cube as a spike to infinity. */
+    j[2] = (int32_t)(COS(g_pickspin) >> 2);
+    j[3] = (int32_t)(SIN(g_pickspin) >> 2);
+    j[4] = wx & 255;
+    j[5] = y;
+    j[6] = wz & 255;
+    j[7] = (int32_t)(uint32_t)(void *)(buf + 16);
+}
+#endif
 #define PICKUP_REACH 700                 /* |dx|+|dz| to grab it     */
 
 /* a spinning pickup cube at the entity's floor position (gold swatch, like the
@@ -2029,6 +2106,14 @@ static void build_ent_pickup(uint8_t *buf, int atlasW, int e)
     h[0]=8; h[1]=6; h[2]=0; h[3]=(uint16_t)atlasW; h[4]=(uint16_t)g_ltx_atH;
     h[5]=(uint16_t)offX; h[6]=0; h[7]=(uint16_t)offZ;
     w = (uint16_t *)(buf + 16);
+#ifdef JOVL
+    /* JERRY WRITES THESE VERTS (dsp_ovl_ent): the pickup spins, so this loop
+       ran on the 68000 every single frame and no cache could ever hit it.
+       The header and the faces above/below are static and ARE cached, so all
+       that is left here is to skip past the vertex region. */
+    (void)c; (void)s; (void)rx0; (void)rz0;
+    w += 8*4;
+#else
     for (i=0;i<8;i++) {
         int mx=item_v[i][0], my=item_v[i][1], mz=item_v[i][2];
         int rx=(int)(((int32_t)mx*c + (int32_t)mz*s)>>16)+rx0;
@@ -2036,6 +2121,7 @@ static void build_ent_pickup(uint8_t *buf, int atlasW, int e)
         w[0]=(uint16_t)(int16_t)rx; w[1]=(uint16_t)(int16_t)(y+my);
         w[2]=(uint16_t)(int16_t)rz; w[3]=255; w += 4;
     }
+#endif
     for (i=0;i<6;i++) {
         EMIT_PLANE(w);
         w[0]=item_q[i][0]; w[1]=item_q[i][1]; w[2]=item_q[i][2]; w[3]=item_q[i][3];
@@ -2458,6 +2544,56 @@ static int ent_door_blocks(int room, int ox, int oz, int nx, int nz)
 }
 
 /* one door slab, oriented by the entity's yaw (0/128 = wide in X). */
+#ifdef JOVL
+/* A DOOR is not a spin: it hinges, and which rotated component becomes X
+   depends on the doorway's orientation - a swap that happens AFTER the
+   rotation, hence the overlay's swap bit.  The mapping (derived against
+   build_ent_door, which stays as the reference implementation):
+     mx = rel, mz = thin, my = the vertex's world Y   [all static per door]
+     c  =  COS(ang)>>2,  s = -(SIN(ang)>>2)   <- NEGATED: the door rotates the
+            opposite way round to the overlay's convention, and >>2 because
+            imult is 16x16 (see the pickup).
+   then comp0 = rs, comp1 = ts exactly as build_ent_door computes them, and the
+   per-AXIS origins fold the hinge offset and the g_doorsw shift in. */
+#define OVL_DOOR_SLOTS ENT_DOOR_MAXDRAW
+static int32_t g_door_vsrc[OVL_DOOR_SLOTS][8][3] __attribute__((aligned(8)));
+static int     g_door_vsrc_ent[OVL_DOOR_SLOTS];   /* entity+1 cached, 0 = none */
+static void ovl_push_door(uint8_t *buf, int slot, int e)
+{
+    int wx = mrt_ent[e].x, wz = mrt_ent[e].z;
+    int rx0 = wx & 255, rz0 = wz & 255;
+    int alongX = (mrt_ent[e].yaw == 0 || mrt_ent[e].yaw == 128);
+    int hinge  = g_doorhinge[e];
+    int ang    = g_doorsw[e] * hinge * g_dooff[e];
+    int H      = (mrt_ent[e].type == 60) ? DOOR_H_SHORT : DOOR_H_TALL;
+    int floorY = g_doorbase[e] + 720;
+    int shift  = g_doorsw[e] * (DOOR_SPANH - DOOR_THINH);
+    int32_t *j; int i;
+
+    if (g_ovlnjob >= OVL_MAXJOB || slot >= OVL_DOOR_SLOTS) return;
+    /* the local triples depend only on the door, not on the swing angle */
+    if (g_door_vsrc_ent[slot] != e + 1) {
+        for (i = 0; i < 8; i++) {
+            int a = item_v[i][0], b = item_v[i][2];
+            int span = ((alongX ? a : b) > 0) ?  DOOR_SPANH : -DOOR_SPANH;
+            int thin = ((alongX ? b : a) > 0) ?  DOOR_THINH : -DOOR_THINH;
+            g_door_vsrc[slot][i][0] = span - hinge * DOOR_SPANH;   /* rel  */
+            g_door_vsrc[slot][i][1] = (item_v[i][1] > 0) ? floorY : floorY - H;
+            g_door_vsrc[slot][i][2] = thin;
+        }
+        g_door_vsrc_ent[slot] = e + 1;
+    }
+    j = g_ovljobs[g_ovlnjob++];
+    j[0] = (int32_t)(uint32_t)(const void *)g_door_vsrc[slot];
+    j[1] = 8 | (alongX ? 0 : (1 << 16));     /* bit16 = swap the components */
+    j[2] =  (int32_t)(COS(ang) >> 2);
+    j[3] = -(int32_t)(SIN(ang) >> 2);        /* negated - see the note above */
+    if (alongX) { j[4] = hinge * DOOR_SPANH + rx0; j[6] = rz0 - shift; }
+    else        { j[4] = rx0 - shift;              j[6] = hinge * DOOR_SPANH + rz0; }
+    j[5] = 0;                                 /* Y is carried per-vertex */
+    j[7] = (int32_t)(uint32_t)(void *)(buf + 16);
+}
+#endif
 static void build_ent_door(uint8_t *buf, int atlasW, int e)
 {
     int wx = mrt_ent[e].x, wz = mrt_ent[e].z;
@@ -2484,6 +2620,14 @@ static void build_ent_door(uint8_t *buf, int atlasW, int e)
       int cs = COS(ang), sn = SIN(ang);
       int H     = (mrt_ent[e].type == 60) ? DOOR_H_SHORT : DOOR_H_TALL;
       int floorY = g_doorbase[e] + 720;            /* baked as floor-720 */
+#ifdef JOVL
+      /* JERRY WRITES THESE VERTS (dsp_ovl_ent): a swinging door changes every
+         frame, so no cache can hold it.  Only the ANGLE varies - the local
+         (rel, Y, thin) triples are static per door and are precomputed once
+         in ovl_push_door(). */
+      (void)cs; (void)sn; (void)H; (void)floorY; (void)alongX;
+      w += 8*4;
+#else
       for (i=0;i<8;i++) {
         int a = item_v[i][0], b = item_v[i][2];
         int span = ((alongX ? a : b) > 0) ?  DOOR_SPANH : -DOOR_SPANH;
@@ -2504,7 +2648,9 @@ static void build_ent_door(uint8_t *buf, int atlasW, int e)
         w[2]=(uint16_t)(int16_t)((alongX ? ts : mspan) + rz0);
         w[3]=255;
         w += 4;
-      } }
+      }
+#endif
+      }
     /* DOUBLE-SIDED: emit every quad in BOTH windings.  A pair's two panels
        hinge on opposite ends, and the span-axis-vs-hinge combination inverts
        one panel's winding so the kernel back-face-culls it -> that panel went
@@ -3276,6 +3422,11 @@ int main(void)
     { extern int jerry_init(void);
       gpu_geotex_setclip(0, 319, 0, RENDER_H-1);   /* clip = full screen */
       g_jerry_ok = jerry_init();
+#ifdef JOVL
+      /* copy the entity-transform overlay into Jerry's free tail ONCE; it is
+         CALLED per frame (CMD=4) rather than re-copied. */
+      if (g_jerry_ok) { extern void jerry_ovl_load(void); jerry_ovl_load(); }
+#endif
       CRUMB(0xF81F);                 /* MAGENTA: jerry_init done */
       g_sfx_ok = g_jerry_ok;
       /* constants -> Jerry local SRAM happens later, once skv is converted */
@@ -4741,6 +4892,13 @@ bootvid_entry:
                       mlq[mfdead] = 0;
                       mfo = (mh >= 0 && mfgoal > 0) ? 0 : -1;
                   }
+#ifdef NOMUSIC
+                  /* ABLATION: the in-loop music refill is a 4KB gd_fread on
+                     the 68000 (~3.5ms fixed + 193KB/s => ~25ms).  NOSOUND does
+                     NOT gate this - it only removes two sfx_play calls - so
+                     sizing the streaming needs its own switch. */
+                  mfo = -1;
+#endif
                   if (mfo >= 0) {
                       int step = mfgoal - mfo;
                       if (step > 4096) step = 4096;
@@ -7828,6 +7986,9 @@ bootvid_entry:
             if (gpu_ok) {
                 RP_ALL();
                 int ndrawn = 0;
+#ifdef JOVL
+                g_ovlnjob = 0;          /* one job list per frame */
+#endif
 #ifdef ABLADDER
                 int abinc = 0;   /* rooms admitted this frame (cap g_abrooms) */
 #endif
@@ -7849,7 +8010,16 @@ bootvid_entry:
                     h[0]=(uint16_t)g_lnv; h[1]=(uint16_t)g_lnq; h[2]=(uint16_t)g_lnt;
                     h[3]=(uint16_t)atlasW; h[4]=(uint16_t)g_ltx_atH;
                     h[5]=(uint16_t)offX; h[6]=0; h[7]=(uint16_t)offZ;
-                    jerry_pose_kick(skv, skvl, sknode, ang, (void*)0, lara_blob+16,
+                    jerry_pose_kick(skv, skvl, sknode, ang,
+#ifdef JCENT
+                        /* params[5]: the dead SINTAB slot, reused as the
+                           centroid-sum output so Jerry pays for the vertex
+                           walk it was already doing (see lara_finish). */
+                        (void*)g_jcent,
+#else
+                        (void*)0,
+#endif
+                        lara_blob+16,
                         rd16(rfr), rd16(rfr+2), rd16(rfr+4),
                         COS(g_layaw)>>2, SIN(g_layaw)>>2,
                         g_lax & 255, g_laz & 255, g_lay + LARA_FEET,
@@ -8043,7 +8213,16 @@ bootvid_entry:
                         if (ddx < 0) ddx = -ddx; if (ddz < 0) ddz = -ddz;
                         if (ddx + ddz > 5120) continue; }   /* ~5 sectors */
                       if (nd >= ENT_DOOR_MAXDRAW) break;
+#ifdef BLOBCACHE
+                      /* swing angle AND the side Lara is on: both move the slab */
+                      if (!blob_hit(door_sig, nd, (uint32_t)(e + 1)
+                                    | ((uint32_t)(uint16_t)g_dooff[e] << 8)
+                                    | ((uint32_t)(uint8_t)g_doorsw[e] << 24)))
+#endif
                       build_ent_door(ent_door_blob[nd], atlasW, e);
+#ifdef JOVL
+                      ovl_push_door(ent_door_blob[nd], nd, e);
+#endif
                       displist[1+ndrawn*4+0] = (uint32_t)ent_door_blob[nd];
                       nd++;
                       displist[1+ndrawn*4+1] = 319u;
@@ -8062,6 +8241,10 @@ bootvid_entry:
                         if (ddx < 0) ddx = -ddx; if (ddz < 0) ddz = -ddz;
                         if (ddx + ddz > 5120) continue; }
                       if (ns >= ENT_SW_MAXDRAW) break;
+#ifdef BLOBCACHE
+                      if (!blob_hit(sw_sig, ns, (uint32_t)(e + 1)
+                                    | (g_swpull[e] ? 0x100u : 0u)))
+#endif
                       build_ent_switch(ent_sw_blob[ns], atlasW, e);
                       displist[1+ndrawn*4+0] = (uint32_t)ent_sw_blob[ns];
                       displist[1+ndrawn*4+1] = 319u;
@@ -8082,6 +8265,10 @@ bootvid_entry:
                         if (ddx < 0) ddx = -ddx; if (ddz < 0) ddz = -ddz;
                         if (ddx + ddz > 6144) continue; }
                       if (nb >= ENT_BR_MAXDRAW) break;
+#ifdef BLOBCACHE
+                      /* a bridge reads nothing mutable - key on the entity alone */
+                      if (!blob_hit(br_sig, nb, (uint32_t)(e + 1)))
+#endif
                       build_ent_bridge(ent_br_blob[nb], atlasW, e);
                       displist[1+ndrawn*4+0] = (uint32_t)ent_br_blob[nb];
                       displist[1+ndrawn*4+1] = 319u;
@@ -8101,6 +8288,9 @@ bootvid_entry:
                         if (ddx + ddz > 6144) continue; }
                       if (np >= ENT_PK_MAXDRAW) break;
                       build_ent_pickup(ent_pk_blob[np], atlasW, e);
+#ifdef JOVL
+                      ovl_push_pickup(ent_pk_blob[np], e);
+#endif
                       displist[1+ndrawn*4+0] = (uint32_t)ent_pk_blob[np];
                       displist[1+ndrawn*4+1] = 319u;
                       displist[1+ndrawn*4+2] = (uint32_t)(RENDER_H-1);
@@ -8244,9 +8434,23 @@ bootvid_entry:
                         extern void jerry_pose_read(void*,int);
                         extern void jerry_roomx_kick(const void*, const void*);
                         jerry_pose_sync();
+#ifdef JOVL
+                        /* Jerry is free only now - the pose owned it through
+                           the whole entity walk above. */
+                        if (g_ovlnjob) {
+                            extern void jerry_ovl_run(const void *, uint32_t);
+                            extern int  jerry_ovl_sync(void);
+                            jerry_ovl_run(g_ovljobs, (uint32_t)g_ovlnjob);
+                            jerry_ovl_sync();
+                        }
+#endif
                         HLP(3); RP(4);
                         /* Jerry wrote lara_blob+16 directly (params[6]) */
+                        
+#ifndef NOLARA
                         lara_finish(lara_blob, atlasW);
+#endif
+
                         HLP(4); RP(5);
                         HB(2);   /* stage 2: pose consumed */
                         if (njx) {
@@ -8285,6 +8489,10 @@ bootvid_entry:
                     if (g_abrooms >= 0)
 #endif
                     { uint32_t dn = displist[0];
+#ifdef NOLARA
+                      dn = dn;   /* ABLATION: Lara not dispatched */
+                      goto nolara_skip;
+#endif
                       /* bit0 of the blob ptr = PER-PACKET NO-CULL (kernel
                          NCULF). Not set anymore: the extractor's LARA
                          WINDING FIX reorients her 11 inconsistently-wound
@@ -8296,7 +8504,11 @@ bootvid_entry:
                       displist[1+dn*4+2] = (0u<<16) | (uint32_t)(RENDER_H-1);
                       displist[1+dn*4+3] = 0;        /* Tom self-transform */
                       displist[0] = dn + 1;
-                      lara_disp = 1; }
+                      lara_disp = 1;
+#ifdef NOLARA
+                      nolara_skip: ;
+#endif
+                      }
                     /* TWO-BATCH DISPATCH: the SRAM list holds 8 entries; big
                        junctions (>7 rooms) render in two sequential batches
                        (painter order preserved: far batch first). Dropping
@@ -8376,7 +8588,11 @@ bootvid_entry:
                     extern int jerry_pose_sync(void);
                     extern void jerry_pose_read(void*,int);
                     jerry_pose_sync();
-                    lara_finish(lara_blob, atlasW);
+                    
+#ifndef NOLARA
+                        lara_finish(lara_blob, atlasW);
+#endif
+
                 }
                 g_jerry_frame_done = 0;
 #endif

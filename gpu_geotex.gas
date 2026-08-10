@@ -1499,11 +1499,28 @@ vcs_ok:
 	load	(r0),r19
 	nop
 	nop
-	; any vertex behind -> skip whole poly
 	cmpq	#0,r19
+.if NEARCLIP=1
+	; ---- NEAR-PLANE EDGE CLIP (hoisted to the FACE loop) ----------------
+	; A face with a vertex behind NEAR used to be thrown away whole - the
+	; R4 rock that blinks.  Clip the crossing edge to z = NEAR instead.
+	; HOISTED HERE, not into stage_vert, because in the face phase r14 is
+	; re-established per face (movei #WBUF,r14) and the alt bank can park
+	; what must survive in ONE instruction each, where stage_vert would
+	; have to spill r10-r14 to SRAM around every vertex.
+	; Handles exactly ONE behind vertex - the single-corner case, which is
+	; what a floor slab under the camera does.  Two or more still drop the
+	; face, as today.
+	movei	#nc_try,r22
+	jump	NE,(r22)
+	nop
+nc_back:
+.else
+	; any vertex behind -> skip whole poly
 	movei	#pkt_done,r22
 	jump	NE,(r22)
 	nop
+.endif
 .endif
 	; (BEXIT=1: stage_vert aborts the face at the FIRST behind-sentinel
 	; vert — no face with a behind vert ever reaches render_pkt, so the
@@ -3892,6 +3909,60 @@ ip_wide:
 	nop
 
 ;=====================================================================
+.if NEARCLIP=1
+;=====================================================================
+; nc_try: one behind vertex -> clip its edge to z = NEAR.
+;   in:  r21 = n (verts this face), r20 = face record base (vertex indices),
+;        SX_BUF/SY_BUF staged (sentinel in the behind slot), WBUF+4 = world.
+;   out: SX_BUF[j]/SY_BUF[j] replaced with the crossing point, or jumps to
+;        pkt_done if the face cannot be clipped (0 or >1 behind).
+; The arithmetic is the sequence proven offline in tools/clip_math_test.gas:
+;   num = A_z - NEAR ; den = A_z - B_z ; P = A + num*(B-A)/den   (world)
+; then transform P and project it.  P lies ON the plane, so the projection
+; divide is by NEAR (64) - a shift, not a divide.
+;=====================================================================
+nc_try:
+	; --- find the single sentinel slot -> r23 = j, r19 = count ----------
+	movefa	r11,r2			; SX_BUF
+	moveq	#0,r19			; count
+	moveq	#0,r9			; j
+	movei	#$07FFFFFF,r3
+nc_scan:
+	move	r9,r0
+	shlq	#2,r0
+	add	r2,r0
+	load	(r0),r1
+	nop
+	nop
+	cmp	r3,r1
+	jr	NE,nc_sn
+	nop
+	addq	#1,r19
+	move	r9,r23			; remember the behind slot
+nc_sn:
+	addq	#1,r9
+	cmp	r21,r9
+	jr	NE,nc_scan
+	nop
+	; exactly one behind vertex, or give up
+	cmpq	#1,r19
+	movei	#pkt_done,r22
+	jump	NE,(r22)
+	nop
+	; --- neighbour A = (j-1+n) mod n ------------------------------------
+	move	r23,r9
+	subq	#1,r9
+	jr	PL,nc_ha
+	nop
+	move	r21,r9
+	subq	#1,r9
+nc_ha:
+	; r9 = A slot, r23 = B slot (behind)
+	movei	#nc_back,r22		; nothing implemented past here yet -
+	jump	T,(r22)			; the face falls through unclipped so
+	nop				; this arm is measurable, not live
+.endif
+
 ; stage_vert: look up an RVert, add the room offset, append WORLD (x,y,z) as
 ;   3 longs at r14.  gpu_geomdirect VERBATIM.
 ;   in:  r1 = vertex index (unsigned), r10 = VERTS base, r11 = offX<<8,
