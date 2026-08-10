@@ -371,6 +371,17 @@ static int g_flr_wy;      /* caller's current Y for Y-AWARE floor selection:
 static void lara_sidestep(int side, const uint8_t **rsect, int roomCount)
     __attribute__((noinline));
 #endif
+/* 76800-byte scratch arena.  Its FIRST tenant is the video shadow-decode frame
+   (320x240, one private frame the jvdec tokens apply to).  Its SECOND is the
+   long-aligned sector mirror under SECTLONG.
+   ☠️ THE INVARIANT THAT MAKES THIS SAFE: clips play at BOOT and before a level;
+   the sector mirror is built at LEVEL LOAD, after the last clip, and is dead
+   before any clip can play again.  They are never live at the same time.  A
+   video played MID-GAME would corrupt collision - if that is ever added, give
+   the mirror its own storage.  Re-entering a level rebuilds the mirror, so the
+   title -> video -> level path is safe. */
+static uint8_t g_vidscratch[320*240] __attribute__((aligned(16)));
+
 #ifdef SECTLONG
 /* ---- LONG-ALIGNED SECTOR MIRROR (built once at level load) ---------------
  * The collision data is byte-packed (room header as 2- and 4-byte big-endian
@@ -387,8 +398,10 @@ static void lara_sidestep(int side, const uint8_t **rsect, int roomCount)
  *       still need it, so it is NOT pre-masked here)
  *   [1] the second word (ceiling), sign-extended
  *   [2] (slantX << 16) | (slantZ & 0xFFFF), both s8 sign-extended in place */
-#define SECTL_LONGS 14336                  /* 56KB; checked against need below */
-static int32_t  g_sectl[SECTL_LONGS] __attribute__((aligned(8)));
+/* the arena is 76800 bytes = 19200 longs; the whole 38-room level needs ~12.3K
+   longs at 3 longs/cell, so the richer layout fits with room to spare. */
+#define SECTL_LONGS (320*240/4)
+#define g_sectl     ((int32_t *)g_vidscratch)
 static int32_t *g_sectl_room[64];
 static int      g_sectl_ok;
 static int      g_sectl_used;
@@ -4071,7 +4084,7 @@ bootvid_entry:
             /* SHADOW frame: the ONE place delta semantics live. Painted by
                the 68k from the token stream, then block-copied whole into
                the display buffer every frame. */
-            static uint8_t vshadow[320*240] __attribute__((aligned(16)));
+            uint8_t *const vshadow = g_vidscratch;   /* shared arena, see decl */
             extern volatile uint32_t video_two_buf;
             int vc;
             /* JV04 (user: "the original videos from the disc"): NATIVE
