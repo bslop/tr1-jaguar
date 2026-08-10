@@ -1435,6 +1435,15 @@ CFLAGS   += -DJOVL
 CXXFLAGS += -DJOVL
 endif
 
+# make SECTLONG=1: build a LONG-ALIGNED mirror of the sector data once at level
+# load.  Jerry cannot reliably byte-read DRAM, so collision cannot move to it
+# while the data is byte-packed - and repacking in the EXTRACTOR would mean an
+# asset regen, the step this project has been burned by.  ~56KB of BSS.
+ifdef SECTLONG
+CFLAGS   += -DSECTLONG
+CXXFLAGS += -DSECTLONG
+endif
+
 # STAGECHK=1: checksum the display list the 68k stages each frame and count
 # how often it changes while the CAMERA is unchanged.  Answers whether the
 # flickering faces are lost 68k-side or inside Tom's render.

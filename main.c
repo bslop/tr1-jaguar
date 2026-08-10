@@ -371,6 +371,69 @@ static int g_flr_wy;      /* caller's current Y for Y-AWARE floor selection:
 static void lara_sidestep(int side, const uint8_t **rsect, int roomCount)
     __attribute__((noinline));
 #endif
+#ifdef SECTLONG
+/* ---- LONG-ALIGNED SECTOR MIRROR (built once at level load) ---------------
+ * The collision data is byte-packed (room header as 2- and 4-byte big-endian
+ * fields, cells at stride 6), and JERRY'S BYTE/WORD READS OF DRAM ARE
+ * UNRELIABLE - the same quirk that forces the pose angle bytes into SRAM one
+ * LONG per byte.  So before any of this can move to Jerry it has to exist in
+ * long-aligned form.
+ * ☠️ Deliberately NOT done in the extractor: an asset regen is the step this
+ * project has been burned by (a bare run replaces the level with a 5-room
+ * stand-in, and the .bin files are gitignored so git stays silent).  The
+ * packing only has to be gone AT RUNTIME, so repack once at level load.
+ * Layout per room: 4 longs {xS, zS, ix, iz} then xS*zS cells of 3 longs
+ *   [0] floor word AS STORED (bit0 = the extractor's water mark - callers
+ *       still need it, so it is NOT pre-masked here)
+ *   [1] the second word (ceiling), sign-extended
+ *   [2] (slantX << 16) | (slantZ & 0xFFFF), both s8 sign-extended in place */
+#define SECTL_LONGS 14336                  /* 56KB; checked against need below */
+static int32_t  g_sectl[SECTL_LONGS] __attribute__((aligned(8)));
+static int32_t *g_sectl_room[64];
+static int      g_sectl_ok;
+static int      g_sectl_used;
+static int sectlong_build(const uint8_t **rsect, int n)
+{
+    int r, c, used = 0;
+    for (r = 0; r < n && r < 64; r++) {
+        const uint8_t *sp = rsect[r];
+        int xS = (sp[0]<<8)|sp[1], zS = (sp[2]<<8)|sp[3];
+        int cells = xS * zS;
+        int32_t *d;
+        if (used + 4 + cells*3 > SECTL_LONGS) return 0;    /* refuse, stay off */
+        d = &g_sectl[used];
+        g_sectl_room[r] = d;
+        d[0] = xS; d[1] = zS;
+        d[2] = (int)(((uint32_t)sp[4]<<24)|((uint32_t)sp[5]<<16)|((uint32_t)sp[6]<<8)|sp[7]);
+        d[3] = (int)(((uint32_t)sp[8]<<24)|((uint32_t)sp[9]<<16)|((uint32_t)sp[10]<<8)|sp[11]);
+        for (c = 0; c < cells; c++) {
+            const uint8_t *e = sp + 12 + c*6;
+            int32_t *o = d + 4 + c*3;
+            o[0] = (int16_t)(((uint16_t)e[0]<<8)|e[1]);
+            o[1] = (int16_t)(((uint16_t)e[2]<<8)|e[3]);
+            o[2] = ((int32_t)(int8_t)e[4] << 16) | ((int32_t)(uint8_t)e[5]);
+        }
+        used += 4 + cells*3;
+    }
+    /* SELF-CHECK: every cell must round-trip, or the mirror is worse than
+       useless - it would disagree with collision only in rare places. */
+    for (r = 0; r < n && r < 64; r++) {
+        const uint8_t *sp = rsect[r];
+        const int32_t *d = g_sectl_room[r];
+        int xS = (sp[0]<<8)|sp[1], zS = (sp[2]<<8)|sp[3];
+        if (d[0] != xS || d[1] != zS) return 0;
+        for (c = 0; c < xS*zS; c++) {
+            const uint8_t *e = sp + 12 + c*6;
+            const int32_t *o = d + 4 + c*3;
+            if (o[0] != (int16_t)(((uint16_t)e[0]<<8)|e[1])) return 0;
+            if ((int8_t)(o[2] >> 16) != (int8_t)e[4]) return 0;
+            if ((int8_t)(o[2] & 0xFF) != (int8_t)e[5]) return 0;
+        }
+    }
+    g_sectl_used = used;
+    return 1;
+}
+#endif
 static int room_floor_mr(const uint8_t **rsect, int n, int wx, int wz, int *floorY)
 {
     int r, found = 0, best = 0, best_w = 0;
@@ -6054,6 +6117,15 @@ bootvid_entry:
             const uint8_t *sp;
             rgeom[i] = S_geom + goff;
             rsect[i] = S_sect + soff;
+#ifdef SECTLONG
+            if (i == roomCount - 1) {
+                /* all rsect[] are set by now: build the long-aligned mirror.
+                   Refuses (and stays off) if it would not fit or if any cell
+                   fails to round-trip - a mirror that disagrees with the byte
+                   data in rare cells is worse than no mirror at all. */
+                g_sectl_ok = sectlong_build(rsect, roomCount);
+            }
+#endif
             sp = rsect[i];
             { int xS=(sp[0]<<8)|sp[1], zS=(sp[2]<<8)|sp[3];
               int ix=(int)(((uint32_t)sp[4]<<24)|((uint32_t)sp[5]<<16)|((uint32_t)sp[6]<<8)|sp[7]);
