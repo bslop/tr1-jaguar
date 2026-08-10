@@ -161,6 +161,158 @@ job_next:
 	nop
 	nop
 
+; ===================================================================
+; PHASE 2 - FLOOR PROBES against the SECTLONG mirror.
+;   mailbox[8] = probe list, mailbox[9] = probe count
+; probe = 4 longs: [0] room mirror base (g_sectl_room[r])
+;                  [1] lx  (wx - room origin x, computed by the 68k)
+;                  [2] lz
+;                  [3] OUT: floor height with the slope applied, water bit0
+;                           intact; or $7FFF when the probe misses the room.
+; This is the per-CELL half of room_floor_mr - the ~400-cells-per-render part
+; the source calls out as the #1 game-code cost.  Room selection and the tier
+; logic stay on the 68k for now; this is the piece that had to wait for the
+; long-aligned mirror, because Jerry cannot byte-read the packed cells.
+; ===================================================================
+	movei	#D_PARAMS,r4
+	load	(r4),r0
+	nop
+	nop
+	addq	#32,r0			; mailbox[8]
+	load	(r0),r5			; probe cursor
+	addq	#4,r0			; mailbox[9]
+	load	(r0),r6			; probe count
+	nop
+	cmpq	#0,r6
+	movei	#ovl_ret,r22
+	jump	EQ,(r22)
+	nop
+	nop
+fp_loop:
+	move	r5,r0
+	load	(r0),r7			; d = room mirror base
+	addq	#4,r0
+	load	(r0),r8			; lx
+	addq	#4,r0
+	load	(r0),r9			; lz
+	nop
+	nop
+	movei	#$7FFF,r13		; the miss sentinel
+	; bounds: 0 <= lx < xS*1024 and 0 <= lz < zS*1024
+	move	r7,r0
+	load	(r0),r10		; xS
+	addq	#4,r0
+	load	(r0),r11		; zS
+	nop
+	nop
+	cmpq	#0,r8
+	movei	#fp_store,r22
+	jump	MI,(r22)
+	nop
+	cmpq	#0,r9
+	movei	#fp_store,r22
+	jump	MI,(r22)
+	nop
+	move	r10,r0
+	shlq	#10,r0			; xS*1024
+	cmp	r0,r8
+	movei	#fp_store,r22		; lx >= xS*1024 -> miss
+	jump	PL,(r22)
+	nop
+	move	r11,r0
+	shlq	#10,r0
+	cmp	r0,r9
+	movei	#fp_store,r22
+	jump	PL,(r22)
+	nop
+	; cell = (lx>>10)*zS + (lz>>10);  o = d + 16 + cell*12
+	move	r8,r0
+	sharq	#10,r0
+	imult	r11,r0			; both fit s16 (grid dims are small)
+	move	r9,r1
+	sharq	#10,r1
+	nop
+	add	r1,r0			; cell index
+	move	r0,r1
+	shlq	#3,r0
+	shlq	#2,r1
+	add	r1,r0			; cell*12
+	addq	#16,r0			; skip the 4-long room header
+	add	r7,r0			; o
+	load	(r0),r12		; o[0] = floor word as stored
+	addq	#8,r0
+	load	(r0),r14		; o[2] = (slantX<<16)|slantZ
+	nop
+	nop
+	; 7FFE/7FFF = wall or floor-opening: the room below supplies the floor
+	move	r12,r0
+	movei	#$FFFFFFFE,r1
+	and	r1,r0
+	movei	#$7FFE,r1
+	cmp	r1,r0
+	movei	#fp_store,r22		; >= 7FFE -> miss
+	jump	PL,(r22)
+	nop
+	move	r12,r13
+	moveq	#1,r0
+	and	r13,r0			; r0 = water bit
+	movei	#$FFFFFFFE,r1
+	and	r1,r13			; even floor height
+	; slope: fy -= (s * (s>0 ? frac-1023 : frac)) >> 2, per axis
+	move	r8,r2
+	movei	#1023,r1
+	and	r1,r2			; dx
+	move	r14,r3
+	sharq	#16,r3			; slantX, sign-extended
+	move	r2,r1
+	cmpq	#0,r3
+	jr	MI,fp_x
+	nop
+	jr	EQ,fp_x
+	nop
+	movei	#1023,r1
+	sub	r1,r2
+	move	r2,r1			; s>0 -> frac-1023
+fp_x:
+	imult	r3,r1
+	nop
+	nop
+	sharq	#2,r1
+	sub	r1,r13
+	move	r9,r2
+	movei	#1023,r1
+	and	r1,r2			; dz
+	move	r14,r3
+	shlq	#24,r3
+	sharq	#24,r3			; slantZ, sign-extended
+	move	r2,r1
+	cmpq	#0,r3
+	jr	MI,fp_z
+	nop
+	jr	EQ,fp_z
+	nop
+	movei	#1023,r1
+	sub	r1,r2
+	move	r2,r1
+fp_z:
+	imult	r3,r1
+	nop
+	nop
+	sharq	#2,r1
+	sub	r1,r13
+	or	r0,r13			; put the water bit back
+fp_store:
+	move	r5,r0
+	addq	#12,r0
+	store	r13,(r0)		; probe[3] = result
+	movei	#16,r0
+	add	r0,r5
+	subq	#1,r6
+	movei	#fp_loop,r22
+	jump	NE,(r22)
+	nop
+	nop
+
 ovl_ret:
 	; DRAIN: read back the last written long so the posted writes land before
 	; the 68k is told the job is done (same protocol as the pose path).

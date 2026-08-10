@@ -247,6 +247,8 @@ int jerry_pose_sync(void)
 #define OVL_M_LONGS 5                   /* mailbox[5] = image length, longs */
 #define OVL_M_JOBS  6                   /* mailbox[6] = job list address    */
 #define OVL_M_NJOB  7                   /* mailbox[7] = job count           */
+#define OVL_M_PROBE 8                   /* mailbox[8] = floor-probe list     */
+#define OVL_M_NPROBE 9                  /* mailbox[9] = probe count          */
 
 extern const uint8_t dsp_ovl_ent[], dsp_ovl_ent_end[];
 
@@ -267,8 +269,23 @@ void jerry_ovl_run(const void *jobs, uint32_t njobs)
 {
     dsp_mailbox[OVL_M_JOBS] = (uint32_t)jobs;
     dsp_mailbox[OVL_M_NJOB] = njobs;
+    /* ☠️ The overlay ALWAYS runs its floor-probe phase after the entity phase,
+       so this count must be a real number every time.  Left uninitialised it
+       is garbage and Jerry loops over it writing results to random DRAM. */
+    dsp_mailbox[OVL_M_PROBE]  = 0;
+    dsp_mailbox[OVL_M_NPROBE] = 0;
     dsp_mailbox[0] = 0;
     D_CMD = 4;
+}
+
+/* Queue floor probes (4 longs each: d, lx, lz, out).  ☠️ Call AFTER
+   jerry_ovl_run, which zeroes these slots so a stale count can never be
+   executed - run() arms the entity phase, this arms the probe phase, then
+   CMD=4 fires both. */
+void jerry_ovl_probes(const void *probes, uint32_t n)
+{
+    dsp_mailbox[OVL_M_PROBE]  = (uint32_t)probes;
+    dsp_mailbox[OVL_M_NPROBE] = n;
 }
 
 int jerry_ovl_sync(void)
