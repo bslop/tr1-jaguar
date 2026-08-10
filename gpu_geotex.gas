@@ -4066,6 +4066,26 @@ alldone:
 	store	r0,(r30)		; mailbox[0] = done
 	nop
 	nop
+	.if SYNCDRAIN=1
+	; ☠️ THE STORE ABOVE IS POSTED; THE CPUINT BELOW IS NOT.  mailbox[0] is in
+	; DRAM and goes out through the memory controller's write queue, while
+	; G_CTRL is an internal Tom register written on the next cycle.  So the
+	; interrupt can reach the 68k BEFORE the done-flag lands.  When that
+	; happens cpu_stop_unless wakes, re-reads a STALE mailbox, and STOPs
+	; again - and the only thing that wakes it now is VBLANK, so the frame
+	; pays a WHOLE 16.67ms FIELD (~11% of frame time at 6.6 fps).  That is
+	; the mechanism behind gpu_sync's "~8 STOP wakes per frame" and behind
+	; the cadence-lock the PACING comment describes.
+	;
+	; Reading the location back forces the queue to drain (a read of an
+	; address with a write in flight cannot be satisfied ahead of it).  This
+	; is the SAME protocol dsp_ovl_ent.das already uses before it publishes
+	; MAGIC_OVL_DONE - Tom's alldone was simply never given it.
+	load	(r30),r0
+	nop
+	nop
+	or	r0,r0			; consume, so the load cannot be elided
+	.endif
 	; raise a 68k CPU interrupt (G_CTRL CPUINT, bit1; keep GPUGO bit0) so the
 	; 68k can sleep in STOP during the whole GPU run instead of bus-polling
 	; (68k polling steals DRAM cycles from GPU+Blitter — measured bottleneck).
