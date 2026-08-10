@@ -1090,6 +1090,8 @@ vc_syp:
 	add	r1,r0
 	addq	#4,r18
 	store	r0,(r18)		; cache sy
+	addq	#4,r18
+	store	r25,(r18)		; cache rz2 (view depth, for near clip)
 	.if VCJDIET=1
 	; common path FALLS THROUGH to vc_next (the behind block moves past the
 	; loop exit) and the loop-back reuses hoisted r28 — saves a movei+jump
@@ -1105,7 +1107,7 @@ vc_next:
 vc_behind:
 	movei	#$07FFFFFF,r0
 	store	r0,(r18)		; behind sentinel
-	addq	#8,r18
+	addq	#12,r18
 	movei	#vc_next,r22		; rare path pays the jump instead
 	jump	T,(r22)
 	nop
@@ -1117,7 +1119,7 @@ vc_behind:
 vc_behind:
 	movei	#$07FFFFFF,r0
 	store	r0,(r18)		; behind sentinel
-	addq	#8,r18
+	addq	#12,r18
 vc_next:
 	subq	#1,r31
 	movei	#vc_loop,r22
@@ -3899,7 +3901,15 @@ ip_wide:
 ;=====================================================================
 stage_vert:
 	; VERTEX CACHE lookup (pre-pass transformed every vert once)
-	shlq	#3,r1			; idx*8 (cache stride)
+	; CACHE STRIDE 8 -> 12 (2026-08-09): the cache now carries the vertex's
+	; VIEW-SPACE Z alongside sx/sy.  Near-plane clipping needs the depth of
+	; BOTH ends of an edge to find where it crosses z=NEAR, and nothing else
+	; in the kernel keeps it - which is why the near plane can only reject
+	; whole faces today (the R4 rock that blinks).  idx*12 = idx*8 + idx*4.
+	move	r1,r3
+	shlq	#3,r1			; idx*8
+	shlq	#2,r3			; idx*4
+	add	r3,r1			; idx*12 (cache stride)
 	movei	#VCACHE_PRM,r0
 	load	(r0),r2
 	nop
