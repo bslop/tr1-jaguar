@@ -22,6 +22,7 @@ highest-variance search lands on scenery).
 
 usage: beacon_fps_fast.py <roll.mkv> [--skip 0.20]
 """
+import collections
 import glob
 import os
 import shutil
@@ -69,28 +70,50 @@ def main(mkv, skip=0.20):
     x0, y0, x1, y1 = bb
     sx, sy = (x1 - x0) / 320.0, (y1 - y0) / 240.0
 
+    # ☠️☠️ SELECT BY SWING, NEVER BY TRANSITION COUNT (2026-08-10).
+    # This used to keep the point with the MOST transitions.  That biases
+    # straight to a FLICKERING EDGE PIXEL: a point half-covered by the beacon
+    # block sits near the threshold, so capture noise counts as frames.  It
+    # reported a SYNCDRAIN arm at 13.32 fps against a 6.67 control - an exact
+    # 2x "win" that was pure noise; the cleanest point in the SAME roll read
+    # 6.67, dead level with the control.  An exact-integer ratio between arms
+    # is the tell.  Pick the CLEANEST signal (largest swing) instead, and
+    # refuse to report if the run lengths look like noise.
     best = None
-    for fx in range(34, 62, 2):            # the beacon's own patch only
+    for fx in range(34, 62, 1):            # the beacon's own patch only
         for fy in range(48, 64, 1):        # 240-space (fb rows double)
             X, Y = int(x0 + fx * sx), int(y0 + fy * sy)
             if not (0 <= X < ims[0].size[0] and 0 <= Y < ims[0].size[1]):
                 continue
             v = [im.load()[X, Y] for im in ims]
             lo, hi = min(v), max(v)
-            if hi - lo < 60:               # not a two-level signal
-                continue
-            thr = (lo + hi) / 2.0
-            b = [1 if t > thr else 0 for t in v]
-            tr = sum(1 for i in range(1, len(b)) if b[i] != b[i - 1])
-            if best is None or tr > best[0]:
-                best = (tr, fx, fy, lo, hi)
-    if best is None:
+            if best is None or (hi - lo) > best[0]:
+                best = (hi - lo, fx, fy, lo, hi, v)
+    if best is None or best[0] < 60:       # not a two-level signal
         shutil.rmtree(d, ignore_errors=True)
         sys.exit("beacon not found - is FPSBEACON=1 in this build?")
-    tr, fx, fy, lo, hi = best
+    swing, fx, fy, lo, hi, v = best
+    thr = (lo + hi) / 2.0
+    b = [1 if t > thr else 0 for t in v]
+    runs, cur = [], 1
+    for i in range(1, len(b)):
+        if b[i] == b[i - 1]:
+            cur += 1
+        else:
+            runs.append(cur); cur = 1
+    runs.append(cur)
+    tr = len(runs) - 1
+    ones = 100.0 * sum(1 for r in runs if r == 1) / max(1, len(runs))
     secs = len(fs) / 60.0
     print(f"picture {x1-x0}x{y1-y0} of {ims[0].size[0]}x{ims[0].size[1]}")
     print(f"beacon at fb({fx},{fy}), swing {lo}->{hi}")
+    # each run = one published frame held for N capture frames = N 60Hz FIELDS.
+    # Seeing runs cluster on integers (8 and 10, say) IS the frame quantization.
+    print(f"fields per frame: {sorted(collections.Counter(runs).items())[:6]}")
+    if ones > 15:
+        shutil.rmtree(d, ignore_errors=True)
+        sys.exit(f"REFUSING: {ones:.0f}% of runs are 1 capture frame - "
+                 f"noisy sample point, this number would be fiction")
     print(f"{tr} transitions in {secs:.1f}s  =>  {tr/secs:.2f} fps")
     for im in ims:
         im.close()

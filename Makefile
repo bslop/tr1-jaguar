@@ -877,6 +877,15 @@ CFLAGS   += -DFPSBEACON
 CXXFLAGS += -DFPSBEACON
 endif
 
+# PADMUTE=1: force the in-game pad word to 0 (menus/boot unaffected).  An fps
+# A/B is only valid when both arms render the SAME SCENE, and a pad resting on
+# a direction silently walks Lara into a different room - which invalidated a
+# whole SYNCDRAIN A/B on 2026-08-10.  Measurement arm only, never ship.
+ifdef PADMUTE
+CFLAGS   += -DPADMUTE
+CXXFLAGS += -DPADMUTE
+endif
+
 ifdef ANIMRATE
 CFLAGS   += -DANIMRATE
 CXXFLAGS += -DANIMRATE

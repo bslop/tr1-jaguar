@@ -6712,6 +6712,19 @@ bootvid_entry:
             }
 #endif
             pad = joypad_read();  /* no per-frame SD poll (see menu note) */
+#ifdef PADMUTE
+            /* ☠️ MEASUREMENT ARM ONLY.  An fps A/B is only valid if BOTH arms
+               render the SAME SCENE, and this level's fps swings hard with
+               room complexity (r34 624 faces vs a 203 mean).  On 2026-08-10 a
+               SYNCDRAIN A/B was invalidated exactly this way: a physical pad
+               was resting on FORWARD, so the drain arm WALKED across three
+               rooms for 40s while the control stood still - a 6.58 vs 6.10
+               "regression" that was pure scene difference.
+               Muting the pad here (not at joypad_read, so menus/boot still
+               work) pins Lara to the spawn point and makes the two rolls
+               frame-for-frame comparable.  NEVER ship this. */
+            pad = 0;
+#endif
 #ifdef GDPAD
             /* REMOTE CONTROL FOR TESTING (user, 2026-08-09: "you can control -
              * GameDrive has facilities for that").  gd_input reads INPUT.BIN

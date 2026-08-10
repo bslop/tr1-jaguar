@@ -4067,6 +4067,13 @@ alldone:
 	nop
 	nop
 	.if SYNCDRAIN=1
+	; ☠️☠️ MEASURED ON SILICON 2026-08-10: **NO EFFECT.**  Control and drain
+	; both read 6.67 fps (267 beacon transitions in 40s) on a pad-muted,
+	; scene-identical A/B.  So the race described below either does not happen
+	; or costs less than the field it would have to cost to be visible.  The
+	; flag is kept OFF and kept documented so the hypothesis is not re-derived
+	; from first principles a third time.  See project_syncdrain_wake_race.
+	;
 	; ☠️ THE STORE ABOVE IS POSTED; THE CPUINT BELOW IS NOT.  mailbox[0] is in
 	; DRAM and goes out through the memory controller's write queue, while
 	; G_CTRL is an internal Tom register written on the next cycle.  So the
