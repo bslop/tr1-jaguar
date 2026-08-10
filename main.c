@@ -450,7 +450,16 @@ static int room_floor_mr(const uint8_t **rsect, int n, int wx, int wz, int *floo
  * was WALK_SPEED/2 = 70 against a real 15.  With TIMESTEP supplying a correct
  * 30 Hz time base, those wrong constants are what made her feel squirrelly.
  * Dump them again any time with LARA_ANIMDUMP=0,1,38 on the extractor. */
-#define WALK_SPEED 47           /* RUN: TR1 anim 0, units per 30 Hz frame */
+#define WALK_SPEED 47
+/* How far AHEAD the ledge probes look.  Default is two frames of run travel -
+   94 units - against a 1024-unit sector, so if collision stops Lara more than
+   94 units short of the boundary the probe never leaves the cell she is
+   standing in, finds her own floor, and reports FLAT.  TR1 tests the sector in
+   front using her collision radius instead.  Made a build parameter so the
+   hypothesis can be A/B'd on silicon rather than argued about. */
+#ifndef PROBE_AHEAD
+#define PROBE_AHEAD (WALK_SPEED*2)
+#endif           /* RUN: TR1 anim 0, units per 30 Hz frame */
 #define RUN_SPEED_TR1  47
 #define WALK_SPEED_TR1 15       /* PAD_C walk: TR1 anim 1 (0.32x run, not 0.5) */
 #define BACK_SPEED_TR1  5       /* TR1 anim 38 BACK: speed 5, accel -0.625  */
@@ -6975,8 +6984,8 @@ bootvid_entry:
                  squares up to the wall (alignToWall) and pulls up onto a ledge
                  that's too tall to step but within climb reach. PAD_B = ACTION. */
               if ((pad & PAD_UP) && (pad & PAD_B) && g_lay >= g_lafloor - 4 && !g_vault) {
-                  int px = g_lax + (int)(((int32_t)SIN(g_layaw)*(WALK_SPEED*2))>>16);
-                  int pz = g_laz + (int)(((int32_t)COS(g_layaw)*(WALK_SPEED*2))>>16);
+                  int px = g_lax + (int)(((int32_t)SIN(g_layaw)*PROBE_AHEAD)>>16);
+                  int pz = g_laz + (int)(((int32_t)COS(g_layaw)*PROBE_AHEAD)>>16);
                   int lf, rise, lfok;
                   int cy0;
                   g_flr_grab = 1;
@@ -7162,8 +7171,8 @@ bootvid_entry:
                    reach) come level with a ledge ahead, she catches it and pulls
                    up, squaring to the wall. PAD_B = ACTION. */
                 if (!grounded && ((pad & PAD_B) || g_autograb)) {
-                    int px = g_lax + (int)(((int32_t)SIN(g_layaw)*(WALK_SPEED*2))>>16);
-                    int pz = g_laz + (int)(((int32_t)COS(g_layaw)*(WALK_SPEED*2))>>16);
+                    int px = g_lax + (int)(((int32_t)SIN(g_layaw)*PROBE_AHEAD)>>16);
+                    int pz = g_laz + (int)(((int32_t)COS(g_layaw)*PROBE_AHEAD)>>16);
                     int lf, handY = g_lay - LARA_GRABREACH, lfok;
                     int cy1;
                     g_flr_grab = 1;
@@ -7609,39 +7618,54 @@ bootvid_entry:
              *   S    = Lara's state: 1 vaulting, 2 airborne, 3 hanging
              * Thresholds shown so the numbers can be read against them:
              * step 256, vault 768, hang reach 720. */
+            /* ☠️☠️ THE READOUT IS BLITTER-DRAWN, NOT TEXT.
+             * menu_text costs ~5 fps for 25 glyphs on the 68000 - measured -
+             * and I had this printing TWO LINES EVERY FRAME, which is the
+             * exact mistake this project has now paid for three times (the
+             * 329ms video panel, the 183ms phase readout, this).  The same
+             * information as flat rectangles is ~13 Blitter fills: register
+             * writes, no 68k pixels.
+             *   top row, 10 cells at x=180: the lit cell is the VERDICT
+             *     0 flat · 1 walk-up · 2 VAULT · 3 needs jump+grab · 4 wall
+             *     · 9 no floor found
+             *   bar under it: the RISE, 1px per 8 units (768u = 96px)
+             *   two blocks at the right: G = hands in reach, S = state
+             */
             { uint8_t *dfb3 = (uint8_t *)video_backbuffer();
-              char tds[40]; int tdp = 0, k6;
-              int px6 = g_lax + (int)(((int32_t)SIN(g_layaw)*(WALK_SPEED*2))>>16);
-              int pz6 = g_laz + (int)(((int32_t)COS(g_layaw)*(WALK_SPEED*2))>>16);
-              int lf6 = 0, rise6 = 0, ok6, verdict;
-              uint32_t vals[4];
+              int px6 = g_lax + (int)(((int32_t)SIN(g_layaw)*PROBE_AHEAD)>>16);
+              int pz6 = g_laz + (int)(((int32_t)COS(g_layaw)*PROBE_AHEAD)>>16);
+              int lf6 = 0, rise6 = 0, ok6, verdict, c6, w6;
               g_flr_grab = 1;
               ok6 = room_floor_mr(rsect, roomCount, px6, pz6, &lf6);
               g_flr_grab = 0;
               if (!ok6) verdict = 9;
               else {
                   rise6 = g_lafloor - lf6;
-                  if (rise6 <= 0)                    verdict = 0;
-                  else if (rise6 <= LARA_STEPUP)     verdict = 1;
-                  else if (rise6 <= LARA_CLIMB)      verdict = 2;
-                  else if (rise6 <= 2048)            verdict = 3;
-                  else                               verdict = 4;
+                  if (rise6 <= 0)                verdict = 0;
+                  else if (rise6 <= LARA_STEPUP) verdict = 1;
+                  else if (rise6 <= LARA_CLIMB)  verdict = 2;
+                  else if (rise6 <= 2048)        verdict = 3;
+                  else                           verdict = 4;
               }
-              vals[0] = (uint32_t)(rise6 < 0 ? -rise6 : rise6);
-              vals[1] = (uint32_t)verdict;
-              vals[2] = (uint32_t)(rise6 > 0 && rise6 <= LARA_GRABREACH + 64);
-              vals[3] = (uint32_t)(g_vault ? 1 : (g_lavy != 0 ? 2 :
-                                   (g_autograb ? 3 : 0)));
-              for (k6 = 0; k6 < 4 && tdp < 34; k6++) {
-                  uint32_t v = vals[k6]; char dd[8]; int nd = 0;
-                  tds[tdp++] = (char)("RVGS"[k6]);
-                  if (!v) dd[nd++] = '0';
-                  while (v && nd < 7) { dd[nd++] = (char)('0' + v % 10u); v /= 10u; }
-                  while (nd) tds[tdp++] = dd[--nd];
-                  tds[tdp++] = ' ';
-              }
-              tds[tdp] = 0;
-              menu_text(dfb3, RENDER_W, RENDER_H, tds, 4, 14, 1, 2, 255); }
+              /* ☠️ ISOLATE THE INSTRUMENT FROM THE PICTURE.  The cells sat
+                 directly on the scene with 2px gaps, and the decoder read
+                 bright rock through the gaps as lit cells - it reported
+                 "verdict 7", which this code cannot even produce.  Black band
+                 behind everything, and a CALIBRATION cell that is always lit
+                 so the reader locks the grid instead of guessing it. */
+              blit_fill_rect(dfb3, 168, 1, 152, 15, 254);
+              blit_fill_rect(dfb3, 170, 3, 5, 5, 255);          /* calibration */
+              for (c6 = 0; c6 < 10; c6++)
+                  blit_fill_rect(dfb3, 180 + c6*7, 3, 5, 5,
+                                 (c6 == verdict) ? 255 : 254);
+              w6 = rise6 > 0 ? rise6 / 8 : 0;
+              if (w6 > 120) w6 = 120;
+              blit_fill_rect(dfb3, 180, 11, 120, 3, 254);
+              if (w6) blit_fill_rect(dfb3, 180, 11, w6, 3, 255);
+              blit_fill_rect(dfb3, 304, 3, 5, 5,
+                             (rise6 > 0 && rise6 <= LARA_GRABREACH + 64) ? 255 : 254);
+              blit_fill_rect(dfb3, 311, 3, 5, 5,
+                             (g_vault || g_lavy != 0 || g_autograb) ? 255 : 254); }
 #endif
 #ifdef FPSBEACON
             /* content-independent frame clock: a 32x8 block toggling on every

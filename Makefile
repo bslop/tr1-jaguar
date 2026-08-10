@@ -1427,6 +1427,13 @@ CFLAGS   += -DGDPAD
 CXXFLAGS += -DGDPAD
 endif
 
+# PROBE_AHEAD=N: how far in front the ledge probes sample (default WALK_SPEED*2
+# = 94 units, against a 1024-unit sector).
+ifdef PROBE_AHEAD
+CFLAGS   += -DPROBE_AHEAD=$(PROBE_AHEAD)
+CXXFLAGS += -DPROBE_AHEAD=$(PROBE_AHEAD)
+endif
+
 ifdef VIDPANEL
 CFLAGS   += -DVIDPANEL
 CXXFLAGS += -DVIDPANEL
