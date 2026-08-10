@@ -8035,6 +8035,54 @@ bootvid_entry:
               rs[p] = 0;
               menu_text(dfb, RENDER_W, RENDER_H, rs, 4, 2, 1, 2, 255); }
 #endif
+#ifdef GPUSPLIT
+            /* ★ WHERE DO TOM'S FIELDS GO?  The kernel already accumulates the
+               transform and raster sections in halflines (PROFGPU), but the
+               only readout was dbg_kv, which targets a SKUNKBOARD console.
+               ☠️☠️ THIS RIG IS A GAMEDRIVE - there is no Skunkboard on it, so
+               EVERY dbg_kv in this file is dead weight and always has been
+               (user, 2026-08-10).  The SCREEN is the only instrument there is.
+               So this paints the answer there, because the
+               frame is quantized to whole fields and the ONLY thing worth
+               knowing is which section to attack.
+               Shown as RATIOS + a total, never raw accumulators: a slower
+               build completes fewer frames, so absolute counters shrink and
+               have faked a "win" here before.
+                 X=transform %, R=raster %, T=halflines per frame
+               ☠️ One field is ~524 halflines.  T/524 should land near the
+               field count the beacon reports - if it does NOT, the kernel is
+               not what is spending the frame and the whole hunt moves.
+               ☠️ PROFGPU=1 forbids STAGEDIET=1 (they share $F03EF0-FF), so
+               this arm is NOT the ship build.  Compare ratios only. */
+            { static uint32_t gs_f, gs_x, gs_r, gs_t, gs_s;
+              volatile uint32_t *tx=(volatile uint32_t*)0xF03EF4u;
+              volatile uint32_t *tr=(volatile uint32_t*)0xF03EF8u;
+              volatile uint32_t *ns=(volatile uint32_t*)0xF03EFCu;
+              if (++gs_f >= 60) {                 /* latch once a second-ish */
+                  uint32_t x=*tx, r=*tr, tot=x+r;
+                  gs_x = tot ? (x*100u)/tot : 0;
+                  gs_r = tot ? (r*100u)/tot : 0;
+                  gs_t = tot / gs_f;              /* halflines per frame     */
+                  gs_s = *ns / gs_f;              /* scanlines per frame     */
+                  *tx=0; *tr=0; *ns=0; gs_f=0;
+              }
+              { uint8_t *gfb=(uint8_t *)video_backbuffer();
+                char gsr[24]; int p=0;
+                gsr[p++]='X'; gsr[p++]=(char)('0'+(gs_x/10)%10);
+                              gsr[p++]=(char)('0'+gs_x%10);
+                gsr[p++]='R'; gsr[p++]=(char)('0'+(gs_r/10)%10);
+                              gsr[p++]=(char)('0'+gs_r%10);
+                gsr[p++]='T'; gsr[p++]=(char)('0'+(gs_t/1000)%10);
+                              gsr[p++]=(char)('0'+(gs_t/100)%10);
+                              gsr[p++]=(char)('0'+(gs_t/10)%10);
+                              gsr[p++]=(char)('0'+gs_t%10);
+                gsr[p++]='S'; gsr[p++]=(char)('0'+(gs_s/1000)%10);
+                              gsr[p++]=(char)('0'+(gs_s/100)%10);
+                              gsr[p++]=(char)('0'+(gs_s/10)%10);
+                              gsr[p++]=(char)('0'+gs_s%10);
+                gsr[p]=0;
+                menu_text(gfb, RENDER_W, RENDER_H, gsr, 4, 26, 1, 2, 255); } }
+#endif
 #ifdef ENEMIES
             /* HEALTH BAR: raw-pixel bar at the TOP-LEFT (the JLOOPS/LARACOUNT
                bars prove raw writes at x=0+ display; the right half of the

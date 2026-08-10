@@ -886,6 +886,16 @@ CFLAGS   += -DPADMUTE
 CXXFLAGS += -DPADMUTE
 endif
 
+# GPUSPLIT=1: paint Tom's transform/raster split ON SCREEN (X% R% halflines/frame
+# scanlines/frame).  Needs PROFGPU=1, which FORBIDS STAGEDIET=1 - so this is a
+# profiling arm, not the ship build; read RATIOS, never absolute counters.
+# ☠️ The rig is a GameDrive, not a Skunkboard: dbg_kv output goes nowhere, the
+# screen is the only instrument.
+ifdef GPUSPLIT
+CFLAGS   += -DGPUSPLIT
+CXXFLAGS += -DGPUSPLIT
+endif
+
 ifdef ANIMRATE
 CFLAGS   += -DANIMRATE
 CXXFLAGS += -DANIMRATE
