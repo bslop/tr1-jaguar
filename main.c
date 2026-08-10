@@ -8083,6 +8083,49 @@ bootvid_entry:
                 gsr[p]=0;
                 menu_text(gfb, RENDER_W, RENDER_H, gsr, 4, 26, 1, 2, 255); } }
 #endif
+#ifdef ODRAWS
+            /* ★ HOW MANY OF THE BLITTER'S PIXELS ARE REDUNDANT?
+               The kernel totals every span's pixel count and the span count
+               into GPU SRAM; read them here with Tom idle (after gpu_sync,
+               before the flip) and paint the two numbers that decide what to
+               do about the fill - which is 30% of the frame:
+                 O = overdraw x100  (100 = exactly one screenful, 250 = 2.5x)
+                 L = mean span length in pixels
+               A high O says "stop drawing hidden pixels" (occlusion, sort).
+               A low O with a small L says the cost is PER-SPAN overhead, so
+               the answer is fewer/longer spans, not fewer pixels.
+               ☠️ Ratios only - this arm has STAGEDIET off (shared SRAM). */
+            { static uint32_t od_f, od_o, od_l;
+              volatile uint32_t *opx=(volatile uint32_t*)0xF03EF4u;
+              volatile uint32_t *osp=(volatile uint32_t*)0xF03EF8u;
+              if (++od_f >= 60) {
+                  uint32_t px=*opx, sp=*osp;
+                  /* /60 frames, then x100 / (320*120): fold to avoid overflow */
+                  /* RAW, not a ratio: a derived percentage read 0000 while
+                     the span length read 21, which is self-contradictory -
+                     so show the two numbers the kernel actually counted and
+                     let the arithmetic happen off-console.
+                       P = pixels per frame / 100   S = spans per frame */
+                  od_o = (px / od_f) / 100u;
+                  od_l = sp / od_f;
+                  *opx=0; *osp=0; od_f=0;
+              }
+              { uint8_t *ofb=(uint8_t *)video_backbuffer();
+                char os[20]; int p=0;
+                os[p++]='P'; os[p++]=(char)('0'+(od_o/1000)%10);
+                             os[p++]=(char)('0'+(od_o/100)%10);
+                             os[p++]=(char)('0'+(od_o/10)%10);
+                             os[p++]=(char)('0'+od_o%10);
+                os[p++]='S'; os[p++]=(char)('0'+(od_l/1000)%10);
+                             os[p++]=(char)('0'+(od_l/100)%10);
+                             os[p++]=(char)('0'+(od_l/10)%10);
+                             os[p++]=(char)('0'+od_l%10);
+                os[p]=0;
+                /* ☠️ y=26 COLLIDES WITH THE FPSBEACON BLOCK (fb 34,48 =
+                   render row 24) and the beacon is painted last, so it hides
+                   the digits. Sit below it. */
+                menu_text(ofb, RENDER_W, RENDER_H, os, 4, 44, 1, 2, 255); } }
+#endif
 #ifdef ENEMIES
             /* HEALTH BAR: raw-pixel bar at the TOP-LEFT (the JLOOPS/LARACOUNT
                bars prove raw writes at x=0+ display; the right half of the

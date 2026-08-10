@@ -283,6 +283,8 @@ SH_Y0		.equ	$F03F38		; rect-shade: clipped y0 of the face
 					; culled/empty -> no shade blit)
 SHADEK		.equ	$F03F20		; per-face shade-k byte pattern (SHADEPASS;
 					; 0 = full bright = skip the second blit)
+ODP_PX		.equ	$F03EF4		; ODRAWS: accumulated span PIXELS (PROFGPU block)
+ODP_N		.equ	$F03EF8		; ODRAWS: accumulated SPAN COUNT
 RUNC		.equ	$F03F40		; scanline-run countdown (rows to next
 					; chain event; chains checked per RUN)
 ; FARD ($F03F3C) RETIRED 2026-07-21: FARDIAL per-vert far cull measured NULL
@@ -1935,6 +1937,20 @@ vcx_ok:
 
 ;---------------------------------------------------------------------
 yloop:
+.if ODRAWS=1
+	; ★ POSITIVE CONTROL for the ODRAWS mechanism.  yloop runs once per RASTER
+	; SCANLINE and unquestionably executes, so if ODP_N stays 0 the SRAM
+	; accumulator itself is broken; if ODP_N counts but ODP_PX does not, the
+	; pixel probe is simply MIS-SITED (the kernel has several Blitter launch
+	; sites and the historic ODRAW probe sits at only one of them).
+	; r0/r1 are free here - the PROFGPU block below uses them the same way.
+	movei	#ODP_N,r0
+	load	(r0),r1
+	nop
+	nop
+	addq	#1,r1
+	store	r1,(r0)
+.endif
 	; --- section profile: count scanlines (raster_hl / NSCAN = cost/line) ---
 	.if PROFGPU=1
 	movei	#NSCAN,r0
@@ -2772,6 +2788,31 @@ uc_dv_ok:
 	move	r23,r3
 	sub	r29,r3
 	addq	#1,r3			; npix = xr-xl+1 (recomputed; r0 is live)
+	add	r3,r2
+	store	r2,(r1)
+.endif
+.if ODRAWS=1
+	; ★ SAFE OVERDRAW PROBE (2026-08-10) - the one above can never answer the
+	; question.  Two reasons: (a) its DRAM read-modify-write is the shape that
+	; black-screened silicon as LARACOUNT, so it is emulator-only, and (b) the
+	; OFFLINE HARNESS NEVER RASTERISES - jtest completes the kernel with the
+	; vertex cache written but NOT ONE SPAN EMITTED (verified at four yaws,
+	; 2026-08-10), so ODRAW reads exactly 0 there and always would.
+	;
+	; This accumulates into GPU SRAM instead, which the kernel writes on every
+	; face already, and the 68k reads it once per frame with Tom idle.
+	;   ODP_PX = total span pixels, ODP_N = span count
+	; pixels/frame vs 320x120 = the overdraw factor; pixels/spans = the mean
+	; span length, which decides between "draw fewer pixels" and "draw fewer,
+	; longer spans".
+	; ☠️ Lives in the PROFGPU block, so ODRAWS=1 needs STAGEDIET=0 - a
+	; measurement arm, not the ship build.  r0 is LIVE here; r1/r2/r3 are the
+	; scratch the probe above already established.
+	movei	#ODP_PX,r1
+	load	(r1),r2
+	move	r23,r3
+	sub	r29,r3
+	addq	#1,r3			; npix = xr-xl+1
 	add	r3,r2
 	store	r2,(r1)
 .endif
