@@ -30,7 +30,38 @@ Without `MOVESET=1` this reproduces `probes/PLAY_MOVESET2.cof` exactly
 added — that identity is what pins the list down.
 
 
-## ★★★★★ 2026-08-10 — CURRENT DEMO ROM: `demo14_p272`
+## ★★★★★ 2026-08-11 — THE RESOLUTION DIAL: `demo15_p272` (96) / `demo16_p272` (80)
+```
+tools/gbuild.sh demo15 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 \
+                       BLOBCACHE=1 JCENT=1 JOVL=1 VRESN=96      # or VRESN=80
+```
+`demo14` plus **`VRESN=N`** — render N lines and let the OP scaler stretch them
+over the same 240-line window.  Full screen, full field of view; you spend
+vertical RESOLUTION, not screen area.  **Both lit on pad 272.**
+
+☠️ **ONLY 120/96/80/64/60 EXIST.** The OP's `VSCALE` is 3.5 fixed point, so the
+scale that fills the window (240/N) must be a multiple of 1/32 ⇔ `VSCALE =
+7680/N` whole.  72 is NOT expressible.  The Makefile refuses anything else.
+
+Measured on silicon, same pad per column, `PADMUTE=1 FASTBOOT=1`, beacon +
+frame-change.  ★ the 120 control reproduced the recorded **6.67** exactly:
+
+| lines | OP scale | ship recipe (no `ENEMIES`) | demo recipe (`ENEMIES=1`) |
+|---|---|---|---|
+| 120 | 2.0x | 6.67 | 4.10 |
+| 96 | 2.5x | **7.15  (+7.2%)** | **4.28  (+4.4%)** |
+| 80 | 3.0x | **7.47  (+12.0%)** | **4.35  (+6.1%)** |
+| 60 | 4.0x | 7.92  (+18.7%) | 4.53  (+10.5%) |
+
+★★★★★ **80 lines crosses the 8-FIELD RUNG** in the ship recipe (7.47 against a
+7.50 theoretical) — the threshold the whole perf campaign has been chasing.
+★★ **96 is near-indistinguishable from 120** on a TV and still pays.
+
+☠️☠️ **ENEMIES HALVE THE LEVER** (+12.0% → +6.1% at 80).  Their per-face cost is
+resolution-independent, so they dilute every pixel-side win — the wolf is 251
+faces with no LOD.  **Quote the column that matches the build you are shipping.**
+
+## ★★★★★ 2026-08-10 — PREVIOUS DEMO ROM: `demo14_p272`
 ```
 tools/gbuild.sh demo14 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 \
                        BLOBCACHE=1 JCENT=1 JOVL=1
