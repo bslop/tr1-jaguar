@@ -923,6 +923,16 @@ CFLAGS   += -DALLVIS
 CXXFLAGS += -DALLVIS
 endif
 
+# ENEMIES=1: the bat/wolf/bear models, their homing AI, Lara's health and the
+# fire button. ☠️ THIS WAS NEVER PLUMBED - main.c says so in its own comment
+# ("ENEMIES itself is not plumbed in the Makefile at all, so that block has
+# never been built"), which is why no enemy has ever appeared in any build even
+# though the models, the AI and the draw loops are all written. Needs ENTITIES.
+ifdef ENEMIES
+CFLAGS   += -DENEMIES
+CXXFLAGS += -DENEMIES
+endif
+
 ifdef ANIMRATE
 CFLAGS   += -DANIMRATE
 CXXFLAGS += -DANIMRATE
