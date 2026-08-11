@@ -2279,6 +2279,14 @@ static int g_batx[MRT_ENTCOUNT], g_baty[MRT_ENTCOUNT], g_batz[MRT_ENTCOUNT];
 static uint8_t g_batinit;                /* positions seeded from spawn  */
 static uint8_t g_batdead[MRT_ENTCOUNT];  /* killed by Lara               */
 static uint8_t g_enhp[MRT_ENTCOUNT];     /* hit points left (TR1 values)  */
+/* DEATH: enemies used to VANISH mid-stride the instant hp hit 0 - the most
+ * obviously wrong thing about combat. TR1 has real death anims (wolf/bear
+ * model-relative 20, bat 4) but baking those frames costs ~19KB against 11.9KB
+ * spare, so the corpse SINKS through the floor over ~1.5s in the pose it died
+ * in: no new assets, no memory, and it reads as a collapse rather than a pop.
+ * Counts DOWN; 0 = gone. */
+#define ENT_DEATH_TICKS 24
+static uint8_t g_endying[MRT_ENTCOUNT];
 /* TR1 hit points, from OpenLara src/enemy.h: Wolf(...,6,...) Bear(...,20,...)
    Bat(...,1,...). Pistols do 1 damage a bullet, so a wolf takes six. */
 static int ent_max_hp(int t) { return t==7 ? 6 : (t==8 ? 20 : 1); }
@@ -2361,9 +2369,15 @@ static void build_ent_model(uint8_t *buf, int atlasW, int wx, int wy, int wz,
         w+=9;
     }
 }
+/* corpses sink: ENT_DEATH_TICKS..1 maps to 0..~360 units down, so the body
+   slides through the floor in the pose it died in. */
+static int ent_sink(int e)
+{
+    return g_endying[e] ? (ENT_DEATH_TICKS - g_endying[e]) * 15 : 0;
+}
 static void build_ent_bat(uint8_t *buf, int atlasW, int e, int frame)
 {
-    build_ent_model(buf, atlasW, g_batx[e], g_baty[e], g_batz[e],
+    build_ent_model(buf, atlasW, g_batx[e], g_baty[e] + ent_sink(e), g_batz[e],
                     MRT_BAT_verts[frame], MRT_BAT_VCOUNT,
                     MRT_BAT_quads, MRT_BAT_QCOUNT,
                     MRT_BAT_tris, MRT_BAT_TCOUNT, ENT_TONE_BAT,
@@ -2375,7 +2389,7 @@ static void build_ent_bat(uint8_t *buf, int atlasW, int e, int frame)
 }
 static void build_ent_wolf(uint8_t *buf, int atlasW, int e, int frame)
 {
-    build_ent_model(buf, atlasW, g_batx[e], g_baty[e], g_batz[e],
+    build_ent_model(buf, atlasW, g_batx[e], g_baty[e] + ent_sink(e), g_batz[e],
                     MRT_WOLF_verts[frame], MRT_WOLF_VCOUNT,
                     MRT_WOLF_quads, MRT_WOLF_QCOUNT,
                     MRT_WOLF_tris, MRT_WOLF_TCOUNT, ENT_TONE_WOLF,
@@ -2387,7 +2401,7 @@ static void build_ent_wolf(uint8_t *buf, int atlasW, int e, int frame)
 }
 static void build_ent_bear(uint8_t *buf, int atlasW, int e, int frame)
 {
-    build_ent_model(buf, atlasW, g_batx[e], g_baty[e], g_batz[e],
+    build_ent_model(buf, atlasW, g_batx[e], g_baty[e] + ent_sink(e), g_batz[e],
                     MRT_BEAR_verts[frame], MRT_BEAR_VCOUNT,
                     MRT_BEAR_quads, MRT_BEAR_QCOUNT,
                     MRT_BEAR_tris, MRT_BEAR_TCOUNT, ENT_TONE_BEAR,
@@ -7475,6 +7489,7 @@ bootvid_entry:
                                    shot found `g_enhp[k] > 0` false and NOTHING
                                    EVER DIED. Kills read K00 all roll. */
                                 g_enhp[be]=(uint8_t)ent_max_hp(mrt_ent[be].type);
+                                g_endying[be]=0;
                             }
                         g_batinit = 1;
                     }
@@ -7550,11 +7565,17 @@ bootvid_entry:
                                                                 hitting */
 #endif
                         if (bestk >= 0 && g_enhp[bestk] > 0) {
-                            if (--g_enhp[bestk] <= 0) { g_batdead[bestk] = 1;
-                                                        g_kills++; }
+                            if (--g_enhp[bestk] <= 0) {
+                                g_batdead[bestk] = 1;      /* out of the AI   */
+                                g_endying[bestk] = ENT_DEATH_TICKS;
+                                g_kills++;
+                            }
                         }
                     }
                     if (g_health <= 0) g_dead = 1;   /* killed by damage */
+                    { int dq;                        /* sink the corpses */
+                      for (dq = 0; dq < MRT_ENTCOUNT; dq++)
+                          if (g_endying[dq]) g_endying[dq]--; }
                     ent_paused: ;
                   }
 #endif
@@ -8962,7 +8983,9 @@ bootvid_entry:
                 { int e, na = 0;
                   for (e = 0; e < MRT_ENTCOUNT && ndrawn < 39; e++) {
                       if (g_useset) break;
-                      if (!ent_is_bat(mrt_ent[e].type) || g_batdead[e]) continue;
+                      if (!ent_is_bat(mrt_ent[e].type)) continue;
+                      /* a DEAD enemy keeps drawing while it sinks */
+                      if (g_batdead[e] && !g_endying[e]) continue;
                       /* bats MOVE toward Lara, so gate on the LIVE position, not
                          the spawn room/pos - they've usually left the spawn. */
                       { int ddx = g_lax - g_batx[e], ddz = g_laz - g_batz[e];
@@ -8982,7 +9005,9 @@ bootvid_entry:
                 { int e, na = 0;
                   for (e = 0; e < MRT_ENTCOUNT && ndrawn < 39; e++) {
                       if (g_useset) break;
-                      if (!ent_is_wolf(mrt_ent[e].type) || g_batdead[e]) continue;
+                      if (!ent_is_wolf(mrt_ent[e].type)) continue;
+                      /* a DEAD enemy keeps drawing while it sinks */
+                      if (g_batdead[e] && !g_endying[e]) continue;
                       { int ddx = g_lax - g_batx[e], ddz = g_laz - g_batz[e];
                         if (ddx < 0) ddx = -ddx; if (ddz < 0) ddz = -ddz;
                         if (ddx + ddz > 6144) continue; }
@@ -8999,7 +9024,9 @@ bootvid_entry:
                 { int e, na = 0;
                   for (e = 0; e < MRT_ENTCOUNT && ndrawn < 39; e++) {
                       if (g_useset) break;
-                      if (!ent_is_bear(mrt_ent[e].type) || g_batdead[e]) continue;
+                      if (!ent_is_bear(mrt_ent[e].type)) continue;
+                      /* a DEAD enemy keeps drawing while it sinks */
+                      if (g_batdead[e] && !g_endying[e]) continue;
                       { int ddx = g_lax - g_batx[e], ddz = g_laz - g_batz[e];
                         if (ddx < 0) ddx = -ddx; if (ddz < 0) ddz = -ddz;
                         if (ddx + ddz > 6144) continue; }
