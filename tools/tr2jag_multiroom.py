@@ -1160,6 +1160,114 @@ def main():
               % (PREFIX,len(atl)//AW,PREFIX))
         sys.exit(0)
 
+    # ---- MRT_PICKPATCH=1: append the PICKUP SPRITES to the EXISTING atlas ---
+    # Same surgical contract as MRT_DOORPATCH: read the SHIPPING pal + atlas,
+    # append rows, write back, EXIT before anything else. TR1 draws medikits as
+    # SPRITES (93 -> sprite 7, 94 -> sprite 8), so there is no mesh to extract -
+    # the runtime billboards a quad onto these rects.
+    # ☠️ SHELF-PACKED side by side, not a band each: at full res the two are
+    # 104x48 and 88x64 = 112 rows = 28KB of atlas, and the atlas is LINKED INTO
+    # THE ROM. Packed, and at MRT_PICKPATCH_STEP=2 (half res, the same call the
+    # enemy skins made - a medikit is a few dozen pixels on screen), it is one
+    # 32-row band = 8KB.
+    if int(os.environ.get("MRT_PICKPATCH","0")):
+        AW=256
+        STEP=int(os.environ.get("MRT_PICKPATCH_STEP","2"))
+        pal_b=open(os.path.join(OUTDIR,PREFIX+"_pal.bin"),"rb").read()
+        pal=[(pal_b[i*2]<<8)|pal_b[i*2+1] for i in range(256)]
+        pal_rgb=[((c>>11)&31,(c>>1)&31,(c>>6)&31) for c in pal]
+        def nearest(r5,g5,b5):
+            bi=0; bd=1<<30
+            for i in range(256):
+                pr,pg,pb=pal_rgb[i]
+                d=(r5-pr)**2+(g5-pg)**2+(b5-pb)**2
+                if d<bd: bd=d; bi=i
+            return bi
+        atl=bytearray(open(os.path.join(OUTDIR,PREFIX+"_atlas.bin"),"rb").read())
+        assert len(atl)%AW==0, "atlas not a whole number of rows"
+        H0=len(atl)//AW
+        spr={}
+        for nm,si in (("SM",7),("BG",8)):
+            b=_SPR_P+si*16
+            l,t,rr,bb=struct.unpack_from("<hhhh",data,b)
+            clut,tile=struct.unpack_from("<HH",data,b+8)
+            u0,v0,u1,v1=struct.unpack_from("<BBBB",data,b+12)
+            # ☠️ TRIM TO THE ARTWORK.  The atlas has no alpha and the kernel
+            # does not colour-key, so every transparent texel in the sprite's
+            # surround renders as SOLID BLACK - the first silicon roll showed
+            # the medikit inside a black rectangle. TR1 PSX marks transparency
+            # as CLUT index 0, so shrink the source rect to the bounding box of
+            # non-zero texels and carry the SAME proportional trim into the
+            # world extents, or the billboard would be the right art at the
+            # wrong size and offset.
+            def _nz(sx,sy):
+                _o=tiles_off+tile*TILE_PAGE_BYTES+(sy*256+sx)//2
+                _b=data[_o]
+                return ((_b>>4) if (sx & 1) else (_b & 0x0F)) != 0
+            a0,b0,a1,b1 = u1,v1,u0,v0
+            for _y in range(v0,v1+1):
+                for _x in range(u0,u1+1):
+                    if _nz(_x,_y):
+                        if _x<a0: a0=_x
+                        if _x>a1: a1=_x
+                        if _y<b0: b0=_y
+                        if _y>b1: b1=_y
+            if a0>a1 or b0>b1: a0,b0,a1,b1 = u0,v0,u1,v1   # all-transparent guard
+            fw=float(u1-u0+1); fh=float(v1-v0+1)
+            nl = l + int(round((rr-l)*(a0-u0)/fw))
+            nr = l + int(round((rr-l)*(a1-u0+1)/fw))
+            nt = t + int(round((bb-t)*(b0-v0)/fh))
+            nb2= t + int(round((bb-t)*(b1-v0+1)/fh))
+            print("  %s trim uv (%d,%d)-(%d,%d) -> (%d,%d)-(%d,%d)  "
+                  "world l%d t%d r%d b%d -> l%d t%d r%d b%d"
+                  % (nm,u0,v0,u1,v1,a0,b0,a1,b1,l,t,rr,bb,nl,nt,nr,nb2))
+            l,t,rr,bb = nl,nt,nr,nb2
+            u0,v0,u1,v1 = a0,b0,a1,b1
+            spr[nm]=dict(l=l,t=t,r=rr,b=bb,clut=clut,tile=tile,
+                         u0=u0,v0=v0,w=(u1-u0)//STEP+1,h=(v1-v0)//STEP+1)
+        band=max(v["h"] for v in spr.values())
+        ay=len(atl)//AW
+        atl+=bytearray(AW*band)
+        px=0; rects={}
+        for nm in ("SM","BG"):
+            o=spr[nm]
+            assert px+o["w"]<=AW, "pickup shelf overflow"
+            for yy in range(o["h"]):
+                for xx in range(o["w"]):
+                    sx=o["u0"]+xx*STEP; sy=o["v0"]+yy*STEP
+                    _o=tiles_off+o["tile"]*TILE_PAGE_BYTES+(sy*256+sx)//2
+                    _b=data[_o]
+                    nib=(_b>>4) if (sx & 1) else (_b & 0x0F)
+                    _c=cluts_off+o["clut"]*CLUT_BYTES+nib*2
+                    _v=data[_c]|(data[_c+1]<<8)
+                    r5,g5,b5=(_v&31),((_v>>5)&31),((_v>>10)&31)
+                    atl[(ay+yy)*AW+px+xx]=nearest(r5,g5,b5)
+            rects[nm]=(px,ay,px+o["w"]-1,ay+o["h"]-1)
+            print("PICKPATCH %-2s sprite %d -> atlas (%d,%d)-(%d,%d)  world %dx%d"
+                  % (nm,7 if nm=="SM" else 8,rects[nm][0],rects[nm][1],
+                     rects[nm][2],rects[nm][3],o["r"]-o["l"],o["b"]-o["t"]))
+            px+=o["w"]
+        open(os.path.join(OUTDIR,PREFIX+"_atlas.bin"),"wb").write(atl)
+        up=PREFIX.upper()
+        with open(os.path.join(OUTDIR,PREFIX+"_pick.h"),"w") as f:
+            f.write("// generated by MRT_PICKPATCH - medikit SPRITE atlas rects\n")
+            f.write("// TR1 renders 93/94 as sprites, not meshes; the runtime\n")
+            f.write("// billboards a quad onto these. World extents are the\n")
+            f.write("// sprite's own l/t/r/b, in TR world units.\n")
+            for nm in ("SM","BG"):
+                x0,y0,x1,y1=rects[nm]; o=spr[nm]
+                f.write("#define %s_PICK_%s_U0 %d\n"%(up,nm,x0))
+                f.write("#define %s_PICK_%s_V0 %d\n"%(up,nm,y0))
+                f.write("#define %s_PICK_%s_U1 %d\n"%(up,nm,x1))
+                f.write("#define %s_PICK_%s_V1 %d\n"%(up,nm,y1))
+                f.write("#define %s_PICK_%s_L  %d\n"%(up,nm,o["l"]))
+                f.write("#define %s_PICK_%s_T  %d\n"%(up,nm,o["t"]))
+                f.write("#define %s_PICK_%s_R  %d\n"%(up,nm,o["r"]))
+                f.write("#define %s_PICK_%s_B  %d\n"%(up,nm,o["b"]))
+        print("PICKPATCH: wrote %s_atlas.bin (%d rows, +%d) + %s_pick.h"
+              % (PREFIX,len(atl)//AW,band,PREFIX))
+        sys.exit(0)
+
     # ---- MRT_ENEMYTEX=1: append the ENEMY skins to the EXISTING atlas -------
     # Same surgical contract as MRT_DOORPATCH above: reuse only the decoders,
     # read the SHIPPING mrt_pal.bin + mrt_atlas.bin, append rows, write back,

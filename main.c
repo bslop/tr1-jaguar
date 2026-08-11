@@ -46,6 +46,7 @@ __attribute__((used, noinline)) void pad_main_probe(void)
 #include "mrt.h"            /* MRT_ATLAS_H + Lara swatch cell defines */
 #if defined(ENTITIES) && defined(DOORTEX)
 #include "mrt_door.h"       /* door/lever atlas UV rects (MRT_DOORPATCH) */
+#include "mrt_pick.h"       /* medikit SPRITE atlas rects (MRT_PICKPATCH) */
 #endif
 #if defined(ENTITIES) && defined(ENEMIES)
 #include "mrt_bat.h"        /* bat model: posed fly-cycle frames + faces */
@@ -1204,6 +1205,7 @@ static int g_sk_mcount, g_sk_framestride, g_sk_animcount, g_sk_framecount;
 static int g_lframe;                 /* absolute skin-frame index to pose   */
 static int g_anim_start;             /* frame-0 of the current anim (in-place root) */
 static int g_camx, g_camy, g_camz;   /* camera world pos (for Lara depth sort) */
+static fix g_camcY = 65536, g_camsY;  /* camera yaw basis, for SPRITE billboards */
 static uint8_t g_qmesh[256], g_tmesh[256];  /* which mesh each face belongs to */
 
 /* pose fast path: skeleton data converted ONCE at init from the big-endian
@@ -2501,6 +2503,55 @@ static void ovl_push_pickup(uint8_t *buf, int e)
 
 /* a spinning pickup cube at the entity's floor position (gold swatch, like the
    old DEMO_PROPS item). Rests on the floor: cube bottom at the entity Y. */
+/* MEDIKIT SPRITE BILLBOARD.  TR1 draws 93/94 as SPRITES, not meshes - there is
+   no model to extract (a model audit for them is empty), so the correct render
+   is a camera-facing quad onto the rects MRT_PICKPATCH appended to the atlas.
+   ★ This is CHEAPER than the placeholder it replaces: 4 verts and ONE face
+   against the cube's 8 and SIX.
+   ☠️ Returns 0 = "do NOT hand this to Jerry".  The JOVL overlay exists to spin
+   a cube's 8 verts; a billboard does not spin, and letting the overlay write
+   this blob's vertex region would stamp cube geometry back over the quad.
+   Returns 1 for anything still on the spinning-mesh path (the crystal, which
+   IS a real mesh - 5 verts, 6 flat-coloured faces - and is left on the cube
+   until that mesh is extracted). */
+static int build_ent_sprite(uint8_t *buf, int atlasW, int e)
+{
+    int big = (mrt_ent[e].type == MRT_ENT_MEDIKIT_BIG);
+    int u0 = big ? MRT_PICK_BG_U0 : MRT_PICK_SM_U0;
+    int v0 = big ? MRT_PICK_BG_V0 : MRT_PICK_SM_V0;
+    int u1 = big ? MRT_PICK_BG_U1 : MRT_PICK_SM_U1;
+    int v1 = big ? MRT_PICK_BG_V1 : MRT_PICK_SM_V1;
+    int hw = (big ? (MRT_PICK_BG_R - MRT_PICK_BG_L)
+                  : (MRT_PICK_SM_R - MRT_PICK_SM_L)) >> 1;
+    int yt = big ? MRT_PICK_BG_T : MRT_PICK_SM_T;
+    int yb = big ? MRT_PICK_BG_B : MRT_PICK_SM_B;
+    int wx = mrt_ent[e].x, wz = mrt_ent[e].z, y = mrt_ent[e].y;
+    int offX = wx >> 8, offZ = wz >> 8, rx0 = wx & 255, rz0 = wz & 255;
+    /* camera RIGHT vector in XZ.  Forward is (sY, cY) - matched to the movement
+       code, not assumed - so right is (cY, -sY). */
+    int rx = (int)(((int32_t)g_camcY * hw) >> 16);
+    int rz = (int)(((int32_t)-g_camsY * hw) >> 16);
+    uint16_t *h = (uint16_t *)buf; uint16_t *w; int i;
+    static const int16_t bx[4] = { -1, 1, 1, -1 };   /* which side of centre */
+    static const int8_t  by[4] = {  0, 0, 1,  1 };   /* 0 = top, 1 = bottom  */
+    h[0]=4; h[1]=1; h[2]=0; h[3]=(uint16_t)atlasW; h[4]=(uint16_t)g_ltx_atH;
+    h[5]=(uint16_t)offX; h[6]=0; h[7]=(uint16_t)offZ;
+    w = (uint16_t *)(buf + 16);
+    for (i = 0; i < 4; i++) {
+        int sx = rx0 + bx[i]*rx, sz = rz0 + bx[i]*rz;
+        w[0]=(uint16_t)(int16_t)sx;
+        w[1]=(uint16_t)(int16_t)(y + (by[i] ? yb : yt));
+        w[2]=(uint16_t)(int16_t)sz; w[3]=255; w += 4;
+    }
+    EMIT_PLANE(w);
+    w[0]=0; w[1]=1; w[2]=2; w[3]=3;
+    w[4]=(uint16_t)u0; w[5]=(uint16_t)v0;
+    w[6]=(uint16_t)u1; w[7]=(uint16_t)v0;
+    w[8]=(uint16_t)u1; w[9]=(uint16_t)v1;
+    w[10]=(uint16_t)u0; w[11]=(uint16_t)v1;
+    return 0;
+}
+
 static void build_ent_pickup(uint8_t *buf, int atlasW, int e)
 {
     fix c = COS(g_pickspin), s = SIN(g_pickspin);
@@ -8091,6 +8142,7 @@ bootvid_entry:
             camz = g_laz - (int)(((int32_t)cY*CAMDIST)>>16);
             camy = g_lafloor - CAMHEIGHT;
             g_camx = camx; g_camy = camy; g_camz = camz;   /* for Lara depth sort */
+            g_camcY = cY; g_camsY = sY;    /* billboard basis for the medikits */
             camblk[0]=(uint32_t)(cY>>4); camblk[1]=(uint32_t)(sY>>4);
             camblk[2]=(uint32_t)(cP>>4); camblk[3]=(uint32_t)(sP>>4);
             camblk[4]=(uint32_t)camx; camblk[5]=(uint32_t)camy; camblk[6]=(uint32_t)camz; camblk[7]=0;
@@ -9012,10 +9064,19 @@ bootvid_entry:
                         if (ddx < 0) ddx = -ddx; if (ddz < 0) ddz = -ddz;
                         if (ddx + ddz > 6144) continue; }
                       if (np >= ENT_PK_MAXDRAW) break;
-                      build_ent_pickup(ent_pk_blob[np], atlasW, e);
+                      /* medikits are SPRITES (billboard, self-contained);
+                         anything else stays on the spinning-mesh path, whose
+                         verts Jerry writes. */
+                      { int t_ = mrt_ent[e].type; int jerry_;
+                        if (t_ == MRT_ENT_MEDIKIT_SMALL || t_ == MRT_ENT_MEDIKIT_BIG)
+                            jerry_ = build_ent_sprite(ent_pk_blob[np], atlasW, e);
+                        else { build_ent_pickup(ent_pk_blob[np], atlasW, e); jerry_ = 1; }
 #ifdef JOVL
-                      ovl_push_pickup(ent_pk_blob[np], e);
+                        if (jerry_) ovl_push_pickup(ent_pk_blob[np], e);
+#else
+                        (void)jerry_;
 #endif
+                      }
                       displist[1+ndrawn*4+0] = (uint32_t)ent_pk_blob[np];
                       displist[1+ndrawn*4+1] = 319u;
                       displist[1+ndrawn*4+2] = (uint32_t)(VIEW_H-1);
