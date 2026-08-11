@@ -91,11 +91,11 @@ typedef int32_t fix;
  * the 120-line fb back to 240), so the Y focal length is halved.  This affects
  * only the 68k SOFTWARE projection path (fill_convex); the GEOMDIRECT kernel
  * carries its own FOCAL_Y.  In non-LOWRES FOCAL_Y == FOCAL (no change). */
-#ifdef LOWRES
-#define FOCAL_Y   (FOCAL / 2)
-#else
-#define FOCAL_Y   FOCAL
-#endif
+/* Scales with the vertical compression: the OP stretches RENDER_H source lines
+   back over the 240-line window, so the Y focal length carries the same ratio.
+   Bit-identical to the old (FOCAL/2 at LOWRES, FOCAL at 240) - it just also
+   answers correctly for the VRESN heights in between. */
+#define FOCAL_Y   (FOCAL * RENDER_H / 240)
 #define NEAR      32
 
 /* FB8: 8bpp indexed framebuffer (Blitter hardware texturing). CLEAR/BLINK
@@ -326,7 +326,10 @@ static int pcl_camx, pcl_camy, pcl_camz;
 #define PCL_FOCAL   190              /* MUST match the kernel's FOCAL */
 #define PCL_CX      160
 #define PCL_CY      (VIEW_H/2)
-#define PCL_FOCALY  ((RENDER_H)==240 ? 190 : 95)
+#define PCL_FOCALY  (190 * (RENDER_H) / 240)   /* was ==240?190:95 - which
+                                          answered 95 for EVERY LOWRES height,
+                                          so VRES60's portal rects were sized
+                                          for a 120-line render */
 static int portal_rect(const long *pr, int *rx0, int *rx1, int *ry0, int *ry1)
 {
     int i, behind = 0;

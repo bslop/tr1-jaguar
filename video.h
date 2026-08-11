@@ -19,7 +19,16 @@
    launch, launch count unchanged by every per-pixel trick tried) says the
    launch count IS the frame time.  LOWRES 240->120 bought 6.00->7.50 fps;
    120->60 targets 7.50 -> 15.00 (8 vsync fields -> 4). */
-#ifdef VRES60
+/* VRESN=N (2026-08-11) generalises VRES60 into a RESOLUTION DIAL: render N
+ * lines and let the OP scaler stretch them over the same 240-line window.
+ * ☠️ ONLY 120/96/80/64/60 ARE AVAILABLE.  The OP's VSCALE is 3.5 fixed point
+ * (0x20 = 1.0x), so the scale that fills the window, 240/N, must land on a
+ * multiple of 1/32 -> VSCALE = 7680/N must be a whole number.  72 lines (the
+ * band height that measured +7.8%) is NOT expressible: 3.333x would leave the
+ * bottom of the frame short.  The Makefile refuses anything off the ladder. */
+#ifdef VRESN
+#define RENDER_H VRESN
+#elif defined(VRES60)
 #define RENDER_H 60
 #elif defined(LOWRES)
 #define RENDER_H 120

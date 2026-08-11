@@ -190,7 +190,12 @@ static volatile int op_cur;            /* list the OP is using this field    */
  * VDB/VDE window are UNCHANGED from the 240 build, so the 120->240 scaled image
  * fills the exact same vertical window the 240-line bitmap did. */
 #define FS_HSCALE 0x20u   /* 1.0x  - no horizontal scaling (full 320 width)      */
-#ifdef VRES60
+#ifdef VRESN
+/* VSCALE is 3.5 fixed point (0x20 = 1.0x), so the scale that makes N source
+   lines fill the 240-line window is 240/N and its register value is 7680/N.
+   Exact only for N in {120,96,80,64,60} - the Makefile enforces that. */
+#define FS_VSCALE (7680u / (unsigned)VRESN)
+#elif defined(VRES60)
 #define FS_VSCALE 0x80u   /* 4.0x  -  60 source lines fill the 240-line window   */
 #else
 #define FS_VSCALE 0x40u   /* 2.0x  - 120 source lines fill the 240-line window   */
