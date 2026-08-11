@@ -915,6 +915,14 @@ CFLAGS   += -DHOLEVIS
 CXXFLAGS += -DHOLEVIS
 endif
 
+# ALLVIS=1: a room whose portal window computes EMPTY is dropped entirely and
+# leaves a doorway-shaped hole. Draw it full-screen instead - the same
+# conservative rule that made NOPCLIP free. Pair with HOLEVIS to verify.
+ifdef ALLVIS
+CFLAGS   += -DALLVIS
+CXXFLAGS += -DALLVIS
+endif
+
 ifdef ANIMRATE
 CFLAGS   += -DANIMRATE
 CXXFLAGS += -DANIMRATE

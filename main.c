@@ -7730,7 +7730,23 @@ bootvid_entry:
                   }
                   if (got) { prv[i]=1; prx0[i]=ux0; prx1[i]=ux1;
                              pry0[i]=uy0; pry1[i]=uy1; }
-                } }
+                }
+#ifdef ALLVIS
+              /* ★ A room whose window comes out EMPTY is dropped ENTIRELY
+                 above (prv stays 0), and what is left behind is a hole the
+                 exact shape of the doorway you were looking through - the
+                 ~8% rectangle still in r12 after NOPCLIP fixed the clip-rect
+                 holes. NOPCLIP cannot rescue it: that only widens the rect
+                 for rooms already admitted.
+                 Same conservative principle that made NOPCLIP free - when the
+                 window computation fails, DRAW THE ROOM rather than trust an
+                 empty rect. Costs at most some overdraw; a hole is certain. */
+              for (i=0;i<roomCount;i++)
+                  if (rdepth[i]<=3 && !prv[i]) {
+                      prv[i]=1; prx0[i]=0; prx1[i]=319;
+                      pry0[i]=0; pry1[i]=RENDER_H-1; }
+#endif
+              }
 #ifdef M68D_A2
             /* PERFHUNT A2: sort ONLY the rooms the admit loop can accept
                (rdepth<=3 && prv!=0 — its own first filters), with the
