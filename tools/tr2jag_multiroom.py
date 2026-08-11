@@ -457,7 +457,7 @@ def build_lara(data, pMeshData, pMeshOff, pAnims, pNodes, pFrame,
                 lara_anim_base=anim, lara_anim_count=laraAnimCount)
 
 def build_enemy(oid, nframes, data, pMeshData, pMeshOff, pAnims, pNodes,
-                pFrame, pModels, modelsCount):
+                pFrame, pModels, modelsCount, want_state=None):
     """Bake an enemy model (by objectID) into a posed static mesh + N frames of
     its base animation, reusing Lara's mesh-tree pose walk. Returns None if the
     model is absent. Faces keep their tex id (colored if <256)."""
@@ -490,6 +490,21 @@ def build_enemy(oid, nframes, data, pMeshData, pMeshOff, pAnims, pNodes,
     def anim_info(ai):
         ao=pAnims+ai*32; fs=data[ao+5]
         return _u32(data,ao), (fs if fs>0 else (10+2*mcount))*2
+    # THE MODEL'S BASE ANIM IS NOT ALWAYS A CYCLE. The bear's is STATE_STOP
+    # with ONE frame, so it baked a single static pose and slid along the floor
+    # like a statue; the wolf's is state 8 (sleep), not its run. Pick the anim
+    # with the MOST frames for the wanted state - selected by STATE, not by a
+    # hardcoded index, so it survives a different level file.
+    if want_state is not None:
+        best=None
+        for a in range(anim, anim+24):
+            ao=pAnims+a*32
+            fs=data[ao+5]; fb=(fs if fs>0 else (10+2*mcount))*2
+            fo=_u32(data,ao); nx=_u32(data,pAnims+(a+1)*32)
+            av=(nx-fo)//fb if nx>fo and fb>0 else 0
+            if _u16(data,ao+6)==want_state and av>0 and (best is None or av>best[1]):
+                best=(a,av)
+        if best: anim=best[0]
     fofs,fbytes=anim_info(anim)
     nxt=_u32(data,pAnims+(anim+1)*32)
     avail=(nxt-fofs)//fbytes if nxt>fofs and fbytes>0 else 1
@@ -516,7 +531,8 @@ def build_enemy(oid, nframes, data, pMeshData, pMeshOff, pAnims, pNodes,
             w0,w1=angword(i); ax,ay,az=_decode_angles(w0,w1); _rot_yxz(mm,ax,ay,az); emit(mm,i)
         return out
     frames=[bake(f) for f in range(nframes)]
-    return dict(oid=oid, vcount=tv, quads=quads, tris=tris, frames=frames)
+    return dict(oid=oid, vcount=tv, quads=quads, tris=tris, frames=frames,
+                anim=anim)
 
 def emit_enemy_h(OUTDIR, PREFIX, name, en):
     with open(os.path.join(OUTDIR,PREFIX+"_"+name+".h"),"w") as f:
@@ -884,15 +900,45 @@ def main():
                       pModels, modelsCount, objCount,
                       pStates, nStates, pRanges, nRanges, pCmds, nCmds)
 
+    # MRT_ANIMPROBE=1: which animation does each enemy model point at, and how
+    # many frames does it actually have? The BEAR bakes only ONE frame even
+    # though 6 are requested, so its base anim is a static pose and the model
+    # slides along the floor. Read-only; exits before any write.
+    if int(os.environ.get("MRT_ANIMPROBE","0")):
+        for _oid,_nm in ((9,"bat"),(7,"wolf"),(8,"bear")):
+            _bi=-1
+            for i in range(modelsCount):
+                if _u16(data,pModels+i*20)==_oid: _bi=i; break
+            if _bi<0: print("%s: model absent"%_nm); continue
+            _mo=pModels+_bi*20
+            _mc=_u16(data,_mo+4); _a0=_u16(data,_mo+16)
+            print("%-5s model %d  meshes %d  base anim %d" % (_nm,_bi,_mc,_a0))
+            for _a in range(_a0, _a0+10):
+                _ao=pAnims+_a*32
+                _fo=_u32(data,_ao); _fs=data[_ao+5]
+                _fb=(_fs if _fs>0 else (10+2*_mc))*2
+                _nx=_u32(data,pAnims+(_a+1)*32)
+                _av=(_nx-_fo)//_fb if _nx>_fo and _fb>0 else 0
+                _st=_u16(data,_ao+6)
+                print("    anim %3d  state %2d  frames %3d" % (_a,_st,_av))
+        sys.exit(0)
+
     # ---- ENEMIES: bake the BAT (simplest model) - fly-cycle posed frames ----
-    for _eoid, _ename, _enf in ((9,"bat",8),(7,"wolf",6),(8,"bear",6)):
+    # state per model: bat 1 = its fly cycle; wolf/bear 3 = RUN (OpenLara
+    # src/enemy.h Wolf/Bear STATE_ enums).
+    for _eoid, _ename, _enf, _est in ((9,"bat",8,None),(7,"wolf",6,3),(8,"bear",6,3)):
         _en = build_enemy(_eoid, _enf, data, pMeshData, pMeshOff, pAnims,
-                          pNodes, pFrame, pModels, modelsCount)
+                          pNodes, pFrame, pModels, modelsCount, _est)
         if _en:
             emit_enemy_h(OUTDIR, PREFIX, _ename, _en)
-            print("%s: %d verts, %dq %dt, %d frames -> %s_%s.h"
+            print("%s: %d verts, %dq %dt, %d frames (anim %d) -> %s_%s.h"
                   % (_ename.upper(), _en['vcount'], len(_en['quads']),
-                     len(_en['tris']), len(_en['frames']), PREFIX, _ename))
+                     len(_en['tris']), len(_en['frames']), _en['anim'],
+                     PREFIX, _ename))
+    # MRT_ENEMYONLY=1: the enemy headers are all we wanted - EXIT before the
+    # full regen, which is what corrupts Lara and the level.
+    if int(os.environ.get("MRT_ENEMYONLY","0")):
+        sys.exit(0)
 
     # ---- BFS-connected room set from room 0 ----
     seen=set([0]); order=[0]; dq=deque([0])
