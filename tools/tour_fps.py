@@ -45,7 +45,26 @@ def main(mkv, band_h, hold=240, nrooms=38):
     ims = [Image.open(f).convert("L") for f in fs]
     print(f"decoded {len(ims)} fields ({len(ims)/60.0:.1f}s)")
 
-    bb = picture_box(ims[len(ims) // 2])
+    # ☠️ NOT A SINGLE MID-CLIP FRAME.  During a tour that frame is whatever
+    # room happens to be on screen, and a DARK room shrinks the detected box:
+    # the 120-line arm measured 698x422 instead of ~698x530, which slid the
+    # beacon search 20% off and every room read 0.00 fps.  Take the per-pixel
+    # MAXIMUM over the clip instead - the window is whatever was ever lit.
+    W0, H0 = ims[0].size
+    acc = [0] * (W0 * H0)
+    for im in ims[::20]:
+        px = im.load()
+        i = 0
+        for y in range(H0):
+            for x in range(W0):
+                v = px[x, y]
+                if v > acc[i]:
+                    acc[i] = v
+                i += 1
+    mx = Image.new("L", (W0, H0)); mx.putdata(acc)
+    bb = picture_box(mx)
+    if not bb:
+        sys.exit("no picture found in the max image - dark roll?")
     x0, y0, x1, y1 = bb
     sx, sy = (x1 - x0) / 320.0, (y1 - y0) / float(2 * band_h)
 
@@ -149,7 +168,8 @@ def main(mkv, band_h, hold=240, nrooms=38):
         fps = tr / ((z - a) / 60.0)
         mode = max(set(runs), key=runs.count) if runs else 0
         rows.append((r, fps, tr, mode))
-        print(f"{r:5d} {mode:20d} {tr:7d} {fps:7.2f}")
+        print(f"{r:5d} {mode:20d} {tr:7d} {fps:7.2f}"
+              f"   [{a/60.0:6.2f}s {z/60.0:6.2f}s]")
     if rows:
         f = sorted(x[1] for x in rows)
         print(f"\nmedian {f[len(f)//2]:.2f}   min {f[0]:.2f}   max {f[-1]:.2f}")
