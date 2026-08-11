@@ -953,7 +953,12 @@ static int g_fardist = 9000;   /* per-vert kernel far cull; OPTION+UP/DOWN */
 /* Streaming buffer for the PS1 loading art, shared by the pre-title screen
    and the in-game loading panel.  24 rows a chunk = ten whole 512-byte
    sectors; it was 48 rows, and halving it is what let DBGROOM fit again. */
-static uint8_t g_artbuf[7680] __attribute__((aligned(8)));   /* 8: blit_bytes phrase mode */
+/* g_artbuf lives in g_arena's GAME side - see the union. It is LOADING-SCREEN
+   ONLY ("exists only while the loading art streams"), which is after the ring
+   is finished and before any enemy blob is built, so it collides with neither.
+   The game side had ~20KB of slack under the larger title side, so this is
+   free - and it is what bought the in-game menu its space. */
+#define g_artbuf (g_arena.g.artbuf)
 
 /* show_title_load: the PSX's pre-title loading screen.
  *
@@ -2138,6 +2143,7 @@ static union {
         uint8_t bat [ENT_BAT_MAXDRAW][1792];
         uint8_t wolf[ENT_WOLF_MAXDRAW][10752];
         uint8_t bear[ENT_BEAR_MAXDRAW][10752];
+        uint8_t artbuf[7680];      /* loading-screen art stream, 8-aligned */
     } g;
 } g_arena __attribute__((aligned(8)));
 #define ent_bat_blob   g_arena.g.bat
@@ -2283,6 +2289,18 @@ static void build_ent_bear(uint8_t *buf, int atlasW, int e, int frame)
 static int ent_is_pickup(int t) { return t==83 || t==93 || t==94; }
 static uint8_t g_pickgot[MRT_ENTCOUNT];  /* pickup already collected */
 static uint8_t g_pickspin;               /* shared pickup spin angle */
+
+/* ---- IN-GAME MENU -------------------------------------------------------
+ * There was none: PAD_PAUSE was a second binding for ROLL (PAD_Y still is),
+ * so the button was free. This is NOT the 3D inventory ring - that lives
+ * inline in the title flow and stages through rblob, which is now UNIONED
+ * with the enemy blobs, so it cannot be raised while a level is loaded
+ * without the refactor + the ~50KB the ring staging needs.
+ * ☠️ THE UNION INVARIANT: menu and enemies must never build in the SAME
+ * frame. Honoured here because the world is frozen while paused - no enemy
+ * blob is rebuilt - and this menu stages nothing at all (menu_text only). */
+static uint8_t g_pause, g_pausesel;
+#define PAUSE_ITEMS 2
 #ifdef JOVL
 /* ---- ANIMATED ENTITY VERTS ON JERRY (dsp_ovl_ent) -----------------------
  * User: "anything having to do with animation" comes off the 68000.  A pickup
@@ -6842,6 +6860,7 @@ bootvid_entry:
             }
 #endif
             pad = joypad_read();  /* no per-frame SD poll (see menu note) */
+
 #ifdef PADMUTE
             /* ☠️ MEASUREMENT ARM ONLY.  An fps A/B is only valid if BOTH arms
                render the SAME SCENE, and this level's fps swings hard with
@@ -6867,6 +6886,32 @@ bootvid_entry:
                cooldown is what paces the shots. */
             pad |= PAD_X;
 #endif
+#ifdef AUTOMENU
+            /* TEST ARM: nobody is on the pad, so drive the pause menu from the
+               frame counter - open it, step the selection, leave it open so a
+               capture can see it. */
+            { extern volatile uint32_t frame_count;
+              static uint32_t amp; uint32_t f = frame_count;
+              if (f > 600u && !amp)        { pad |= PAD_PAUSE; amp = 1; }
+              else if (f > 900u && amp==1) { pad |= PAD_DOWN;  amp = 2; }
+            }
+#endif
+            /* PAUSE MENU: edge-triggered, and PAD_PAUSE is SWALLOWED so the
+               roll binding on the same button cannot fire underneath it. */
+            { static uint32_t pmprev;
+              uint32_t pmedge = pad & ~pmprev; pmprev = pad;
+              if (pmedge & PAD_PAUSE) { g_pause ^= 1; g_pausesel = 0; }
+              if (g_pause) {
+                  if (pmedge & PAD_UP)   g_pausesel = (uint8_t)((g_pausesel + PAUSE_ITEMS - 1) % PAUSE_ITEMS);
+                  if (pmedge & PAD_DOWN) g_pausesel = (uint8_t)((g_pausesel + 1) % PAUSE_ITEMS);
+                  if (pmedge & (PAD_A|PAD_X)) {
+                      if (g_pausesel == 0) g_pause = 0;      /* RESUME  */
+                      else { g_dead = 1; g_pause = 0; }      /* RESTART */
+                  }
+              }
+              pad &= ~PAD_PAUSE;
+              if (g_pause) pad = 0;   /* world frozen: Lara takes no input */
+            }
 #ifdef GDPAD
             /* REMOTE CONTROL FOR TESTING (user, 2026-08-09: "you can control -
              * GameDrive has facilities for that").  gd_input reads INPUT.BIN
@@ -7271,6 +7316,8 @@ bootvid_entry:
                   int pe; g_pickspin += 4;
 #ifdef ENEMIES
                   { static int bf; int be;
+                    if (g_pause) goto ent_paused;  /* world frozen: no AI, no
+                                                      animation, no damage */
                     if ((++bf & 1) == 0) g_batframe++;      /* wing flap */
                     if (!g_batinit) {                        /* seed once */
                         for (be=0; be<MRT_ENTCOUNT; be++)
@@ -7366,6 +7413,7 @@ bootvid_entry:
                         }
                     }
                     if (g_health <= 0) g_dead = 1;   /* killed by damage */
+                    ent_paused: ;
                   }
 #endif
 #ifdef DARTS
@@ -8326,6 +8374,24 @@ bootvid_entry:
                    the digits. Sit below it. */
                 menu_text(ofb, RENDER_W, RENDER_H, os, 4, 44, 1, 2, 255); } }
 #endif
+            /* ---- PAUSE MENU OVERLAY ----
+               Painted after gpu_sync (Tom idle) and before the flip, like
+               DBGROOM - plain 68k stores into a finished buffer, no Blitter,
+               so it cannot race the kernel. */
+            if (g_pause) {
+                uint8_t *pfb = (uint8_t *)video_backbuffer();
+                static const char *pitems[PAUSE_ITEMS] = { "RESUME", "RESTART" };
+                int pi;
+                menu_text(pfb, RENDER_W, RENDER_H, "PAUSED", 120, 40, 1, 2, 255);
+                for (pi = 0; pi < PAUSE_ITEMS; pi++)
+                    menu_text(pfb, RENDER_W, RENDER_H, pitems[pi],
+                              120, 60 + pi*14, 1, 2,
+                              (pi == g_pausesel) ? 255 : 245);
+                /* selection marker: menu_text past x~240 does not display, so
+                   keep the whole block well left of that. */
+                menu_text(pfb, RENDER_W, RENDER_H, ">", 108,
+                          60 + g_pausesel*14, 1, 2, 255);
+            }
 #ifdef ENEMIES
             /* HEALTH BAR: raw-pixel bar at the TOP-LEFT (the JLOOPS/LARACOUNT
                bars prove raw writes at x=0+ display; the right half of the

@@ -949,6 +949,13 @@ CFLAGS   += -DENEMYTEX
 CXXFLAGS += -DENEMYTEX
 endif
 
+# AUTOMENU=1: drive the pause menu from the frame counter so a capture can see
+# it with nobody on the pad. Test arm only.
+ifdef AUTOMENU
+CFLAGS   += -DAUTOMENU
+CXXFLAGS += -DAUTOMENU
+endif
+
 ifdef ANIMRATE
 CFLAGS   += -DANIMRATE
 CXXFLAGS += -DANIMRATE
