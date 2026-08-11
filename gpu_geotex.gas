@@ -1939,10 +1939,11 @@ vcx_ok:
 yloop:
 .if ODRAWS=1
 	; ★ POSITIVE CONTROL for the ODRAWS mechanism.  yloop runs once per RASTER
-	; SCANLINE and unquestionably executes, so if ODP_N stays 0 the SRAM
-	; accumulator itself is broken; if ODP_N counts but ODP_PX does not, the
-	; pixel probe is simply MIS-SITED (the kernel has several Blitter launch
-	; sites and the historic ODRAW probe sits at only one of them).
+	; SCANLINE and unquestionably executes.
+	; ☠️ HISTORY: this control read ~0 and I concluded both probes sat on a
+	; dead rasteriser path.  THAT WAS WRONG - the accumulators were fine and
+	; the READOUT's own divisions were underflowing to zero.  Strip the
+	; arithmetic out of a panel before drawing any conclusion from it.
 	; r0/r1 are free here - the PROFGPU block below uses them the same way.
 	movei	#ODP_N,r0
 	load	(r0),r1
