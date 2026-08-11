@@ -2084,19 +2084,62 @@ static uint32_t bp_s0, bp_sA, bp_sB, bp_sC, bp_sD;
 #endif
 static int  g_health = 1000;             /* TR1 full health              */
 
+#define ENT_BAT_MAXDRAW 4
+#define ENT_WOLF_MAXDRAW 2
+#define ENT_BEAR_MAXDRAW 1
+/* ★★★ THE ENEMY BLOBS COST NOTHING - they share the TITLE SCREEN's arena.
+ * Plumbing ENEMIES for the first time overflowed BSS by 52,368 bytes, and the
+ * enemy blobs are 39,424 of that.  But their lifetime is DISJOINT from the two
+ * biggest buffers in the program:
+ *     rblob[6][8448] = 50,688   ring-item staging, TITLE ONLY
+ *     mbuf [2][12288] = 24,576  title music stream, TITLE ONLY
+ * Both are dead the moment the level starts, and no enemy blob exists until
+ * then.  Overlaying them makes the enemy side free (the union is the size of
+ * the larger group, which the title already paid for).
+ * ☠️ SAFE ONLY BECAUSE NEITHER SIDE PERSISTS ACROSS THE TRANSITION: the music
+ * is re-opened and re-streamed on every title entry, and the ring items are
+ * rebuilt per frame - so returning to the title after gameplay re-fills them
+ * from scratch rather than reading clobbered state. */
+/* 8192, trimmed from 8448: the union's TITLE side is the larger one, so it
+   alone sets the arena size - every byte here is a byte the whole program
+   pays. ☠️ Do NOT go to 6144: the comment above records that the biggest
+   staged item needs 6960B and 6144 silently clamped it to an INVISIBLE ITEM.
+   8192 keeps 1232B of margin over that measured worst case. */
+#ifdef GEOMDIRECT
+#define MRT_RBLOB_SZ 8192
+#else
+#define MRT_RBLOB_SZ 4096
+#endif
+static union {
+    struct {                                   /* TITLE / MENU only */
+        uint8_t rblob[6][MRT_RBLOB_SZ];
+        /* 6144, from 12288. Title music double-buffer: 0.55s per swap at
+           11025Hz s8, and it shipped at 4096 historically ("4KB = 0.37s per
+           swap"), so this stays well clear of the size that was proven to
+           stream. The title side sets the arena size, so this is the single
+           biggest lever available. ☠️ If the title music stutters, THIS is
+           the first thing to put back. */
+        int8_t  mbuf[2][6144];
+    } t;
+    struct {                                   /* IN-GAME only */
+        uint8_t bat [ENT_BAT_MAXDRAW][1792];
+        uint8_t wolf[ENT_WOLF_MAXDRAW][10752];
+        uint8_t bear[ENT_BEAR_MAXDRAW][10752];
+    } g;
+} g_arena __attribute__((aligned(8)));
+#define ent_bat_blob   g_arena.g.bat
+#define ent_wolf_blob  g_arena.g.wolf
+#define ent_bear_blob  g_arena.g.bear
+
 #if defined(ENEMIES)
 /* THE BAT (enemy model 9): 45 verts, 41 faces, 8 fly-cycle frames baked by the
    extractor (mrt_bat.h). Flat dark swatch (door grey cell). First real enemy;
    wolf/bear are much heavier models. */
-#define ENT_BAT_MAXDRAW 4
-static uint8_t ent_bat_blob[ENT_BAT_MAXDRAW][1792] __attribute__((aligned(8)));
 /* wolf/bear are ~6x the bat's faces (251/261) - cap simultaneous draws low
    and gate tight, face count IS the frame cost. Blobs sized for the largest
-   model: 264v*16B + 173q*36B + 132t*30B + 16 hdr ~= 10.5KB, round to 10752. */
-#define ENT_WOLF_MAXDRAW 2
-#define ENT_BEAR_MAXDRAW 1
-static uint8_t ent_wolf_blob[ENT_WOLF_MAXDRAW][10752] __attribute__((aligned(8)));
-static uint8_t ent_bear_blob[ENT_BEAR_MAXDRAW][10752] __attribute__((aligned(8)));
+   model: 264v*8B + 173q*36B + 132t*30B + 16 hdr ~= 10.5KB, round to 10752. */
+
+
 static uint8_t g_batframe;               /* shared fly-cycle frame    */
 static int g_batx[MRT_ENTCOUNT], g_baty[MRT_ENTCOUNT], g_batz[MRT_ENTCOUNT];
 static uint8_t g_batinit;                /* positions seeded from spawn  */
@@ -3953,10 +3996,10 @@ int main(void)
              the max pad (180v/16q/112t) stages at 6960B and the 6144 slot's
              overflow clamp made it an INVISIBLE ITEM (the exact failure the
              old 2304-byte comment warned about). */
-          static uint8_t rblob[6][8448] __attribute__((aligned(8)));
-#else
-          static uint8_t rblob[6][4096] __attribute__((aligned(8)));
 #endif
+          /* storage is g_arena (shared with the in-game enemy blobs - see the
+             union's note); this is only the local name for it. */
+#define rblob g_arena.t.rblob
           const uint8_t *rsrc[6]; const uint8_t *ratl[6];
           int rvcnt[6], rblen[6];
           int rnv0[6], rnq0[6], rnt0[6];  /* per-item counts for the
@@ -4031,7 +4074,7 @@ int main(void)
              card through a double buffer on voice 0 (footsteps own it
              in-game — no conflict). No seek in the GD BIOS: hold the
              handle, sequential reads, close+reopen to loop the theme. */
-          static int8_t mbuf[2][12288] __attribute__((aligned(4)));
+#define mbuf g_arena.t.mbuf   /* storage is g_arena - see the union's note */
           /* 4KB = 0.37s per swap; halved from 8KB to protect the 68k STACK:
              sp starts at 0x200000 and grows DOWN into the top of BSS — the
              8KB buffers left only 208 BYTES of headroom (cold-boot crash,
