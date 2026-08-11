@@ -38,6 +38,21 @@
 #define DISPLAY_H RENDER_H
 #endif
 
+/* VIEWH=N (make ... VIEWH=90): DOOM-STYLE SHORT BAND.  Render the world into
+ * only the TOP N lines of the RENDER_H-line buffer and leave the rest black -
+ * that is where a status bar would go.  The buffer, the OP object and the
+ * display window are UNCHANGED; only the extent the game draws into moves.
+ *
+ * This is a CROP, not a squash: CENTER_Y follows VIEW_H but FOCAL_Y does not,
+ * so the vertical field of view shrinks with the band and faces outside it are
+ * rejected by the edge walk instead of rasterized.  Scaling FOCAL_Y too would
+ * keep the FOV and squash the world - same pixels, no front-end saving, wrong
+ * aspect.  ☠️ The kernel carries its OWN copy of these constants
+ * (gpu_geotex.gas); VIEWH is passed to rmac as well and both must agree. */
+#ifndef VIEW_H
+#define VIEW_H RENDER_H
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif

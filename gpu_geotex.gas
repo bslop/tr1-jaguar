@@ -175,7 +175,6 @@ MAGIC_DONE	.equ	$0A3DD05E
 	.if	LOWRES
 	.if VRES60=1
 RENDER_H	.equ	60
-CENTER_Y	.equ	30		; RENDER_H/2
 FOCAL_Y		.equ	47		; FOCAL/4 - the OP stretches 4x vertically.
 					; MUST scale with the compression: halving
 					; RENDER_H/CENTER_Y alone halves the vertical
@@ -184,15 +183,66 @@ FOCAL_Y		.equ	47		; FOCAL/4 - the OP stretches 4x vertically.
 					; right in on Lara (user spotted it).
 	.else
 RENDER_H	.equ	120
-CENTER_Y	.equ	60		; RENDER_H/2
 FOCAL_Y		.equ	95		; FOCAL/2 (vertical axis compressed 2x)
 	.endif
 	.else
 RENDER_H	.equ	240
-CENTER_Y	.equ	120
 FOCAL_Y		.equ	190		; = FOCAL (no vertical scaling)
 	.endif
-YMAX		.equ	(RENDER_H-1)	; edge-walk bottom clamp
+; VIEWH (2026-08-11): the world is drawn into the TOP VIEW_H lines only, the
+; rest of the buffer is left black for a Doom-style status bar.  VIEWH=0 (the
+; default) makes VIEW_H == RENDER_H and every constant below is unchanged.
+; ☠️ CENTER_Y follows the band but FOCAL_Y does NOT - that is deliberate.  This
+; is a CROP: the vertical FOV shrinks with the band, so faces that leave it are
+; killed by the empty-y-range / YMAX early-outs rather than rasterized.  Scaling
+; FOCAL_Y with it (what VRES60 above has to do, because the OP stretches those
+; 60 lines back over the whole window) would keep the FOV and squash the world
+; instead - the same pixel count for no front-end saving.
+; ☠️ THE LADDER IS ENUMERATED, and it has to be: jas takes -d NAME=VALUE only
+; for `.if` COMPARISONS - the name is not a symbol and `VIEW_H .equ VIEWH` is an
+; undefined-symbol error (probed 2026-08-11).  So every band height a build may
+; ask for needs a branch here, and the Makefile refuses any VIEWH outside the
+; list rather than let one fall through to full height - a lever that silently
+; does nothing is the "verify the flag landed" trap in its purest form.
+	.if VIEWH=0
+VIEW_H		.equ	RENDER_H
+	.else
+	.if VIEWH=108
+VIEW_H		.equ	108
+	.else
+	.if VIEWH=100
+VIEW_H		.equ	100
+	.else
+	.if VIEWH=96
+VIEW_H		.equ	96
+	.else
+	.if VIEWH=90
+VIEW_H		.equ	90
+	.else
+	.if VIEWH=84
+VIEW_H		.equ	84
+	.else
+	.if VIEWH=80
+VIEW_H		.equ	80
+	.else
+	.if VIEWH=72
+VIEW_H		.equ	72
+	.else
+	.if VIEWH=60
+VIEW_H		.equ	60
+	.else
+VIEW_H		.equ	VIEWH_NOT_ON_THE_LADDER_SEE_THE_MAKEFILE
+	.endif
+	.endif
+	.endif
+	.endif
+	.endif
+	.endif
+	.endif
+	.endif
+	.endif
+CENTER_Y	.equ	(VIEW_H/2)
+YMAX		.equ	(VIEW_H-1)	; edge-walk bottom clamp
 CENTER_X	.equ	160
 FOCAL		.equ	190		; TR1's ~80-degree FOV (160 was 90:
 					; too wide -> world read as too far)

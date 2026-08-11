@@ -940,10 +940,26 @@ CFLAGS   += -DAUTOFIRE
 CXXFLAGS += -DAUTOFIRE
 endif
 
+# VIEWH=N: draw the world into the TOP N lines only and leave the rest of the
+# buffer black (where a Doom-style status bar would go). The buffer, the OP
+# object and the display window do not move. A crop, not a squash - see the
+# comment in video.h. ☠️ The value must reach BOTH the C projection and the
+# kernel's own copy of the constants, hence the GEOTEX_DEFS entry below too.
+VIEWH_LADDER := 108 100 96 90 84 80 72 60
+ifdef VIEWH
+ifeq ($(filter $(VIEWH),$(VIEWH_LADDER)),)
+$(error VIEWH=$(VIEWH) is not on the ladder ($(VIEWH_LADDER)). jas takes -d only \
+for .if comparisons - a define is NOT a symbol - so gpu_geotex.gas enumerates \
+every band height. Add a branch there and extend VIEWH_LADDER here. \
+Falling through would build a full-height kernel against a short-band C side)
+endif
+CFLAGS   += -DVIEW_H=$(VIEWH)
+CXXFLAGS += -DVIEW_H=$(VIEWH)
+endif
+
 # ENEMYTEX=1: real per-face enemy skins instead of the flat tone swatch.
-# ☠️ DOES NOT FIT YET - the image has 40 bytes of headroom and wolf-only skins
-# cost ~61KB (atlas is linked into the ROM). Implemented and ready; switch on
-# after the memory pass. Assets: MRT_ENEMYTEX=1 python3 tools/tr2jag_multiroom.py
+# Half-res packing (MRT_ENEMYTEX_STEP=2) is what made it fit; verified on
+# silicon 2026-08-11. Assets: MRT_ENEMYTEX=1 python3 tools/tr2jag_multiroom.py
 ifdef ENEMYTEX
 CFLAGS   += -DENEMYTEX
 CXXFLAGS += -DENEMYTEX
@@ -1107,7 +1123,7 @@ ifdef TRAPEZOID
 $(error ROWDIET=1 and TRAPEZOID=1 are mutually exclusive (both claim r4/r21 in the span run))
 endif
 endif
-GEOTEX_DEFS := $(LOWRES_DEF) -d VRES60=$(if $(VRES60),1,0) $(NOFILL_DEF) $(NOSPAN_DEF) $(PROFGPU_DEF) $(NOMUL_DEF) $(NODIV_DEF) $(NOSTORE_DEF) $(SHADEPASS_DEF) $(NOCULL_DEF) $(STAGEDIET_DEF) -d NOBLIT=$(if $(NOBLIT),1,0) -d ALLCULL=$(if $(ALLCULL),1,0) -d RUNHIST=$(if $(RUNHIST),1,0) -d TRAPEZOID=$(if $(TRAPEZOID),1,0) -d DRIFTLOOSE=$(if $(DRIFTLOOSE),1,0) -d XCULL=$(if $(XCULL),1,0) -d BEXIT=$(if $(BEXIT),1,0) -d ROWDIET=$(if $(ROWDIET),1,0) -d PHRASESHADE=$(if $(PHRASESHADE),1,0) -d DIVHIDE=$(if $(DIVHIDE),1,0) -d BANKDIET=$(if $(BANKDIET),1,0) -d RUNBATCH=$(if $(RUNBATCH),1,0) -d RBNOUV=$(if $(RBNOUV),1,0) -d CULLCOUNT=$(if $(CULLCOUNT),1,0) -d NOBFCULL=$(if $(NOBFCULL),1,0) -d BEXCNT=$(if $(BEXCNT),1,0) -d SDPROBE=$(if $(SDPROBE),1,0) -d NOSDCULL=$(if $(NOSDCULL),1,0) -d WCCNT=$(if $(WCCNT),1,0) -d NOEMPTYY=$(if $(NOEMPTYY),1,0) -d GPUBG=$(if $(GPUBG),1,0) -d SHADEEXCL=$(if $(SHADEEXCL),1,0) -d NEARLOW=$(if $(NEARLOW),1,0) -d PREPASSONLY=$(if $(PREPASSONLY),1,0) -d MMULTX=$(if $(MMULTX),1,0) -d MMXDIAG=$(if $(MMXDIAG),1,0) -d UVCLAMP=$(if $(UVCLAMP),1,0) -d UVPROBE=$(if $(UVPROBE),1,0) -d UVFIX=$(if $(UVFIX),1,0) -d UVNEG=$(if $(UVNEG),1,0) -d TINYCULL=$(if $(TINYCULL),$(TINYCULL),0) -d JMPDIET=$(if $(JMPDIET),1,0) -d LARACOUNT=$(if $(LARACOUNT),1,0) -d KEEPDEGEN=$(if $(KEEPDEGEN),1,0) -d DIVZGUARD=$(if $(DIVZGUARD),1,0) -d TINYKEEP=$(if $(TINYKEEP),$(TINYKEEP),0) -d BWOVER=$(if $(BWOVER),1,0) -d ODRAW=$(if $(ODRAW),1,0) -d PHRASEDST=$(if $(PHRASEDST),1,0) -d IMULPROBE=$(if $(IMULPROBE),1,0) -d SPANSHADE=$(if $(SPANSHADE),$(SPANSHADE),0) -d FOURBPP=$(if $(FOURBPP),1,0) -d INLINEMUL=$(if $(INLINEMUL),1,0) -d OFFHOIST=$(if $(OFFHOIST),1,0) -d VPACK=$(if $(VPACK),1,0) -d VCJDIET=$(if $(VCJDIET),1,0) -d NEARCLIP=$(if $(NEARCLIP),1,0) -d SYNCDRAIN=$(if $(SYNCDRAIN),1,0) -d ODRAWS=$(if $(ODRAWS),1,0)
+GEOTEX_DEFS := $(LOWRES_DEF) -d VRES60=$(if $(VRES60),1,0) $(NOFILL_DEF) $(NOSPAN_DEF) $(PROFGPU_DEF) $(NOMUL_DEF) $(NODIV_DEF) $(NOSTORE_DEF) $(SHADEPASS_DEF) $(NOCULL_DEF) $(STAGEDIET_DEF) -d NOBLIT=$(if $(NOBLIT),1,0) -d ALLCULL=$(if $(ALLCULL),1,0) -d RUNHIST=$(if $(RUNHIST),1,0) -d TRAPEZOID=$(if $(TRAPEZOID),1,0) -d DRIFTLOOSE=$(if $(DRIFTLOOSE),1,0) -d XCULL=$(if $(XCULL),1,0) -d BEXIT=$(if $(BEXIT),1,0) -d ROWDIET=$(if $(ROWDIET),1,0) -d PHRASESHADE=$(if $(PHRASESHADE),1,0) -d DIVHIDE=$(if $(DIVHIDE),1,0) -d BANKDIET=$(if $(BANKDIET),1,0) -d RUNBATCH=$(if $(RUNBATCH),1,0) -d RBNOUV=$(if $(RBNOUV),1,0) -d CULLCOUNT=$(if $(CULLCOUNT),1,0) -d NOBFCULL=$(if $(NOBFCULL),1,0) -d BEXCNT=$(if $(BEXCNT),1,0) -d SDPROBE=$(if $(SDPROBE),1,0) -d NOSDCULL=$(if $(NOSDCULL),1,0) -d WCCNT=$(if $(WCCNT),1,0) -d NOEMPTYY=$(if $(NOEMPTYY),1,0) -d GPUBG=$(if $(GPUBG),1,0) -d SHADEEXCL=$(if $(SHADEEXCL),1,0) -d NEARLOW=$(if $(NEARLOW),1,0) -d PREPASSONLY=$(if $(PREPASSONLY),1,0) -d MMULTX=$(if $(MMULTX),1,0) -d MMXDIAG=$(if $(MMXDIAG),1,0) -d UVCLAMP=$(if $(UVCLAMP),1,0) -d UVPROBE=$(if $(UVPROBE),1,0) -d UVFIX=$(if $(UVFIX),1,0) -d UVNEG=$(if $(UVNEG),1,0) -d TINYCULL=$(if $(TINYCULL),$(TINYCULL),0) -d JMPDIET=$(if $(JMPDIET),1,0) -d LARACOUNT=$(if $(LARACOUNT),1,0) -d KEEPDEGEN=$(if $(KEEPDEGEN),1,0) -d DIVZGUARD=$(if $(DIVZGUARD),1,0) -d TINYKEEP=$(if $(TINYKEEP),$(TINYKEEP),0) -d BWOVER=$(if $(BWOVER),1,0) -d ODRAW=$(if $(ODRAW),1,0) -d PHRASEDST=$(if $(PHRASEDST),1,0) -d IMULPROBE=$(if $(IMULPROBE),1,0) -d SPANSHADE=$(if $(SPANSHADE),$(SPANSHADE),0) -d FOURBPP=$(if $(FOURBPP),1,0) -d INLINEMUL=$(if $(INLINEMUL),1,0) -d OFFHOIST=$(if $(OFFHOIST),1,0) -d VPACK=$(if $(VPACK),1,0) -d VCJDIET=$(if $(VCJDIET),1,0) -d NEARCLIP=$(if $(NEARCLIP),1,0) -d SYNCDRAIN=$(if $(SYNCDRAIN),1,0) -d ODRAWS=$(if $(ODRAWS),1,0) -d VIEWH=$(if $(VIEWH),$(VIEWH),0)
 $(BUILD)/gpu_geotex.bin: gpu_geotex.gas | $(BUILD)
 	$(JAS) $< -o $@ --gpu $(call jasd,$(GEOTEX_DEFS))
 

@@ -85,7 +85,7 @@ __attribute__((used, noinline)) void pad_main_probe(void)
 
 typedef int32_t fix;
 #define CENTER_X  (RENDER_W / 2)
-#define CENTER_Y  (RENDER_H / 2)
+#define CENTER_Y  (VIEW_H / 2)      /* VIEWH: follows the band (crop) */
 #define FOCAL     (RENDER_W / 2)
 /* In LOWRES only the vertical axis is 2x compressed (the OP scaler stretches
  * the 120-line fb back to 240), so the Y focal length is halved.  This affects
@@ -129,6 +129,26 @@ typedef uint16_t fbpix;
 #define CLEAR_IDX 0x0004
 #define BLINK_ON  0xFFFF
 #define BLINK_OFF 0x0000
+#endif
+
+/* VIEWH: the per-frame clear covers the BAND ONLY - that is where the saving
+   comes from, since the fill is ~30% of the frame (NOFILL: 6.67 -> 9.32).  The
+   strip below the band still holds the loading screen, so it is painted once
+   per buffer and then never touched again.  Six primings covers a triple
+   buffer with margin.  ☠️ The pause menu paints the full height; on exit the
+   strip keeps its remnants until this primes again.  Measurement arms run
+   PADMUTE, so the menu never opens - fix it properly if the band ships. */
+#if VIEW_H != RENDER_H
+#define CLEAR_VIEW(fb)                                                   \
+    do {                                                                 \
+        static int vh_prime = 6;                                         \
+        if (vh_prime) {                                                  \
+            blit_band((fb), VIEW_H, RENDER_H, CLEAR_IDX); vh_prime--;    \
+        }                                                                \
+        blit_band((fb), 0, VIEW_H, CLEAR_IDX);                           \
+    } while (0)
+#else
+#define CLEAR_VIEW(fb) blit_band((fb), 0, RENDER_H, CLEAR_IDX)
 #endif
 
 #define SIN(a)    SINTAB[(a) & 255]
@@ -305,7 +325,7 @@ static fix pcl_cY4, pcl_sY4, pcl_cP4, pcl_sP4;   /* set once per frame */
 static int pcl_camx, pcl_camy, pcl_camz;
 #define PCL_FOCAL   190              /* MUST match the kernel's FOCAL */
 #define PCL_CX      160
-#define PCL_CY      (RENDER_H/2)
+#define PCL_CY      (VIEW_H/2)
 #define PCL_FOCALY  ((RENDER_H)==240 ? 190 : 95)
 static int portal_rect(const long *pr, int *rx0, int *rx1, int *ry0, int *ry1)
 {
@@ -341,7 +361,7 @@ static int portal_rect(const long *pr, int *rx0, int *rx1, int *ry0, int *ry1)
     *rx0 = minx - 1; *rx1 = maxx + 1;       /* 1px rounding margin */
     *ry0 = miny - 1; *ry1 = maxy + 1;
     if (*rx0 < 0) *rx0 = 0;  if (*rx1 > 319) *rx1 = 319;
-    if (*ry0 < 0) *ry0 = 0;  if (*ry1 > RENDER_H-1) *ry1 = RENDER_H-1;
+    if (*ry0 < 0) *ry0 = 0;  if (*ry1 > VIEW_H-1) *ry1 = VIEW_H-1;
     return 1;
 }
 /* union of the doorway rects from room a into room b (a's portal list).
@@ -3180,7 +3200,7 @@ static void fill_convex(uint16_t *fb, const int *sx, const int *sy,
         if (sy[i] > ymax) ymax = sy[i];
     }
     y0 = ymin < 0 ? 0 : ymin;
-    y1 = ymax > RENDER_H - 2 ? RENDER_H - 2 : ymax;   /* +1 line stays in-bounds */
+    y1 = ymax > VIEW_H - 2 ? VIEW_H - 2 : ymax;       /* +1 line stays in-bounds */
     y0 &= ~1;                                          /* even-align: 2-line spans */
 
     aci = bci = itop;
@@ -8097,7 +8117,7 @@ bootvid_entry:
                     if (rdepth[nb]!=d2-1 || prv[nb]==0) continue;
                     r1 = room_link_rect(nb, i, &a0,&a1,&b0,&b1);
                     if (!r1) continue;
-                    if (r1==2) { a0=0;a1=319;b0=0;b1=RENDER_H-1; }
+                    if (r1==2) { a0=0;a1=319;b0=0;b1=VIEW_H-1; }
                     if (prv[nb]==1) {   /* clip through the neighbour's window */
                         if (prx0[nb]>a0) a0=prx0[nb];
                         if (prx1[nb]<a1) a1=prx1[nb];
@@ -8108,7 +8128,7 @@ bootvid_entry:
                     if (!got) { ux0=a0;ux1=a1;uy0=b0;uy1=b1;got=1; }
                     else { if(a0<ux0)ux0=a0; if(a1>ux1)ux1=a1;
                            if(b0<uy0)uy0=b0; if(b1>uy1)uy1=b1; }
-                    if (ux0==0 && ux1==319 && uy0==0 && uy1==RENDER_H-1) break;
+                    if (ux0==0 && ux1==319 && uy0==0 && uy1==VIEW_H-1) break;
                   }
                   if (got) { prv[i]=1; prx0[i]=ux0; prx1[i]=ux1;
                              pry0[i]=uy0; pry1[i]=uy1; }
@@ -8126,7 +8146,7 @@ bootvid_entry:
               for (i=0;i<roomCount;i++)
                   if (rdepth[i]<=3 && !prv[i]) {
                       prv[i]=1; prx0[i]=0; prx1[i]=319;
-                      pry0[i]=0; pry1[i]=RENDER_H-1; }
+                      pry0[i]=0; pry1[i]=VIEW_H-1; }
 #endif
               }
 #ifdef M68D_A2
@@ -8612,7 +8632,7 @@ bootvid_entry:
             { uint32_t _ta = PPNOW();
               { extern void video_wait_safe_vc(void); video_wait_safe_vc(); }
               { uint32_t _tb = PPNOW();
-                blit_band(fb, 0, RENDER_H, CLEAR_IDX);
+                CLEAR_VIEW(fb);
                 { uint32_t _tc = PPNOW();
                   PPADD(pp_safe, _tb - _ta);
                   PPADD(pp_blit, _tc - _tb); } } }
@@ -8627,10 +8647,10 @@ bootvid_entry:
 #ifndef NOCLEAR
 #ifdef BUSPROBE
             { uint32_t _q1 = vp_tick();
-              blit_band(fb, 0, RENDER_H, CLEAR_IDX);
+              CLEAR_VIEW(fb);
               bp_blit += vp_tick() - _q1; }
 #else
-            blit_band(fb, 0, RENDER_H, CLEAR_IDX);
+            CLEAR_VIEW(fb);
 #endif
 #else /* NOCLEAR */
             /* NOCLEAR (2026-07-31): do not clear the framebuffer. The missing
@@ -8784,7 +8804,7 @@ bootvid_entry:
                     /* PORTAL-WINDOW CLIP: neighbour rooms render only inside
                        the doorway rect they're seen through; invisible
                        doorway = the room isn't drawn AT ALL. */
-                    { int cx0=0, cx1=319, cy0=0, cy1=RENDER_H-1;
+                    { int cx0=0, cx1=319, cy0=0, cy1=VIEW_H-1;
 #ifndef NOPCLIP
                       /* NOPCLIP=1 (2026-07-30): draw neighbour rooms over the
                          FULL screen instead of clipping them to the doorway
@@ -8897,7 +8917,7 @@ bootvid_entry:
                       displist[1+ndrawn*4+0] = (uint32_t)ent_door_blob[nd];
                       nd++;
                       displist[1+ndrawn*4+1] = 319u;
-                      displist[1+ndrawn*4+2] = (uint32_t)(RENDER_H-1);
+                      displist[1+ndrawn*4+2] = (uint32_t)(VIEW_H-1);
                       displist[1+ndrawn*4+3] = 0;
                       ndrawn++;
                   } }
@@ -8919,7 +8939,7 @@ bootvid_entry:
                       build_ent_switch(ent_sw_blob[ns], atlasW, e);
                       displist[1+ndrawn*4+0] = (uint32_t)ent_sw_blob[ns];
                       displist[1+ndrawn*4+1] = 319u;
-                      displist[1+ndrawn*4+2] = (uint32_t)(RENDER_H-1);
+                      displist[1+ndrawn*4+2] = (uint32_t)(VIEW_H-1);
                       displist[1+ndrawn*4+3] = 0;
                       ns++; ndrawn++;
                   } }
@@ -8943,7 +8963,7 @@ bootvid_entry:
                       build_ent_bridge(ent_br_blob[nb], atlasW, e);
                       displist[1+ndrawn*4+0] = (uint32_t)ent_br_blob[nb];
                       displist[1+ndrawn*4+1] = 319u;
-                      displist[1+ndrawn*4+2] = (uint32_t)(RENDER_H-1);
+                      displist[1+ndrawn*4+2] = (uint32_t)(VIEW_H-1);
                       displist[1+ndrawn*4+3] = 0;
                       nb++; ndrawn++;
                   } }
@@ -8964,7 +8984,7 @@ bootvid_entry:
 #endif
                       displist[1+ndrawn*4+0] = (uint32_t)ent_pk_blob[np];
                       displist[1+ndrawn*4+1] = 319u;
-                      displist[1+ndrawn*4+2] = (uint32_t)(RENDER_H-1);
+                      displist[1+ndrawn*4+2] = (uint32_t)(VIEW_H-1);
                       displist[1+ndrawn*4+3] = 0;
                       np++; ndrawn++;
                   } }
@@ -8980,7 +9000,7 @@ bootvid_entry:
                       build_ent_dart(ent_dart_blob[nq2], atlasW, d);
                       displist[1+ndrawn*4+0] = (uint32_t)ent_dart_blob[nq2];
                       displist[1+ndrawn*4+1] = 319u;
-                      displist[1+ndrawn*4+2] = (uint32_t)(RENDER_H-1);
+                      displist[1+ndrawn*4+2] = (uint32_t)(VIEW_H-1);
                       displist[1+ndrawn*4+3] = 0;
                       nq2++; ndrawn++;
                   } }
@@ -9003,7 +9023,7 @@ bootvid_entry:
                                     g_batframe % MRT_BAT_FRAMES);
                       displist[1+ndrawn*4+0] = (uint32_t)ent_bat_blob[na];
                       displist[1+ndrawn*4+1] = 319u;
-                      displist[1+ndrawn*4+2] = (uint32_t)(RENDER_H-1);
+                      displist[1+ndrawn*4+2] = (uint32_t)(VIEW_H-1);
                       displist[1+ndrawn*4+3] = 0;
                       na++; ndrawn++;
                   } }
@@ -9023,7 +9043,7 @@ bootvid_entry:
                                      g_batframe % MRT_WOLF_FRAMES);
                       displist[1+ndrawn*4+0] = (uint32_t)ent_wolf_blob[na];
                       displist[1+ndrawn*4+1] = 319u;
-                      displist[1+ndrawn*4+2] = (uint32_t)(RENDER_H-1);
+                      displist[1+ndrawn*4+2] = (uint32_t)(VIEW_H-1);
                       displist[1+ndrawn*4+3] = 0;
                       na++; ndrawn++;
                   } }
@@ -9041,7 +9061,7 @@ bootvid_entry:
                       build_ent_bear(ent_bear_blob[na], atlasW, e, 0);
                       displist[1+ndrawn*4+0] = (uint32_t)ent_bear_blob[na];
                       displist[1+ndrawn*4+1] = 319u;
-                      displist[1+ndrawn*4+2] = (uint32_t)(RENDER_H-1);
+                      displist[1+ndrawn*4+2] = (uint32_t)(VIEW_H-1);
                       displist[1+ndrawn*4+3] = 0;
                       na++; ndrawn++;
                   } }
@@ -9057,13 +9077,13 @@ bootvid_entry:
                                    g_batframe % MRT_WOLF_FRAMES);
                     displist[1+ndrawn*4+0] = (uint32_t)ent_wolf_blob[0];
                     displist[1+ndrawn*4+1] = 319u;
-                    displist[1+ndrawn*4+2] = (uint32_t)(RENDER_H-1);
+                    displist[1+ndrawn*4+2] = (uint32_t)(VIEW_H-1);
                     displist[1+ndrawn*4+3] = 0; ndrawn++;
                     g_batx[1] = g_lax + fx + 900; g_baty[1] = g_lay; g_batz[1] = g_laz + fz;
                     build_ent_bear(ent_bear_blob[0], atlasW, 1, 0);
                     displist[1+ndrawn*4+0] = (uint32_t)ent_bear_blob[0];
                     displist[1+ndrawn*4+1] = 319u;
-                    displist[1+ndrawn*4+2] = (uint32_t)(RENDER_H-1);
+                    displist[1+ndrawn*4+2] = (uint32_t)(VIEW_H-1);
                     displist[1+ndrawn*4+3] = 0; ndrawn++;
                 }
 #endif
@@ -9074,7 +9094,7 @@ bootvid_entry:
                     build_door_blob(door_blob, atlasW);
                     displist[1+ndrawn*4+0] = (uint32_t)door_blob;
                     displist[1+ndrawn*4+1] = 319u;
-                    displist[1+ndrawn*4+2] = (uint32_t)(RENDER_H-1);
+                    displist[1+ndrawn*4+2] = (uint32_t)(VIEW_H-1);
                     displist[1+ndrawn*4+3] = 0;
                     ndrawn++;
                 }
@@ -9082,7 +9102,7 @@ bootvid_entry:
                     build_item_blob(item_blob, atlasW);
                     displist[1+ndrawn*4+0] = (uint32_t)item_blob;
                     displist[1+ndrawn*4+1] = 319u;
-                    displist[1+ndrawn*4+2] = (uint32_t)(RENDER_H-1);
+                    displist[1+ndrawn*4+2] = (uint32_t)(VIEW_H-1);
                     displist[1+ndrawn*4+3] = 0;
                     ndrawn++;
                 }
@@ -9178,7 +9198,7 @@ bootvid_entry:
                          plumbing stays for future double-sided models. */
                       displist[1+dn*4+0] = (uint32_t)lara_blob;
                       displist[1+dn*4+1] = (0u<<16) | 319u;
-                      displist[1+dn*4+2] = (0u<<16) | (uint32_t)(RENDER_H-1);
+                      displist[1+dn*4+2] = (0u<<16) | (uint32_t)(VIEW_H-1);
                       displist[1+dn*4+3] = 0;        /* Tom self-transform */
                       displist[0] = dn + 1;
                       lara_disp = 1;
@@ -9284,7 +9304,7 @@ bootvid_entry:
 #endif
                     }
 #endif
-                    gpu_geotex_setclip(0, 319, 0, RENDER_H-1);
+                    gpu_geotex_setclip(0, 319, 0, VIEW_H-1);
                     gpu_geotex(lara_blob, fb, camblk, S_atlas, (uint32_t)atlasW);
                 }
                 HB(13);  /* stage 13: props+Lara done */
