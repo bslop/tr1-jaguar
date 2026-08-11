@@ -22,7 +22,47 @@ RMAC="${RMAC:-$HOME/jaguar-tools/bin/rmac}"
 # session and route: 6.00 -> 7.50 fps (+25%), frames whole.  The path was
 # unusable until the flip grew a Blitter COMPLETION barrier (video.c) — see
 # the LOWRES BARRIER notes; do not switch back without reading them.
-BUILD_FLAGS="${BUILD_FLAGS:-MULTIROOM=1 LOWRES=1 CFLAGS_EXTRA=-DJERRYPOSE}"
+# ── QUALITY: pretty or playable ──────────────────────────────────────────────
+# ONE knob, two values, because they are mutually exclusive - you cannot ship
+# both resolutions in one ROM, and two independent PRETTY=/PLAYABLE= flags
+# would need an "both set" rule nobody would remember.
+#
+#   QUALITY=pretty     (default)  120 render lines. Full vertical resolution.
+#   QUALITY=playable              60 render lines through the OP's 4x scaler.
+#                                 Same full screen and field of view, coarser
+#                                 vertically; measurably the fastest build.
+#
+# They differ ONLY in VRESN - identical feature set, identical assets - so a
+# bug in one is a bug in both.  Measured on silicon 2026-08-11 with the demo
+# feature set (see PLAY_BUILD.md for the full ladder and both columns):
+#
+#      120 lines  6.40 fps      60 lines  ~7.6 fps (extrapolated from the
+#                                          enemy-free 7.92; the 60-line
+#                                          no-HUD arm was not rolled)
+#
+QUALITY="${QUALITY:-pretty}"
+case "$QUALITY" in
+    pretty)   QUALITY_FLAGS="" ;;
+    playable) QUALITY_FLAGS="VRESN=60" ;;
+    *) echo "error: QUALITY must be 'pretty' or 'playable' (got '$QUALITY')" >&2
+       exit 2 ;;
+esac
+
+# ☠️ THE SHIPPING FLAG SET.  This used to read
+#   MULTIROOM=1 LOWRES=1 CFLAGS_EXTRA=-DJERRYPOSE
+# which had drifted years behind the game: no entities, no doors, no enemies,
+# no kernel stack, no sound.  A container build produced something that was not
+# the game anyone was playing.  Keep this in step with PLAY_BUILD.md's CURRENT
+# recipe - that file is the authority and records why each flag is here.
+# ☠️ PADTEXT is deliberately ABSENT: it is an A10 boot-lottery roll tied to one
+# exact code layout, and the layout a container produces is not this tree's.
+# If a container ROM boots black, roll PADTEXT (see project_a10_reproducible).
+BUILD_FLAGS="${BUILD_FLAGS:-MULTIROOM=1 GEOMDIRECT=1 SHADEPASS=1 JERRYPOSE=1 \
+STAGEDIET=1 PIPELINE=1 PIPESTAGE=2 HOPDIAL=1 HOPBOOT=1 XCULL=1 BEXIT=1 \
+ROWDIET=1 STATICS=1 BANKDIET=1 LOWRES=1 FLIPASM=1 DIVZGUARD=1 MOVESET=1 \
+SPANSHADE=1 SHADEEXCL=1 TIMESTEP=1 ANIMRATE=1 OPDBL=1 LPLANES=1 AUTOSTART=1 \
+VCBIG=1 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 BLOBCACHE=1 JCENT=1 JOVL=1 \
+SECTLONG=1 INLINEMUL=1 OFFHOIST=1 VPACK=1 NOPCLIP=1}"
 
 say() { printf '\n\033[1;36m==>\033[0m %s\n' "$*"; }
 
@@ -64,9 +104,9 @@ fi
 printf '\0\0\0\0' > music.bin
 
 # ── 3. build the ROM ─────────────────────────────────────────────────────────
-say "Compiling for Atari Jaguar"
+say "Compiling for Atari Jaguar ($QUALITY)"
 make clean >/dev/null
-make RMAC="$RMAC" $BUILD_FLAGS
+make RMAC="$RMAC" $BUILD_FLAGS $QUALITY_FLAGS
 
 # ── 4. stage the GameDrive payload (everything the SD card needs, together) ───
 mkdir -p "$OUT"

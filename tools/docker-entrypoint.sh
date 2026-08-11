@@ -12,10 +12,15 @@ if [ ! -e "$D" ]; then
     echo "mount one and set DISC_NAME, e.g.:"
     echo "  docker run --rm -v /path/to/discfolder:/disc:ro -v \"\$PWD/out:/out\" \\"
     echo "             -e DISC_NAME='Tomb Raider (USA) (v1.6).cue' tr-jaguar"
+    echo
+    echo "add -e QUALITY=playable for the 60-line build (faster, coarser);"
+    echo "the default is QUALITY=pretty (full 120-line vertical resolution)."
     exit 2
 fi
 
-bash tools/build_cof.sh "$D" /out
+# QUALITY rides through from `docker run -e QUALITY=playable`; build_cof.sh
+# validates it and defaults to pretty.
+QUALITY="${QUALITY:-pretty}" bash tools/build_cof.sh "$D" /out
 status=$?
 
 # Docker writes /out as root; hand the finished files back to the user who

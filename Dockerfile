@@ -9,6 +9,11 @@
 #   docker run --rm -v "$PWD/disc:/disc:ro" -v "$PWD/out:/out" \
 #              -e DISC_NAME="Tomb Raider (USA) (v1.6).cue" tr-jaguar
 #
+# Two builds come out of the same image and the same disc; pick with QUALITY:
+#   -e QUALITY=pretty     (default) 120 render lines, full vertical resolution
+#   -e QUALITY=playable             60 render lines through the OP scaler -
+#                                   full screen and FOV, coarser, faster
+#
 # ...or just use ../convert.sh, which wraps both steps.
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
@@ -38,5 +43,8 @@ ENV RMAC=/usr/local/bin/rmac
 
 WORKDIR /src
 COPY . .
+
+# Overridable at run time: docker run -e QUALITY=playable ...
+ENV QUALITY=pretty
 
 ENTRYPOINT ["bash", "tools/docker-entrypoint.sh"]
