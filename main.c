@@ -2410,11 +2410,14 @@ static void build_ent_bat(uint8_t *buf, int atlasW, int e, int frame)
                     MRT_BAT_verts[frame], MRT_BAT_VCOUNT,
                     MRT_BAT_quads, MRT_BAT_QCOUNT,
                     MRT_BAT_tris, MRT_BAT_TCOUNT, ENT_TONE_BAT,
-                    #ifdef ENEMYTEX
-                    MRT_BAT_quv, MRT_BAT_tuv);
-                    #else
+                    /* ☠️ 0,0 = use the tone swatch. The shipping skins are
+                       WOLF ONLY: the bat's quv/tuv are 100% 0xFFFF (checked, every
+                       face flat), so passing them changes NOTHING visually and
+                       costs 560 bytes of ROM in tables that say "no texture"
+                       41 times. The ROM has ZERO margin with ENEMYTEX on, so
+                       that is real money. Re-point these the moment the bat
+                       actually gets skinned. */
                     0, 0);
-                    #endif
 }
 static void build_ent_wolf(uint8_t *buf, int atlasW, int e, int frame)
 {
@@ -2434,11 +2437,14 @@ static void build_ent_bear(uint8_t *buf, int atlasW, int e, int frame)
                     MRT_BEAR_verts[frame], MRT_BEAR_VCOUNT,
                     MRT_BEAR_quads, MRT_BEAR_QCOUNT,
                     MRT_BEAR_tris, MRT_BEAR_TCOUNT, ENT_TONE_BEAR,
-                    #ifdef ENEMYTEX
-                    MRT_BEAR_quv, MRT_BEAR_tuv);
-                    #else
+                    /* ☠️ 0,0 = use the tone swatch. The shipping skins are
+                       WOLF ONLY: the bear's quv/tuv are 100% 0xFFFF (checked, every
+                       face flat), so passing them changes NOTHING visually and
+                       costs 3648 bytes of ROM in tables that say "no texture"
+                       261 times. The ROM has ZERO margin with ENEMYTEX on, so
+                       that is real money. Re-point these the moment the bear
+                       actually gets skinned. */
                     0, 0);
-                    #endif
 }
 #endif
 
