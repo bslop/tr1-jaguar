@@ -2285,7 +2285,10 @@ static uint8_t g_enhp[MRT_ENTCOUNT];     /* hit points left (TR1 values)  */
  * spare, so the corpse SINKS through the floor over ~1.5s in the pose it died
  * in: no new assets, no memory, and it reads as a collapse rather than a pop.
  * Counts DOWN; 0 = gone. */
-#define ENT_DEATH_TICKS 24
+/* ☠️ TICKS ARE GAME FRAMES, NOT 60Hz. At ~5fps, 24 of them is nearly FIVE
+ * SECONDS - the corpse loitered instead of dropping, and 15/tick only buried
+ * a ~700-unit wolf halfway. 12 ticks x 60 units = a full body length in ~2.4s. */
+#define ENT_DEATH_TICKS 12
 static uint8_t g_endying[MRT_ENTCOUNT];
 /* TR1 hit points, from OpenLara src/enemy.h: Wolf(...,6,...) Bear(...,20,...)
    Bat(...,1,...). Pistols do 1 damage a bullet, so a wolf takes six. */
@@ -2373,7 +2376,7 @@ static void build_ent_model(uint8_t *buf, int atlasW, int wx, int wy, int wz,
    slides through the floor in the pose it died in. */
 static int ent_sink(int e)
 {
-    return g_endying[e] ? (ENT_DEATH_TICKS - g_endying[e]) * 15 : 0;
+    return g_endying[e] ? (ENT_DEATH_TICKS - g_endying[e]) * 60 : 0;
 }
 static void build_ent_bat(uint8_t *buf, int atlasW, int e, int frame)
 {
