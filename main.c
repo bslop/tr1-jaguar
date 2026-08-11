@@ -2144,6 +2144,7 @@ static union {
         uint8_t wolf[ENT_WOLF_MAXDRAW][10752];
         uint8_t bear[ENT_BEAR_MAXDRAW][10752];
         uint8_t artbuf[7680];      /* loading-screen art stream, 8-aligned */
+        uint8_t lara[LARA_BLOB_SZ];
     } g;
 } g_arena __attribute__((aligned(8)));
 
@@ -4140,7 +4141,12 @@ int main(void)
         extern const uint16_t gym_pal[];
         extern const uint8_t  gym_lara[], gym_lskin[];
         static uint32_t camblk[8];
-        static uint8_t lara_blob[LARA_BLOB_SZ] __attribute__((aligned(8)));
+        /* storage is g_arena's GAME side - net 12,288 bytes saved: it grows
+           the union by 6,696 but removes an 18,984-byte standalone array.
+           GAME ONLY: with GEOTEX off (the shipping build) every use is in
+           the game loop, none in the title/ring region, and the pose path
+           rebuilds it every frame - so the ring may clobber it freely. */
+#define lara_blob (g_arena.g.lara)
         static uint8_t item_blob[640] __attribute__((aligned(8)));
         static uint8_t door_blob[640] __attribute__((aligned(8)));
         const uint8_t *rgeom[64]; const uint8_t *rsect[64];
