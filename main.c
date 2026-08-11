@@ -8591,8 +8591,20 @@ bootvid_entry:
                 menu_text(pfb, RENDER_W, RENDER_H, rlbl[rsel], 130, 96, 1, 2, 255);
                 menu_text(pfb, RENDER_W, RENDER_H, "PAUSED", 8, 8, 1, 2, 245);
             }
-#ifdef ENEMIES
-            /* HEALTH BAR: raw-pixel bar at the TOP-LEFT (the JLOOPS/LARACOUNT
+#if defined(ENEMIES) && defined(HUDTEXT)
+            /* ☠️☠️ THIS IS 68000 PIXELS, EVERY FRAME.  menu_text stores one
+               byte at a time with four bounds compares per pixel, and the
+               comment at the vault readout above records the price: ~5 fps for
+               25 glyphs, MEASURED.  "1000 K00" is 7 glyphs plus a space.  That
+               is why it is behind HUDTEXT and OFF by default - the same
+               mistake, in the same file, has now been paid for four times (the
+               329ms video panel, the 183ms phase readout, the vault text, and
+               this).  ★ The fix when the HUD comes back for real is the one
+               already used above: flat Blitter rectangles - register writes,
+               no 68k pixels.  Build with HUDTEXT=1 to get the numbers back for
+               a test arm (the kill count is what proves the pistols connect).
+
+               HEALTH BAR: raw-pixel bar at the TOP-LEFT (the JLOOPS/LARACOUNT
                bars prove raw writes at x=0+ display; the right half of the
                320px fb and menu_text past x~240 do NOT). White fill scales with
                health; a low-health slice flips to gold (240). */

@@ -945,6 +945,15 @@ endif
 # object and the display window do not move. A crop, not a squash - see the
 # comment in video.h. ☠️ The value must reach BOTH the C projection and the
 # kernel's own copy of the constants, hence the GEOTEX_DEFS entry below too.
+# HUDTEXT=1: draw the health/kills numbers ("1000 K00") in the top-left.
+# ☠️ OFF BY DEFAULT because menu_text is 68000 pixels, one byte per store with
+# four bounds compares, EVERY FRAME - measured at ~5 fps per 25 glyphs. Turn it
+# on for a test arm that needs to see the kill count; do not ship it as text.
+ifdef HUDTEXT
+CFLAGS   += -DHUDTEXT
+CXXFLAGS += -DHUDTEXT
+endif
+
 # VRESN=N: the RESOLUTION DIAL - render N lines and let the OP scaler stretch
 # them over the same 240-line window (VRES60 generalised). Unlike VIEWH this
 # keeps the FULL SCREEN and the full field of view; it spends vertical
