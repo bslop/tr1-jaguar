@@ -8101,22 +8101,26 @@ bootvid_entry:
               if (++od_f >= 60) {
                   uint32_t px=*opx, sp=*osp;
                   /* /60 frames, then x100 / (320*120): fold to avoid overflow */
-                  /* RAW, not a ratio: a derived percentage read 0000 while
-                     the span length read 21, which is self-contradictory -
-                     so show the two numbers the kernel actually counted and
-                     let the arithmetic happen off-console.
-                       P = pixels per frame / 100   S = spans per frame */
-                  od_o = (px / od_f) / 100u;
-                  od_l = sp / od_f;
-                  *opx=0; *osp=0; od_f=0;
+                  /* ☠️ NO ARITHMETIC AT ALL. Two derived forms already
+                     contradicted each other (a ratio said 0 while a mean said
+                     21), so stop deriving: show the accumulators RAW and let
+                     a monotonically rising number prove the mechanism works
+                     before any of it is interpreted. Nothing is cleared. */
+                  od_o = px / 1000u;      /* raw pixel total, thousands */
+                  od_l = sp;              /* raw span/scanline total    */
+                  od_f=0;   /* deliberately NOT clearing the counters */
               }
               { uint8_t *ofb=(uint8_t *)video_backbuffer();
                 char os[20]; int p=0;
-                os[p++]='P'; os[p++]=(char)('0'+(od_o/1000)%10);
+                os[p++]='P'; os[p++]=(char)('0'+(od_o/100000)%10);
+                             os[p++]=(char)('0'+(od_o/10000)%10);
+                             os[p++]=(char)('0'+(od_o/1000)%10);
                              os[p++]=(char)('0'+(od_o/100)%10);
                              os[p++]=(char)('0'+(od_o/10)%10);
                              os[p++]=(char)('0'+od_o%10);
-                os[p++]='S'; os[p++]=(char)('0'+(od_l/1000)%10);
+                os[p++]='S'; os[p++]=(char)('0'+(od_l/100000)%10);
+                             os[p++]=(char)('0'+(od_l/10000)%10);
+                             os[p++]=(char)('0'+(od_l/1000)%10);
                              os[p++]=(char)('0'+(od_l/100)%10);
                              os[p++]=(char)('0'+(od_l/10)%10);
                              os[p++]=(char)('0'+od_l%10);
