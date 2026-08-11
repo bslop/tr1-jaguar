@@ -21,6 +21,10 @@ for pt in "$@"; do
         echo "  !! CAPTURE DEAD (no-signal fallback) — aborting walk, not a ROM verdict"
         exit 2
     fi
+    # ☠️ "LIT" IS NOT "WORKING". This counts any non-zero brightness, so a
+    # SOLID ERROR SCREEN passes: a vidrom chain build held on its yellow
+    # first-crumb for 47 seconds and this reported it LIT on pad 0. Use it to
+    # find a pad that is not a black A10 miss, never as proof the ROM ran.
     if [ "$LIT" -ge 5 ]; then
         echo "  ==> LIT: $ARM PADTEXT=$pt   ($MKV)"
         echo "$pt" > "$SP/${ARM}_lit.txt"

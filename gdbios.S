@@ -240,6 +240,11 @@ gd_inst_fail:
 	rts
 .endm
 
+	.globl	gd_bios_base            | void *gd_bios_base(void)
+gd_bios_base:                           | the chain loader runs from relocated
+	move.l	gdb_base,%d0            | low RAM, where this .data long is gone,
+	rts                             | so it takes the base in a register
+
 	.globl	gd_card_in              | int gd_card_in(void)
 gd_card_in:
 	gdfunc	FN_CARDIN

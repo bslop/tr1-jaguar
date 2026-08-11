@@ -1428,16 +1428,23 @@ ifdef VR_NO68K
 CFLAGS   += -DVR_NO68K
 endif
 
+# VR_CHAIN=1: vidrom hands the machine to the game when the clips finish, so
+# the video decoder costs the game NOTHING (it is gone from RAM before the
+# game's _start runs). chain.o is the position-independent handover blob.
+ifdef VR_CHAIN
+VIDCFLAGS += -DVR_CHAIN
+VIDCHAIN  := $(BUILD)/chain.o
+endif
 VIDOBJS := $(BUILD)/startup.o $(BUILD)/cpu68k.o $(BUILD)/vidmain.o $(BUILD)/vidpanel.o \
            $(BUILD)/video.o $(BUILD)/blit.o $(BUILD)/joypad.o \
            $(BUILD)/gd_input.o $(BUILD)/gdbios.o \
            $(BUILD)/gpu.o $(BUILD)/gpu_blob.o \
-           $(BUILD)/jerry.o $(BUILD)/dsp_blob.o
+           $(BUILD)/jerry.o $(BUILD)/dsp_blob.o $(VIDCHAIN)
 
 # vidmain.c is the boot code the user asked to keep on the 68k, and it is on
 # gcc for the same reason main.c is: the frame loop copies 76800 bytes.
 $(BUILD)/vidmain.o: vidmain.c | $(BUILD)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(VIDCFLAGS) -c $< -o $@
 
 $(BUILD)/vidrom.elf: $(VIDOBJS) jaguar.ld
 	$(CC) -nostdlib -T jaguar.ld -Wl,-Map=$(BUILD)/vidrom.map \

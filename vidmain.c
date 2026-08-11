@@ -623,6 +623,13 @@ static int play_clip(const char *name)
     return 1;
 }
 
+#ifdef VR_CHAIN
+#ifndef VR_CHAIN_CLIPS
+#define VR_CHAIN_CLIPS 2
+#endif
+static const char *const chain_clips[4] = {
+    "EIDOS.JV", "CORE.JV", "INTRO.JV", "CAVES.JV" };
+#endif
 int main(void)
 {
     pal_init();
@@ -713,6 +720,38 @@ int main(void)
             while ((int)(frame_count - t) < 30)
                 ;
         }
+    }
+#endif
+#ifdef VR_CHAIN
+    /* CHAIN-LOAD THE GAME (VR_CHAIN=1).  Play the clips, then hand the machine
+       over so the video decoder costs the game NOTHING - it is gone from RAM
+       before _start runs, which is what the loading screen is for.
+       ☠️ Everything the handover touches must live BELOW $4000, because the
+       game lands on top of us the moment the first chunk arrives. */
+    {
+        extern unsigned char chain_blob[], chain_blob_end[];
+        extern void *gd_bios_base(void);
+        volatile unsigned char *bios = (volatile unsigned char *)0x0800u;
+        volatile unsigned char *dst  = (volatile unsigned char *)0x1C00u;
+        unsigned char *src = chain_blob;
+        unsigned n = (unsigned)(chain_blob_end - chain_blob);
+        unsigned i;
+        int c;
+        for (c = 0; c < VR_CHAIN_CLIPS; c++)
+            play_clip(chain_clips[c]);
+        /* re-install the BIOS into LOW RAM: gd_input's workbuf is inside the
+           image and is about to be overwritten mid-transfer */
+        if (gd_install((void *)bios) != 0) {
+            *(volatile unsigned short *)0xF00058u = 0x00E0;   /* red: no BIOS */
+            for (;;) ;
+        }
+        for (i = 0; i < n; i++) dst[i] = src[i];
+        {   /* hand off with the BIOS base in d0, exactly the value gdbios.S's
+               dispatcher would have loaded from gdb_base */
+            void (*go)(void *) = (void (*)(void *))dst;
+            go(gd_bios_base());
+        }
+        for (;;) ;
     }
 #endif
     /* PLAY ONCE, THEN HOLD - never touch the GameDrive again.
