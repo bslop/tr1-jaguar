@@ -2405,6 +2405,7 @@ static int ent_is_pickup(int t) { return t==83 || t==93 || t==94; }
 static uint8_t g_pickgot[MRT_ENTCOUNT];  /* pickup already collected */
 static uint8_t g_pickspin;               /* shared pickup spin angle */
 
+
 /* ---- IN-GAME MENU -------------------------------------------------------
  * There was none: PAD_PAUSE was a second binding for ROLL (PAD_Y still is),
  * so the button was free. This is NOT the 3D inventory ring - that lives
@@ -2415,6 +2416,7 @@ static uint8_t g_pickspin;               /* shared pickup spin angle */
  * frame. Honoured here because the world is frozen while paused - no enemy
  * blob is rebuilt - and this menu stages nothing at all (menu_text only). */
 static uint8_t g_pause, g_pausesel;
+static int g_ringA, g_ringspin;
 #define PAUSE_ITEMS 2
 #ifdef JOVL
 /* ---- ANIMATED ENTITY VERTS ON JERRY (dsp_ovl_ent) -----------------------
@@ -3719,6 +3721,96 @@ static void title_bake(const uint8_t *sb, uint8_t *db, int nv,
         dp[0]=(uint8_t)(rx2>>8); dp[1]=(uint8_t)rx2;
         dp[2]=(uint8_t)(ry2>>8); dp[3]=(uint8_t)ry2;
         dp[4]=(uint8_t)(rz2>>8); dp[5]=(uint8_t)rz2;
+    }
+}
+
+/* ---- THE RING, IN GAME ---------------------------------------------------
+ * A SEPARATE renderer from the title's, deliberately. The title's ring is
+ * welded to its dirty-rect pipeline (ringfast/movers/simg/blit_rect restores)
+ * and its 240-line buffer; reusing it in-game would mean unpicking all of
+ * that and risking the one screen that is already verified. In-game the world
+ * is FROZEN, so there is nothing to be incremental about - repaint all five
+ * items every frame and the coupling disappears.
+ *
+ * Constants are copied from the title's (RING_CX2/RING_RX/... and the per-item
+ * PASS_, SA_, SND_ and CTRL_ pitch+roll) because those live inside main()
+ * and a function cannot see them. If the title's are retuned, retune these.
+ *
+ * ☠️ Y IS HALVED. The ring is authored against a 240-line title display; the
+ * game runs LOWRES at 120, and the kernel projects about RENDER_H/2. Without
+ * this the ring sits off the bottom of the screen.
+ *
+ * ☠️ rblob is g_arena's TITLE side, which the ENEMY blobs overwrite - so the
+ * caller must ring_stage() when the ring OPENS, not rely on the title's copy.
+ */
+#define RG_N 5          /* same value as the title's RING_N */
+#define RG_CX2 (-206)
+#define RG_CY2 300
+#define RG_RX  948
+#define RG_RZ  1409
+#define RG_TY  171
+#define RG_TH0 7
+static void ring_render(void *fb, int ringA, int spin)
+{
+    static const int16_t rg_yaw[RG_N]   = { 128, 0, 0, 0, 0 };   /* sel yaw */
+    static const int16_t rg_rot[RG_N][2]= { {256,0},{224,0},{0,0},{0,0},{0,0} };
+    static const uint16_t rg_scale[RG_N]= { 460, 256, 404, 256, 256 };
+    int zi[RG_N], px[RG_N], py[RG_N], pz[RG_N];
+    int yw[RG_N], pt[RG_N], rl[RG_N], rord[RG_N];
+    uint32_t tcam[8];
+    int it2, a2, b2, ord2;
+
+    for (it2 = 0; it2 < RG_N; it2++) {
+        int th16 = ((it2*4096)/RG_N - ringA) & 4095;
+        int f    = (th16 < 2048 ? th16 : 4096 - th16) >> 3;
+        int ths  = (((it2*4096)/RG_N - ringA + 2048) & 4095) - 2048;
+        int phi  = ths + (RG_TH0 << 4);
+        if (f > 256) f = 256;
+        px[it2] = RG_CX2 + (int)((RG_RX * sin16q(phi)) >> 16);
+        py[it2] = RG_CY2 - (int)((RG_TY * (65536 - cos16q(phi))) >> 16);
+        pz[it2] = 700   + (int)((RG_RZ * (65536 - cos16q(phi))) >> 16);
+        if (rg_scale[it2] != 256) {
+            px[it2] = (px[it2]*256)/rg_scale[it2];
+            py[it2] = (py[it2]*256)/rg_scale[it2];
+            pz[it2] = (pz[it2]*256)/rg_scale[it2];
+        }
+        py[it2] >>= 1;                    /* 240-line ring into a 120-line game */
+        yw[it2] = (rg_yaw[it2] + ((f < 64) ? spin : 0)) & 1023;
+        zi[it2] = pz[it2];
+        pt[it2] = rg_rot[it2][0];
+        rl[it2] = rg_rot[it2][1];
+    }
+    /* painter order: farthest first (no depth buffer) */
+    for (a2 = 0; a2 < RG_N; a2++) rord[a2] = a2;
+    for (a2 = 1; a2 < RG_N; a2++) {
+        int k2 = rord[a2];
+        for (b2 = a2; b2 > 0 && zi[rord[b2-1]] < zi[k2]; b2--) rord[b2] = rord[b2-1];
+        rord[b2] = k2;
+    }
+    tcam[0]=(uint32_t)(COS(0)>>4); tcam[1]=(uint32_t)(SIN(0)>>4);
+    tcam[2]=(uint32_t)(COS(6)>>4); tcam[3]=(uint32_t)(SIN(6)>>4);
+    tcam[4]=0; tcam[5]=(uint32_t)(-20); tcam[6]=0; tcam[7]=0;
+    gpu_geotex_setclip(0, 319, 0, RENDER_H-1);
+    for (ord2 = 0; ord2 < RG_N; ord2++) {
+        it2 = rord[ord2];
+        { int tl2 = -((27*(py[it2]-20))/pz[it2]);
+          title_bake(rsrc[it2], rblob[it2], rvcnt[it2],
+                     yw[it2], pt[it2], rl[it2], tl2,
+                     px[it2], py[it2], pz[it2]); }
+        /* midpoint fixup: the appended 4th-corner verts are the average of
+           their tri's baked v0/v2 - exact, midpoints commute with the bake */
+        { int f4, nvR = rnv0[it2], ntR = rnt0[it2];
+          const uint16_t *tf4 = (const uint16_t *)
+              (rsrc[it2] + 16 + nvR*8 + rnq0[it2]*24);
+          int16_t *bv = (int16_t *)(rblob[it2] + 16);
+          for (f4 = 0; f4 < ntR; f4++) {
+              int v0 = tf4[f4*9+0], v2 = tf4[f4*9+2], d = nvR + f4;
+              bv[d*4+0] = (int16_t)((bv[v0*4+0] + bv[v2*4+0]) >> 1);
+              bv[d*4+1] = (int16_t)((bv[v0*4+1] + bv[v2*4+1]) >> 1);
+              bv[d*4+2] = (int16_t)((bv[v0*4+2] + bv[v2*4+2]) >> 1);
+              bv[d*4+3] = bv[v0*4+3];
+          } }
+        gpu_geotex(rblob[it2], fb, tcam, ratl[it2], 256u);
     }
 }
 
@@ -5457,14 +5549,14 @@ bootvid_entry:
                          ring positions the original sweeps through. */
                       /* positions come from the dial circle now; these rows
                          carry only the FACING anchors {selyaw, unselyaw}. */
-                      static const int16_t mp2[RING_N][8] = {
+                      static const int16_t mp2[RG_N][8] = {
                         { PASS_X, PASS_Y, PASS_Z, PASS_YAW,  0, 0, 0, 24  },
                         { PASS_X, PASS_Y, PASS_Z, SA_YAW,    0, 0, 0, 24  },
                         { PASS_X, PASS_Y, PASS_Z, SND_YAW,   0, 0, 0, 24  },
                         { PASS_X, PASS_Y, PASS_Z, CTRL_YAW,  0, 0, 0, 24  },
                         { PASS_X, PASS_Y, PASS_Z, 0,         0, 0, 0, 24  },
                       };
-                      static const int16_t mrot[RING_N][2] = {   /* pitch, roll */
+                      static const int16_t mrot[RG_N][2] = {   /* pitch, roll */
                         { PASS_PITCH, PASS_ROLL },
                         { SA_PITCH, SA_ROLL },
                         { SND_PITCH, SND_ROLL },
@@ -5472,7 +5564,7 @@ bootvid_entry:
                         { 0, 0 },
                       };
                       int it2, ord2, zi[6], px[6], py[6], pz[6], yw[6], rl[6], pt[6];
-                      int rord[RING_N];
+                      int rord[RG_N];
                       /* fixed-length smoothstep slew: velocity ramps up AND
                          down (bell curve), no first-frame lurch, no 1-unit
                          tail crawl. s = 3f^2 - 2f^3 in 0..256. */
@@ -5490,11 +5582,11 @@ bootvid_entry:
                       }
                       spin = (spin + 3) & 1023;   /* reference 11-03-33: ~3s/turn,
                                              direction re-matched */
-                      for (it2 = 0; it2 < RING_N; it2++) {
+                      for (it2 = 0; it2 < RG_N; it2++) {
                           /* angular distance of this item from the FRONT, as
                              0 (selected) .. 256 (opposite side of the ring),
                              in 1/16-unit ring precision */
-                          int th16 = ((it2*4096)/RING_N - ringA) & 4095;
+                          int th16 = ((it2*4096)/RG_N - ringA) & 4095;
                           int f  = (th16 < 2048 ? th16 : 4096 - th16) >> 3;
                           /* LAZY SUSAN (reference video 11-03-33, 2026-08-05):
                              the PS1 ring is a FLAT CAROUSEL in depth, not a
@@ -5503,7 +5595,7 @@ bootvid_entry:
                              higher on screen (they drift up toward the dial
                              centre exactly as in the reference). Selected sits
                              at the tuned front spot; adjacent spread wide. */
-                          int ths = (((it2*4096)/RING_N - ringA + 2048) & 4095) - 2048;
+                          int ths = (((it2*4096)/RG_N - ringA + 2048) & 4095) - 2048;
                           int phi = ths + (RING_TH0 << 4);
                           const int16_t *m = mp2[it2];
                           if (f > 256) f = 256;
@@ -5567,11 +5659,11 @@ bootvid_entry:
                              opening. */
                           int f2 = (popen * 256) / PASS_OPEN_TICKS;
                           if (f2 > 256) f2 = 256;
-                          px[RING_N] = PASS_X + ((PASS_OPEN_X - PASS_X)*f2 >> 8);
-                          py[RING_N] = PASS_Y + ((PASS_OPEN_Y - PASS_Y)*f2 >> 8);
-                          pz[RING_N] = PASS_Z + ((PASS_OPEN_Z - PASS_Z)*f2 >> 8);
-                          yw[RING_N] = (PASS_YAW + ((PASS_OPEN_YAW - PASS_YAW)*f2 >> 8)) & 1023;
-                          zi[RING_N] = pz[RING_N];
+                          px[RG_N] = PASS_X + ((PASS_OPEN_X - PASS_X)*f2 >> 8);
+                          py[RG_N] = PASS_Y + ((PASS_OPEN_Y - PASS_Y)*f2 >> 8);
+                          pz[RG_N] = PASS_Z + ((PASS_OPEN_Z - PASS_Z)*f2 >> 8);
+                          yw[RG_N] = (PASS_YAW + ((PASS_OPEN_YAW - PASS_YAW)*f2 >> 8)) & 1023;
+                          zi[RG_N] = pz[RG_N];
                           /* ease the leaf toward its row, then rewrite its
                              four model verts: piecewise lerp lying-right ->
                              standing -> lying-left about the spine hinge */
@@ -5593,13 +5685,13 @@ bootvid_entry:
                                     p2src[16 + (8 + i7) * 8 + k7 * 2]     = (uint8_t)(v7 >> 8);
                                     p2src[16 + (8 + i7) * 8 + k7 * 2 + 1] = (uint8_t)v7;
                                 } } }
-                          rl[RING_N] = PASS_ROLL + ((PASS_OPEN_ROLL - PASS_ROLL)*f2 >> 8);
-                          pt[RING_N] = PASS_PITCH + ((PASS_OPEN_PITCH - PASS_PITCH)*f2 >> 8);
+                          rl[RG_N] = PASS_ROLL + ((PASS_OPEN_ROLL - PASS_ROLL)*f2 >> 8);
+                          pt[RG_N] = PASS_PITCH + ((PASS_OPEN_PITCH - PASS_PITCH)*f2 >> 8);
                       }
                       /* painter order: farthest first (no depth buffer) */
                       { int a2, b2;
-                        for (a2 = 0; a2 < RING_N; a2++) rord[a2] = a2;
-                        for (a2 = 1; a2 < RING_N; a2++) {
+                        for (a2 = 0; a2 < RG_N; a2++) rord[a2] = a2;
+                        for (a2 = 1; a2 < RG_N; a2++) {
                             int k2 = rord[a2];
                             for (b2 = a2; b2 > 0 && zi[rord[b2-1]] < zi[k2]; b2--)
                                 rord[b2] = rord[b2-1];
@@ -6027,7 +6119,7 @@ bootvid_entry:
               else if (!copen && !sopen && (edge & (PAD_LEFT|PAD_RIGHT))) {
                   { int prevp = page, mi6, have6;
                     page = (edge & PAD_RIGHT) ? (page + 1) : (page + RING_N - 1);
-                    if (page >= RING_N) page -= RING_N;
+                    if (page >= RING_N) page -= RG_N;
                     /* retarget the slew from wherever the ring is NOW, short
                        way round; a tap mid-flight restarts the curve there */
                     { int dd6 = ((((page * 4096) / RING_N) - ringA + 2048)
@@ -6927,7 +7019,19 @@ bootvid_entry:
                roll binding on the same button cannot fire underneath it. */
             { static uint32_t pmprev;
               uint32_t pmedge = pad & ~pmprev; pmprev = pad;
-              if (pmedge & PAD_PAUSE) { g_pause ^= 1; g_pausesel = 0; }
+              if (pmedge & PAD_PAUSE) {
+                  g_pause ^= 1; g_pausesel = 0;
+                  /* ☠️ RESTAGE ON OPEN. rblob is g_arena's TITLE side and the
+                     ENEMY blobs have been overwriting it all level - the
+                     title's staging is long gone. */
+                  if (g_pause) { ring_stage(); g_ringA = 0; g_ringspin = 0; }
+              }
+              if (g_pause) {
+                  /* LEFT/RIGHT rotate the ring one item per press */
+                  if (pmedge & PAD_LEFT)  g_ringA = (g_ringA - 4096/RG_N) & 4095;
+                  if (pmedge & PAD_RIGHT) g_ringA = (g_ringA + 4096/RG_N) & 4095;
+                  g_ringspin = (g_ringspin + 3) & 1023;
+              }
               if (g_pause) {
                   if (pmedge & PAD_UP)   g_pausesel = (uint8_t)((g_pausesel + PAUSE_ITEMS - 1) % PAUSE_ITEMS);
                   if (pmedge & PAD_DOWN) g_pausesel = (uint8_t)((g_pausesel + 1) % PAUSE_ITEMS);
@@ -8406,18 +8510,12 @@ bootvid_entry:
                DBGROOM - plain 68k stores into a finished buffer, no Blitter,
                so it cannot race the kernel. */
             if (g_pause) {
+                /* THE 3D RING, over the frozen world. Tom is idle here (after
+                   gpu_sync, before the flip), which is exactly the window
+                   ring_render needs - it kicks the kernel once per item. */
                 uint8_t *pfb = (uint8_t *)video_backbuffer();
-                static const char *pitems[PAUSE_ITEMS] = { "RESUME", "RESTART" };
-                int pi;
-                menu_text(pfb, RENDER_W, RENDER_H, "PAUSED", 120, 40, 1, 2, 255);
-                for (pi = 0; pi < PAUSE_ITEMS; pi++)
-                    menu_text(pfb, RENDER_W, RENDER_H, pitems[pi],
-                              120, 60 + pi*14, 1, 2,
-                              (pi == g_pausesel) ? 255 : 245);
-                /* selection marker: menu_text past x~240 does not display, so
-                   keep the whole block well left of that. */
-                menu_text(pfb, RENDER_W, RENDER_H, ">", 108,
-                          60 + g_pausesel*14, 1, 2, 255);
+                ring_render(pfb, g_ringA, g_ringspin);
+                menu_text(pfb, RENDER_W, RENDER_H, "PAUSED", 8, 8, 1, 2, 255);
             }
 #ifdef ENEMIES
             /* HEALTH BAR: raw-pixel bar at the TOP-LEFT (the JLOOPS/LARACOUNT
