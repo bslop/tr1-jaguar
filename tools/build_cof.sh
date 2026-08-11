@@ -28,22 +28,22 @@ RMAC="${RMAC:-$HOME/jaguar-tools/bin/rmac}"
 # would need an "both set" rule nobody would remember.
 #
 #   QUALITY=pretty     (default)  120 render lines. Full vertical resolution.
-#   QUALITY=playable              60 render lines through the OP's 4x scaler.
+#   QUALITY=playable              80 render lines through the OP 3.0x scaler.
 #                                 Same full screen and field of view, coarser
-#                                 vertically; measurably the fastest build.
+#                                 vertically, but it holds the rock detail that
+#                                 60 lines smears into bands - chosen at the
+#                                 pad after seeing 120/96/80/60 on a TV.
 #
 # They differ ONLY in VRESN - identical feature set, identical assets - so a
 # bug in one is a bug in both.  Measured on silicon 2026-08-11 with the demo
 # feature set (see PLAY_BUILD.md for the full ladder and both columns):
 #
-#      120 lines  6.40 fps      60 lines  ~7.6 fps (extrapolated from the
-#                                          enemy-free 7.92; the 60-line
-#                                          no-HUD arm was not rolled)
+#      120 lines  6.40 fps        80 lines  7.15 fps  (+11.7%)
 #
 QUALITY="${QUALITY:-pretty}"
 case "$QUALITY" in
     pretty)   QUALITY_FLAGS="" ;;
-    playable) QUALITY_FLAGS="VRESN=60" ;;
+    playable) QUALITY_FLAGS="VRESN=80" ;;
     *) echo "error: QUALITY must be 'pretty' or 'playable' (got '$QUALITY')" >&2
        exit 2 ;;
 esac

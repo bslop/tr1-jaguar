@@ -7194,10 +7194,29 @@ bootvid_entry:
 #ifdef ROOMTOUR
             /* AUTO ROOM AUDIT: teleport through every room's centre, ~2 s each,
                so one recording captures all 38 rooms (label from DBGROOM). */
+            /* ROOMTOUR_HOLD = fields to sit in each room (60 = 1 s).  2 s is
+               enough to SEE a room but not to MEASURE one: at ~7 fps it is
+               ~14 published frames, so an fps estimate off it carries about a
+               frame of granularity.  Raise it for a frame-rate sweep.
+               ☠️ Do NOT pair a sweep with DBGROOM - its room label goes
+               through menu_text, which is 68000 pixels and measured at +60% of
+               the frame all by itself.  Segment the capture on the scene cut
+               at each teleport instead; the hold is exact, so the cuts are
+               evenly spaced and self-calibrating. */
+#ifndef ROOMTOUR_HOLD
+#define ROOMTOUR_HOLD 120
+#endif
             { extern volatile uint32_t frame_count;
-              static uint32_t nextadv = 120; static int touri = 0;
+              static uint32_t nextadv = 0; static int touri = 0;
+              /* ☠️ ARM THE FIRST HOP RELATIVE TO THE FIRST IN-GAME FRAME, not
+                 to boot.  frame_count is already past the initial hold by the
+                 time the level is up, so the tour used to fire its first two
+                 teleports THROUGH the loading transition - their scene cuts
+                 were indistinguishable from the load itself, and an fps sweep
+                 lost rooms 0 and 1 to an unbounded first segment. */
+              if (!nextadv) nextadv = frame_count + ROOMTOUR_HOLD;
               if (frame_count >= nextadv && touri < roomCount) {
-                  nextadv = frame_count + 120;          /* ~2 s at 60 Hz */
+                  nextadv = frame_count + ROOMTOUR_HOLD;
                   g_lax = roomtour[touri][0];
                   g_lay = roomtour[touri][1];
                   g_laz = roomtour[touri][2];

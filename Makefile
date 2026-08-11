@@ -307,6 +307,12 @@ endif
 ifdef ROOMTOUR
 CFLAGS   += -DROOMTOUR
 CXXFLAGS += -DROOMTOUR
+# ROOMTOUR_HOLD=N: fields to sit in each room (60 = 1s, default 120). Raise it
+# for an fps sweep - 2s is ~14 published frames, too few to measure with.
+ifdef ROOMTOUR_HOLD
+CFLAGS   += -DROOMTOUR_HOLD=$(ROOMTOUR_HOLD)
+CXXFLAGS += -DROOMTOUR_HOLD=$(ROOMTOUR_HOLD)
+endif
 endif
 # DOORTEX: doors/levers use the real TR1 texture (objtex 897/896) appended to
 # the atlas by `MRT_DOORPATCH=1 ... tr2jag_multiroom.py` -> needs mrt_door.h.
