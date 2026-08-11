@@ -6270,9 +6270,17 @@ bootvid_entry:
           /* one-open-file law: the loading art streams next */
           if (mh >= 0) { gd_fclose((unsigned)mh); mh = -1; }
 #endif
-          /* task #4: leave TITLE mode - game kernel + scaled 120-line display */
-          { extern void video_set_disp240(int); extern void gpu_kernel_select(int);
-            video_set_disp240(0); gpu_kernel_select(0); }
+          /* task #4: leave TITLE mode - game kernel now, DISPLAY LATER.
+             ☠️ The display switch used to happen HERE, which put the LOADING
+             SCREEN through the scaled RENDER_H object: the 320x240 art was
+             row-decimated to 120 (and to 80 once VRESN shipped), so the
+             picture the user remembers at full quality had been quietly
+             halved and then thirded. The panel is up for seconds and is the
+             best-looking art in the game; it now stays in native 240 until
+             the load is finished and the screen blanks (see the blank-to-
+             black below), which is also where the HALFRES path already
+             painted it (LH=DISPLAY_H, "panel painted at native 240"). */
+          { extern void gpu_kernel_select(int); gpu_kernel_select(0); }
 #ifdef VIDDIAG
 /* CONTEXT PROBE v3 (lean): ONLY the SRAM reliability test -
              v2's kernel/display experiments wedged the entry. Bounded
@@ -6324,7 +6332,10 @@ bootvid_entry:
           const int LH=DISPLAY_H;      /* panel painted at native 240 */
 #else
           uint8_t *lfb=(uint8_t*)video_backbuffer();
-          const int LH=RENDER_H;
+          /* native 240: the display is still in title/disp240 mode here and
+             the buffers are FB_ALLOC_H=240 tall whenever LOWRES is on, so the
+             art lands row-for-row instead of being decimated to RENDER_H. */
+          const int LH=240;
 #endif
           /* gold-font mini palette -> CLUT 224..239 (level set_clut later
              overwrites; the panel has flipped away by then) */
@@ -6942,6 +6953,10 @@ bootvid_entry:
               ;
         }
 #endif
+        /* NOW leave the 240-line display: the loading panel is finished and
+           the screen is about to go black, so the mode change cannot be seen.
+           Doing it here is what lets the panel above paint at native 240. */
+        { extern void video_set_disp240(int); video_set_disp240(0); }
         /* black on every buffer, and index 0 IS black in the level palette
            (mrt_pal[0] = 0,0,0), so this stays black across the swap */
         { extern uint8_t *const crash_fbs[3]; int b4;
