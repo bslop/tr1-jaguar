@@ -933,6 +933,13 @@ CFLAGS   += -DENEMIES
 CXXFLAGS += -DENEMIES
 endif
 
+# AUTOFIRE=1: hold the fire button down for us so a capture can verify Lara's
+# pistols with nobody on the pad. Test arm only, never ship.
+ifdef AUTOFIRE
+CFLAGS   += -DAUTOFIRE
+CXXFLAGS += -DAUTOFIRE
+endif
+
 ifdef ANIMRATE
 CFLAGS   += -DANIMRATE
 CXXFLAGS += -DANIMRATE

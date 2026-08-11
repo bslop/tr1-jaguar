@@ -2113,13 +2113,13 @@ static int  g_health = 1000;             /* TR1 full health              */
 static union {
     struct {                                   /* TITLE / MENU only */
         uint8_t rblob[6][MRT_RBLOB_SZ];
-        /* 6144, from 12288. Title music double-buffer: 0.55s per swap at
+        /* 5120, from 12288. Title music double-buffer: 0.46s per swap at
            11025Hz s8, and it shipped at 4096 historically ("4KB = 0.37s per
            swap"), so this stays well clear of the size that was proven to
            stream. The title side sets the arena size, so this is the single
            biggest lever available. ☠️ If the title music stutters, THIS is
            the first thing to put back. */
-        int8_t  mbuf[2][6144];
+        int8_t  mbuf[2][5120];
     } t;
     struct {                                   /* IN-GAME only */
         uint8_t bat [ENT_BAT_MAXDRAW][1792];
@@ -2144,8 +2144,16 @@ static uint8_t g_batframe;               /* shared fly-cycle frame    */
 static int g_batx[MRT_ENTCOUNT], g_baty[MRT_ENTCOUNT], g_batz[MRT_ENTCOUNT];
 static uint8_t g_batinit;                /* positions seeded from spawn  */
 static uint8_t g_batdead[MRT_ENTCOUNT];  /* killed by Lara               */
+static uint8_t g_enhp[MRT_ENTCOUNT];     /* hit points left (TR1 values)  */
+/* TR1 hit points, from OpenLara src/enemy.h: Wolf(...,6,...) Bear(...,20,...)
+   Bat(...,1,...). Pistols do 1 damage a bullet, so a wolf takes six. */
+static int ent_max_hp(int t) { return t==7 ? 6 : (t==8 ? 20 : 1); }
 static int  g_firecd;                    /* fire cooldown ticks          */
 static int  g_kills;                     /* enemies killed (stats)       */
+#ifdef AUTOFIRE
+static int  g_shots;                     /* trigger pulls that RAN       */
+static int  g_hits;                      /* pulls that FOUND a target    */
+#endif
 static int ent_is_bat(int t) { return t == 9; }
 static int ent_is_wolf(int t) { return t == 7; }
 static int ent_is_bear(int t) { return t == 8; }
@@ -6548,6 +6556,7 @@ bootvid_entry:
               g_pickgot[e] = 0;
 #ifdef ENEMIES
               g_batinit = 0; g_batdead[e] = 0;
+              g_enhp[e] = (uint8_t)ent_max_hp(mrt_ent[e].type);
 #endif
               g_doorbase[e] = 0;
               /* switches bake the same floor Y - the lever hangs off it */
@@ -6783,6 +6792,18 @@ bootvid_entry:
                work) pins Lara to the spawn point and makes the two rolls
                frame-for-frame comparable.  NEVER ship this. */
             pad = 0;
+#endif
+#ifdef AUTOFIRE
+            /* ☠️ TEST ARM ONLY. Pulls the trigger so a CAPTURE can verify
+               firing with nobody on the pad - the rig has no hands. Applied
+               after PADMUTE deliberately: the pad is muted so Lara cannot
+               wander, but she still shoots, which keeps the scene fixed and
+               the test repeatable. ~3 bursts/sec. */
+            /* ☠️ Was `(frame_count % 20) < 2`, which sampled a 60Hz counter
+               from a ~5fps game loop and so almost never landed in the window:
+               ONE shot in 22 seconds. Just hold the trigger - the in-game
+               cooldown is what paces the shots. */
+            pad |= PAD_X;
 #endif
 #ifdef GDPAD
             /* REMOTE CONTROL FOR TESTING (user, 2026-08-09: "you can control -
@@ -7194,6 +7215,15 @@ bootvid_entry:
                             if (ent_is_enemy(mrt_ent[be].type)) {
                                 g_batx[be]=mrt_ent[be].x; g_baty[be]=mrt_ent[be].y;
                                 g_batz[be]=mrt_ent[be].z;
+                                /* ☠️ HIT POINTS MUST BE SEEDED **HERE**, beside
+                                   the positions, NOT in the level-start reset
+                                   block: FASTBOOT jumps straight into the level
+                                   and skips that block. Every other enemy field
+                                   wants ZERO (g_batdead, g_batinit), so BSS's
+                                   zeroes hid the miss - but hp 0 means every
+                                   shot found `g_enhp[k] > 0` false and NOTHING
+                                   EVER DIED. Kills read K00 all roll. */
+                                g_enhp[be]=(uint8_t)ent_max_hp(mrt_ent[be].type);
                             }
                         g_batinit = 1;
                     }
@@ -7225,23 +7255,52 @@ bootvid_entry:
                     /* FIRE (PAD_X): auto-target the nearest live bat in range,
                        kill it. Short cooldown so a held button doesn't chew the
                        whole swarm in one tick. No weapon model yet. */
+                    /* ---- LARA'S PISTOLS -------------------------------
+                     * Was a placeholder: it killed the NEAREST enemy within
+                     * 3072 outright, with no aiming and no facing test, so it
+                     * shot things BEHIND her, and it played SFX_MENU_SPIN - a
+                     * menu blip - as the gunshot.
+                     * Now: fire down the way she is LOOKING, one damage point
+                     * per bullet, enemies with TR1's own hit points, and the
+                     * real TR1 pistol sample (SND_PISTOLS_SHOT, event 8).
+                     * Health: wolf 6, bear 20, bat 1 - straight from OpenLara
+                     * src/enemy.h, so a wolf takes six bullets exactly as it
+                     * does on PS1. */
                     if (g_firecd > 0) g_firecd -= g_ticks;
                     if ((pad & PAD_X) && g_firecd <= 0) {
                         int bestk=-1, bestd=1<<30;
+                        int aimc = COS(g_layaw)>>8, aims = SIN(g_layaw)>>8;
                         for (be=0; be<MRT_ENTCOUNT; be++) {
-                            int fdx, fdz, fd;
+                            int fdx, fdz, fd, along;
                             if (!ent_is_enemy(mrt_ent[be].type) || g_batdead[be]) continue;
-                            fdx=g_lax-g_batx[be]; fdz=g_laz-g_batz[be];
+                            fdx=g_batx[be]-g_lax; fdz=g_batz[be]-g_laz;
+                            /* FACING CONE: project the enemy onto Lara's
+                               heading. <=0 is behind her, so she can no longer
+                               shoot backwards. The cone is generous (half the
+                               distance) because there is no aim reticle - it
+                               only has to feel like she shoots what she faces. */
+                            along = ((fdx*aims) + (fdz*aimc)) >> 8;
+                            if (along <= 0) continue;
                             if (fdx<0)fdx=-fdx; if (fdz<0)fdz=-fdz;
                             fd=fdx+fdz;
-                            if (fd < bestd && fd < 3072) { bestd=fd; bestk=be; }
+                            if (fd > 3072) continue;
+                            if (along*2 < fd) continue;      /* outside the cone */
+                            if (fd < bestd) { bestd=fd; bestk=be; }
                         }
-                        if (bestk >= 0) {
-                            g_batdead[bestk] = 1; g_kills++;
-                            g_firecd = 8;
-#ifndef NOSOUND
-                            sfx_play(1, SFX_MENU_SPIN);
+                        g_firecd = 6;                        /* ~5 shots/sec */
+#ifdef AUTOFIRE
+                        g_shots++;
+                        if (bestk >= 0) g_hits++;
 #endif
+#ifndef NOSOUND
+                        sfx_play(1, SFX_PISTOL);             /* fires even on a
+                                                                miss - she is
+                                                                shooting, not
+                                                                hitting */
+#endif
+                        if (bestk >= 0 && g_enhp[bestk] > 0) {
+                            if (--g_enhp[bestk] <= 0) { g_batdead[bestk] = 1;
+                                                        g_kills++; }
                         }
                     }
                     if (g_health <= 0) g_dead = 1;   /* killed by damage */
@@ -8211,9 +8270,25 @@ bootvid_entry:
                320px fb and menu_text past x~240 do NOT). White fill scales with
                health; a low-health slice flips to gold (240). */
             { uint8_t *hfb = (uint8_t *)video_backbuffer();
-              char hs[12]; int p=0, h=g_health>0?g_health:0;
+              char hs[24]; int p=0, h=g_health>0?g_health:0;
               hs[p++]='0'+(h/1000)%10; hs[p++]='0'+(h/100)%10;
               hs[p++]='0'+(h/10)%10; hs[p++]='0'+h%10;
+              /* K<n> = kills. Without it a capture cannot tell "Lara is
+                 shooting and hitting" from "Lara is shooting at nothing" -
+                 the enemy simply vanishing looks the same as it walking out
+                 of frame. */
+              hs[p++]=' '; hs[p++]='K';
+              hs[p++]=(char)('0'+(g_kills/10)%10);
+              hs[p++]=(char)('0'+g_kills%10);
+#ifdef AUTOFIRE
+              /* shots-vs-hits, TEST ARM ONLY - it is what proved the pistols
+                 work (S16/H12 = 12 bullets into 2 wolves at 6hp each), but it
+                 costs BSS the ship build cannot spare (96 bytes over). */
+              hs[p++]='S'; hs[p++]=(char)('0'+(g_shots/10)%10);
+                           hs[p++]=(char)('0'+g_shots%10);
+              hs[p++]='H'; hs[p++]=(char)('0'+(g_hits/10)%10);
+                           hs[p++]=(char)('0'+g_hits%10);
+#endif
               hs[p]=0;
               menu_text(hfb, RENDER_W, RENDER_H, hs, 4, 14, 1, 2, 255); }
 #endif

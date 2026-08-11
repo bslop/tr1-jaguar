@@ -20,8 +20,16 @@ OUT  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # played on climbs (user-reported 2026-07-13). Event 31 = SND_HIT, Lara's
 # short "uh!" — the right effort vocal (TR1 climbs carry no anim-command
 # sound of their own; verified against the PSX anim command stream).
+# ☠️ APPEND ONLY - slot index = position in this list, and sfx.h's SFX_* are
+# those indices. Inserting in the middle silently renumbers every existing
+# sound (footsteps become menu blips).
+# Event 8 = SND_PISTOLS_SHOT, from OpenLara src/format.h:1449. The header note
+# above ("pistol/splash return with guns/water") deferred it until Lara could
+# actually fire; she can now.
 WANTED = [ (0,"STEP",0), (4,"LAND",0), (31,"GRUNT",0.8),
-           (108,"MENU_SPIN",0), (111,"MENU_SHOW",0), (112,"MENU_HIDE",0) ]
+           (108,"MENU_SPIN",0), (111,"MENU_SHOW",0), (112,"MENU_HIDE",0),
+           (8,"PISTOL",0.2) ]   # 0.2s: a pistol crack is short, and sfx.bin is linked
+                                #  into the ROM so every byte is BSS budget
 
 raw=open(LEVEL,'rb').read()
 # --- sound offsets/data (loadTR1_PSX fixed layout) ---
