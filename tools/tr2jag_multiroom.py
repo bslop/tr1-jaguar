@@ -1056,6 +1056,174 @@ def main():
               % (PREFIX,len(atl)//AW,PREFIX))
         sys.exit(0)
 
+    # ---- MRT_ENEMYTEX=1: append the ENEMY skins to the EXISTING atlas -------
+    # Same surgical contract as MRT_DOORPATCH above: reuse only the decoders,
+    # read the SHIPPING mrt_pal.bin + mrt_atlas.bin, append rows, write back,
+    # and EXIT before anything else is written. A full regen is what corrupts
+    # Lara, so this must never fall through into one.
+    #
+    # WHY THIS IS NEEDED: build_enemy already keeps every face's real texture
+    # id ("Faces keep their tex id"), but emit_enemy_h DISCARDS it and writes
+    # vertex indices only - so every enemy sampled one flat swatch cell and a
+    # bat, a wolf and a bear were the same grey silhouette.
+    #
+    # ☠️ SHELF-PACKED, not one-texture-per-row-band like DOORPATCH. The enemies
+    # use dozens of objtex; giving each its own full 256-wide band would add
+    # ~160KB to an image whose __bss_end is already within a few hundred bytes
+    # of the 0x1FC000 guard. Packing them side by side keeps it to a few KB.
+    if int(os.environ.get("MRT_ENEMYTEX","0")):
+        AW=256
+        pal_b=open(os.path.join(OUTDIR,PREFIX+"_pal.bin"),"rb").read()
+        pal=[(pal_b[i*2]<<8)|pal_b[i*2+1] for i in range(256)]
+        pal_rgb=[((c>>11)&31,(c>>1)&31,(c>>6)&31) for c in pal]
+        _ncache={}
+        def nearest(r5,g5,b5):
+            k=(r5,g5,b5)
+            if k in _ncache: return _ncache[k]
+            bi=0; bd=1<<30
+            for i in range(256):
+                pr,pg,pb=pal_rgb[i]
+                d=(r5-pr)**2+(g5-pg)**2+(b5-pb)**2
+                if d<bd: bd=d; bi=i
+            _ncache[k]=bi; return bi
+        atl=bytearray(open(os.path.join(OUTDIR,PREFIX+"_atlas.bin"),"rb").read())
+        assert len(atl)%AW==0, "atlas not a whole number of rows"
+        H0=len(atl)//AW
+
+        # bake the three models with EXACTLY the same args as the normal path,
+        # so face order matches the shipping mrt_<name>.h tables one-for-one
+        ens={}
+        for _eoid,_ename,_enf in ((9,"bat",8),(7,"wolf",6),(8,"bear",6)):
+            e=build_enemy(_eoid,_enf,data,pMeshData,pMeshOff,pAnims,
+                          pNodes,pFrame,pModels,modelsCount)
+            if e: ens[_ename]=e
+
+        # distinct textured objtex across all three
+        # MRT_ENEMYTEX_MODELS limits which models get real skins. The atlas is
+        # LINKED INTO THE ROM, so every skinned model is BSS budget: all three
+        # cost ~82KB and overflow the 0x1FC000 guard. Default to the wolf - it
+        # is the enemy you actually meet in the Caves (6 of them; one bear).
+        _want=set(os.environ.get("MRT_ENEMYTEX_MODELS","wolf").split(","))
+        tids=set()
+        for _nm,e in sorted(ens.items()):
+            t2=set(tex for (v,tex) in e['quads']+e['tris']
+                   if tex>=256 and tex<len(objtex))
+            print("   %-5s %3d distinct textures%s" %
+                  (_nm,len(t2)," (skinned)" if _nm in _want else " (flat)"))
+            if _nm in _want: tids |= t2
+        tids=sorted(tids)
+        print("ENEMYTEX: %d distinct object textures across %s"
+              % (len(tids), ",".join(sorted(ens))))
+
+        # measure, then shelf-pack tallest-first
+        rects={}
+        boxes=[]
+        _skip=[]
+        for tid in tids:
+            o=objtex[tid]
+            uv=list(o['uv'])
+            # ☠️ A TRIANGLE objtex carries a JUNK 4th corner. Including it
+            # blows the bbox out to most of a tile page (216x256 seen), which
+            # is what rejected 73 of 153 skins and inflated the atlas by 1.6MB.
+            # If dropping the 4th corner brings the box back to a sane size,
+            # the 4th was junk - trust the first three.
+            def _bb(pts):
+                us=[q[0] for q in pts]; vs=[q[1] for q in pts]
+                return min(us),min(vs),max(us),max(vs)
+            u0,v0,u1,v1=_bb(uv)
+            if (u1-u0+1>64 or v1-v0+1>64) and len(uv)>3:
+                a0,b0,a1,b1=_bb(uv[:3])
+                if a1-a0+1<=64 and b1-b0+1<=64:
+                    u0,v0,u1,v1=a0,b0,a1,b1
+                    uv=uv[:3]
+            bw=u1-u0+1; bh=v1-v0+1
+            # ☠️ SANITY CLAMP. A mesh skin patch is 16x16 or so; a handful of
+            # objtex in this set span most of a 256x256 tile page (216x256),
+            # which is not a wolf's fur - including them blew the atlas up by
+            # 1.6MB and would have overflowed the ROM. Anything bigger than
+            # 64x64 is not a character skin, so drop it to the flat tone.
+            if bw>64 or bh>64:
+                _skip.append((tid,bw,bh)); continue
+            boxes.append((bh,bw,tid,u0,v0))
+        boxes.sort(reverse=True)
+        print("ENEMYTEX: %d skinnable, %d oversized rejected (>64px)"
+              % (len(boxes), len(_skip)))
+        if int(os.environ.get("MRT_ENEMYTEX","0"))==2:
+            # PROBE: compare enemy face objtex against a KNOWN-GOOD room
+            # texture, read-only, before anything is written.
+            print("--- enemy face tex ids (wolf, first 12) ---")
+            for (v,tex) in ens['wolf']['quads'][:12]:
+                if tex < len(objtex):
+                    o=objtex[tex]
+                    print("   tex %5d uv=%s tile=%s ts=%s" %
+                          (tex, o['uv'], o.get('tile'), o.get('ts')))
+                else:
+                    print("   tex %5d OUT OF RANGE (objtex has %d)" % (tex,len(objtex)))
+            print("--- a room texture for comparison ---")
+            for t in sorted(list(used))[:4] if 'used' in dir() else []:
+                pass
+            rt = rooms[0]['quads'][0]['tex']
+            print("   room0 q0 tex %d uv=%s" % (rt, objtex[rt]['uv'] if rt<len(objtex) else None))
+            print("--- how many enemy faces are COLORED (<256)? ---")
+            for nm,e in sorted(ens.items()):
+                c=sum(1 for (v,tex) in e['quads']+e['tris'] if tex<256)
+                print("   %-5s %d of %d faces colored" % (nm,c,len(e['quads'])+len(e['tris'])))
+            sys.exit(0)
+        import collections as _c
+        _h=_c.Counter((h,w) for h,w,_t,_u,_v in boxes)
+        print("ENEMYTEX box sizes (hxw -> count):",
+              sorted(_h.items(), key=lambda kv:-kv[0][0]*kv[0][1])[:10])
+        print("ENEMYTEX total texels:", sum(h*w for h,w,_t,_u,_v in boxes))
+        px=0; py=H0; shelf=0
+        for h,w,tid,u0,v0 in boxes:
+            if px+w>AW: px=0; py+=shelf; shelf=0
+            if py+h>len(atl)//AW: atl+=bytearray(AW*(py+h-len(atl)//AW))
+            o=objtex[tid]; ts=o.get('ts',1)
+            for yy in range(h):
+                for xx in range(w):
+                    r5,g5,b5,a=clut_rgb555(o['clut'],
+                        tile_nibble(o['tile'],(u0+xx)*ts,(v0+yy)*ts))
+                    atl[(py+yy)*AW+px+xx]=nearest(r5,g5,b5)
+            rects[tid]=(px,py,u0,v0)
+            px+=w
+            if h>shelf: shelf=h
+        open(os.path.join(OUTDIR,PREFIX+"_atlas.bin"),"wb").write(atl)
+
+        # per-face UVs, in the SAME order as mrt_<name>_quads/_tris
+        def face_uv(tex,n):
+            """actual per-CORNER uvs mapped into the packed rect, so rotated
+            and mirrored skins keep their orientation; 0xFFFF = flat-colour
+            face (tex<256), which main.c falls back to the tone swatch for."""
+            if tex not in rects: return [0xFFFF]*(n*2)
+            px0,py0,u0,v0=rects[tex]
+            o=objtex[tex]
+            out=[]
+            for i in range(n):
+                u,v=o['uv'][i] if i<len(o['uv']) else o['uv'][-1]
+                out += [px0+(u-u0), py0+(v-v0)]
+            return out
+        with open(os.path.join(OUTDIR,PREFIX+"_entex.h"),"w") as f:
+            f.write("// generated by MRT_ENEMYTEX - per-face atlas UVs for the\n")
+            f.write("// enemy models, appended to %s_atlas.bin at rows %d..%d\n"
+                    % (PREFIX,H0,len(atl)//AW-1))
+            f.write("// 0xFFFF = flat-colour face: main.c uses the tone swatch.\n")
+            for nm,e in sorted(ens.items()):
+                up=(PREFIX+"_"+nm).upper()
+                f.write("static const unsigned short %s_quv[%d][8] = {\n"
+                        % (up,max(1,len(e['quads']))))
+                for (v,tex) in e['quads']:
+                    f.write("  {"+",".join("%d"%c for c in face_uv(tex,4))+"},\n")
+                f.write("};\n")
+                f.write("static const unsigned short %s_tuv[%d][6] = {\n"
+                        % (up,max(1,len(e['tris']))))
+                for (v,tex) in e['tris']:
+                    f.write("  {"+",".join("%d"%c for c in face_uv(tex,3))+"},\n")
+                f.write("};\n")
+        print("ENEMYTEX: wrote %s_atlas.bin (%d rows, +%d) + %s_entex.h"
+              % (PREFIX,len(atl)//AW,len(atl)//AW-H0,PREFIX))
+        sys.exit(0)
+
+
     # ---- union used object-textures across all rooms ----
     used=set()
     for rm in rooms:

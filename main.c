@@ -51,6 +51,19 @@ __attribute__((used, noinline)) void pad_main_probe(void)
 #include "mrt_bat.h"        /* bat model: posed fly-cycle frames + faces */
 #include "mrt_wolf.h"       /* wolf model: run-cycle frames + faces       */
 #include "mrt_bear.h"       /* bear model: reared pose + faces            */
+#ifdef ENEMYTEX
+/* ☠️ REAL ENEMY SKINS ARE IMPLEMENTED BUT DO NOT FIT. The extractor patch
+   (MRT_ENEMYTEX=1) packs the wolf's 91 object-textures into the atlas and
+   emits per-face UVs, and the renderer below consumes them - but the atlas is
+   LINKED INTO THE ROM and the image has **40 BYTES** of headroom under the
+   0x1FC000 guard. Wolf-only costs ~61KB (53KB atlas + 7.9KB UV tables); all
+   three models cost ~82KB. Switch this on once the memory pass frees the
+   space; nothing else needs changing. Regenerate with:
+       MRT_ENEMYTEX=1 [MRT_ENEMYTEX_MODELS=wolf,bear,bat] \
+           python3 tools/tr2jag_multiroom.py     (rewrites ONLY mrt_atlas.bin
+                                                  + mrt_entex.h, then exits) */
+#include "mrt_entex.h"      /* per-face enemy skin UVs (MRT_ENEMYTEX)     */
+#endif
 #endif
 #include "mrt_lara.h"       /* Lara anim frame indices (run/stand/jump) */
 #include "mrt_spawn.h"      /* Lara entity from LEVEL1.PSX (room/pos/yaw) */
@@ -2163,11 +2176,30 @@ static int ent_is_enemy(int t) { return t==7 || t==8 || t==9; }
    posed-verts + quad/tri-index layout the extractor emits, so one builder takes
    the model's tables and the live world position and writes a gpu_geotex blob.
    Flat DOOR grey swatch (no per-enemy texture yet). */
+/* ENEMY TONE: which flat-shade swatch cell the model samples. The strip is
+   4 cells of MRT_LARA_CELL px at y=g_swy, palette 242..245, running DARKEST
+   (9,6,3) to LIGHTEST (24,19,13) - see tr2jag_multiroom.py's "Lara flat-shade
+   swatch". Every enemy used to sample cell 1, so a bat, a wolf and a bear were
+   the SAME grey silhouette. Spread them across the strip so the three read
+   apart at a glance: bat darkest, bear dark brown, wolf lightest.
+   ⬜ This is still FLAT COLOUR, not texture. The extractor already keeps each
+   enemy face's real tex id ("Faces keep their tex id") but DISCARDS it when it
+   writes mrt_wolf.h - only vertex indices are emitted. Real enemy skins =
+   emit those ids + get their objtex into the atlas (the MRT_DOORPATCH trick,
+   but for many textures). */
+#define ENT_TONE_BAT   0
+#define ENT_TONE_BEAR  1
+#define ENT_TONE_WOLF  3
+#define ENT_SW_UL(c)  ((c)*MRT_LARA_CELL + 1)
+#define ENT_SW_UH(c)  (((c)+1)*MRT_LARA_CELL - 2)
 static void build_ent_model(uint8_t *buf, int atlasW, int wx, int wy, int wz,
                             const short *V, int vc,
                             const unsigned short (*Q)[4], int qc,
-                            const unsigned short (*T)[3], int tc)
+                            const unsigned short (*T)[3], int tc, int tone,
+                            const unsigned short (*QUV)[8],
+                            const unsigned short (*TUV)[6])
 {
+    const int su0 = ENT_SW_UL(tone), su1 = ENT_SW_UH(tone);
     int offX = wx>>8, offZ = wz>>8, rx0 = wx&255, rz0 = wz&255, i;
     uint16_t *h = (uint16_t *)buf; uint16_t *w;
     h[0]=(uint16_t)vc; h[1]=(uint16_t)qc; h[2]=(uint16_t)tc;
@@ -2183,13 +2215,28 @@ static void build_ent_model(uint8_t *buf, int atlasW, int wx, int wy, int wz,
     for (i=0;i<qc;i++) {
         EMIT_PLANE(w);
         w[0]=Q[i][0]; w[1]=Q[i][1]; w[2]=Q[i][2]; w[3]=Q[i][3];
-        w[4]=DOOR_UL;w[5]=DOOR_VL; w[6]=DOOR_UH;w[7]=DOOR_VL;
-        w[8]=DOOR_UH;w[9]=DOOR_VH; w[10]=DOOR_UL;w[11]=DOOR_VH; w+=12;
+        /* real skin when the extractor found one, else the flat tone. TR1
+           enemies genuinely mix the two - 137 of the wolf's 251 faces are
+           COLOURED faces in the level data, not textured. */
+        if (QUV && QUV[i][0] != 0xFFFFu) {
+            w[4]=QUV[i][0];w[5]=QUV[i][1]; w[6]=QUV[i][2];w[7]=QUV[i][3];
+            w[8]=QUV[i][4];w[9]=QUV[i][5]; w[10]=QUV[i][6];w[11]=QUV[i][7];
+        } else {
+            w[4]=(uint16_t)su0;w[5]=DOOR_VL; w[6]=(uint16_t)su1;w[7]=DOOR_VL;
+            w[8]=(uint16_t)su1;w[9]=DOOR_VH; w[10]=(uint16_t)su0;w[11]=DOOR_VH;
+        }
+        w+=12;
     }
     for (i=0;i<tc;i++) {
         EMIT_PLANE(w);
         w[0]=T[i][0]; w[1]=T[i][1]; w[2]=T[i][2];
-        w[3]=DOOR_UL;w[4]=DOOR_VL; w[5]=DOOR_UH;w[6]=DOOR_VL; w[7]=DOOR_UH;w[8]=DOOR_VH;
+        if (TUV && TUV[i][0] != 0xFFFFu) {
+            w[3]=TUV[i][0];w[4]=TUV[i][1]; w[5]=TUV[i][2];w[6]=TUV[i][3];
+            w[7]=TUV[i][4];w[8]=TUV[i][5];
+        } else {
+            w[3]=(uint16_t)su0;w[4]=DOOR_VL; w[5]=(uint16_t)su1;w[6]=DOOR_VL;
+            w[7]=(uint16_t)su1;w[8]=DOOR_VH;
+        }
         w+=9;
     }
 }
@@ -2198,21 +2245,36 @@ static void build_ent_bat(uint8_t *buf, int atlasW, int e, int frame)
     build_ent_model(buf, atlasW, g_batx[e], g_baty[e], g_batz[e],
                     MRT_BAT_verts[frame], MRT_BAT_VCOUNT,
                     MRT_BAT_quads, MRT_BAT_QCOUNT,
-                    MRT_BAT_tris, MRT_BAT_TCOUNT);
+                    MRT_BAT_tris, MRT_BAT_TCOUNT, ENT_TONE_BAT,
+                    #ifdef ENEMYTEX
+                    MRT_BAT_quv, MRT_BAT_tuv);
+                    #else
+                    0, 0);
+                    #endif
 }
 static void build_ent_wolf(uint8_t *buf, int atlasW, int e, int frame)
 {
     build_ent_model(buf, atlasW, g_batx[e], g_baty[e], g_batz[e],
                     MRT_WOLF_verts[frame], MRT_WOLF_VCOUNT,
                     MRT_WOLF_quads, MRT_WOLF_QCOUNT,
-                    MRT_WOLF_tris, MRT_WOLF_TCOUNT);
+                    MRT_WOLF_tris, MRT_WOLF_TCOUNT, ENT_TONE_WOLF,
+                    #ifdef ENEMYTEX
+                    MRT_WOLF_quv, MRT_WOLF_tuv);
+                    #else
+                    0, 0);
+                    #endif
 }
 static void build_ent_bear(uint8_t *buf, int atlasW, int e, int frame)
 {
     build_ent_model(buf, atlasW, g_batx[e], g_baty[e], g_batz[e],
                     MRT_BEAR_verts[frame], MRT_BEAR_VCOUNT,
                     MRT_BEAR_quads, MRT_BEAR_QCOUNT,
-                    MRT_BEAR_tris, MRT_BEAR_TCOUNT);
+                    MRT_BEAR_tris, MRT_BEAR_TCOUNT, ENT_TONE_BEAR,
+                    #ifdef ENEMYTEX
+                    MRT_BEAR_quv, MRT_BEAR_tuv);
+                    #else
+                    0, 0);
+                    #endif
 }
 #endif
 

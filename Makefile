@@ -940,6 +940,15 @@ CFLAGS   += -DAUTOFIRE
 CXXFLAGS += -DAUTOFIRE
 endif
 
+# ENEMYTEX=1: real per-face enemy skins instead of the flat tone swatch.
+# ☠️ DOES NOT FIT YET - the image has 40 bytes of headroom and wolf-only skins
+# cost ~61KB (atlas is linked into the ROM). Implemented and ready; switch on
+# after the memory pass. Assets: MRT_ENEMYTEX=1 python3 tools/tr2jag_multiroom.py
+ifdef ENEMYTEX
+CFLAGS   += -DENEMYTEX
+CXXFLAGS += -DENEMYTEX
+endif
+
 ifdef ANIMRATE
 CFLAGS   += -DANIMRATE
 CXXFLAGS += -DANIMRATE
