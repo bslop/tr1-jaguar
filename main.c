@@ -2118,13 +2118,13 @@ static int  g_health = 1000;             /* TR1 full health              */
  * is re-opened and re-streamed on every title entry, and the ring items are
  * rebuilt per frame - so returning to the title after gameplay re-fills them
  * from scratch rather than reading clobbered state. */
-/* 8192, trimmed from 8448: the union's TITLE side is the larger one, so it
+/* 8128, trimmed from 8448: the union's TITLE side is the larger one, so it
    alone sets the arena size - every byte here is a byte the whole program
    pays. ☠️ Do NOT go to 6144: the comment above records that the biggest
    staged item needs 6960B and 6144 silently clamped it to an INVISIBLE ITEM.
    8192 keeps 1232B of margin over that measured worst case. */
 #ifdef GEOMDIRECT
-#define MRT_RBLOB_SZ 8192
+#define MRT_RBLOB_SZ 8128
 #else
 #define MRT_RBLOB_SZ 4096
 #endif
@@ -2146,6 +2146,120 @@ static union {
         uint8_t artbuf[7680];      /* loading-screen art stream, 8-aligned */
     } g;
 } g_arena __attribute__((aligned(8)));
+
+/* ---- RING ITEM STAGING (shared: title AND the in-game ring) -------------
+ * These were locals of the title block. They are file-scope now because the
+ * staging has to be RE-RUNNABLE: rblob lives in g_arena's TITLE side, which
+ * the in-game ENEMY blobs overwrite, so opening the ring during play must
+ * rebuild it rather than assume the title's copy survived.
+ * ☠️ That is the whole reason this is a function - not tidiness. */
+/* storage is g_arena's TITLE side - shared with the in-game enemy blobs */
+#define rblob g_arena.t.rblob
+static const uint8_t *rsrc[6]; static const uint8_t *ratl[6];
+static int rvcnt[6], rblen[6];
+static int rnv0[6], rnq0[6], rnt0[6];
+static uint8_t p2src[240] __attribute__((aligned(8)));
+
+/* Fill rblob[] from the ring item ROM geometry. Split out of the title block
+ * so it can RUN AGAIN: rblob lives in g_arena's TITLE side and the in-game
+ * enemy blobs overwrite it, so raising the ring during play must restage
+ * rather than assume the title's copy survived. Same code, verbatim. */
+static void ring_stage(void)
+{
+    extern const uint8_t pass_geom[], pass_atlas[];
+    extern const uint8_t pass2_geom[], pass2_atlas[];
+    extern const uint8_t ctrl_geom[], ctrl_atlas[];
+    extern const uint8_t photo_geom[], photo_atlas[];
+    extern const uint8_t sound_geom[], sound_atlas[];
+    extern const uint8_t detail_geom[], detail_atlas[];
+    rsrc[0]=pass_geom;   ratl[0]=pass_atlas;
+    rsrc[1]=detail_geom; ratl[1]=detail_atlas;
+    rsrc[2]=sound_geom;  ratl[2]=sound_atlas;
+    rsrc[3]=ctrl_geom;   ratl[3]=ctrl_atlas;
+    rsrc[4]=photo_geom;  ratl[4]=photo_atlas;
+    { int c7; for (c7 = 0; c7 < 232; c7++) p2src[c7] = pass2_geom[c7]; }
+    rsrc[5]=p2src;       ratl[5]=pass2_atlas;
+    { int it2;
+      for (it2=0; it2<6; it2++) {
+        const uint8_t *sb=rsrc[it2];
+        int nv=(sb[0]<<8)|sb[1], nq=(sb[2]<<8)|sb[3], nt=(sb[4]<<8)|sb[5];
+#ifndef STAGEDIET
+        int len=16+nv*8+nq*24+nt*18, i3;
+        if (len > (int)sizeof(rblob[0])) len = sizeof(rblob[0]);
+        for (i3=0;i3<len;i3++) rblob[it2][i3]=sb[i3];
+        rvcnt[it2]=nv; rblen[it2]=len;
+#else
+        /* title assets are LEGACY format — copy record-wise, inserting
+           the dummy plane prefix the STAGEDIET kernel expects.
+           ☠️ TRIS ARE PROMOTED TO REPEATED-CORNER QUADS (2026-08-05):
+           the title path tears tri records on silicon (pad
+           checkerboard, Sound headphones holes) while every all-quad
+           item is solid — in-game tris are fine, so the fault sits in
+           this path's tri handling. Every tri becomes a quad with
+           v3=v2 / uv3=uv2: a degenerate fourth corner renders the same
+           triangle through the proven quad path. */
+        /* the promoted quad's 4th corner must be a REAL vertex: a
+           repeated corner makes a zero-length edge the kernel
+           mishandles (still-broken headphones, the pad's notch). Each
+           tri gets an appended vertex at the MIDPOINT of its closing
+           edge - coverage is exactly the triangle, four distinct
+           verts. 68k is big-endian, so s16 blob fields read native. */
+        int hdr=16+(nv+nt)*8, i3, f3;
+        int len=hdr+(nq+nt)*QREC;
+        uint16_t *w2; const uint16_t *s2;
+        /* per-item world scale (256 = 1.0): the PS1 reference
+           (screencast 18-36-05) shows the closed passport at ~27%%
+           of screen height; ours measured ~15%% - the model is
+           authored small. 460/256 = x1.8. */
+        static const uint16_t rscale[6] = {460,256,256,256,256,256};
+        if (len > (int)sizeof(rblob[0])) { nq=0; nt=0; hdr=16+nv*8; len=hdr; }
+        for (i3=0;i3<16+nv*8;i3++) rblob[it2][i3]=sb[i3];
+        if (rscale[it2] != 256) {
+            int16_t *vv2 = (int16_t*)(rblob[it2]+16);
+            int k4;
+            for (k4 = 0; k4 < nv; k4++) {
+          vv2[k4*4+0] = (int16_t)(((int)vv2[k4*4+0]*rscale[it2])>>8);
+          vv2[k4*4+1] = (int16_t)(((int)vv2[k4*4+1]*rscale[it2])>>8);
+          vv2[k4*4+2] = (int16_t)(((int)vv2[k4*4+2]*rscale[it2])>>8);
+            }
+        }
+        { const int16_t *sv=(const int16_t*)(rblob[it2]+16);
+          int16_t *dv=(int16_t*)(rblob[it2]+16+nv*8);
+          const uint16_t *tf=(const uint16_t*)(sb+16+nv*8+nq*24);
+          for (f3=0;f3<nt;f3++){
+        int tv0=tf[f3*9+0], tv2=tf[f3*9+2];
+        dv[f3*4+0]=(int16_t)((sv[tv0*4+0]+sv[tv2*4+0])>>1);
+        dv[f3*4+1]=(int16_t)((sv[tv0*4+1]+sv[tv2*4+1])>>1);
+        dv[f3*4+2]=(int16_t)((sv[tv0*4+2]+sv[tv2*4+2])>>1);
+        dv[f3*4+3]=255; } }
+        /* staged header: every face is a quad, verts grew by nt */
+        rblob[it2][0]=(uint8_t)((nv+nt)>>8);
+        rblob[it2][1]=(uint8_t)(nv+nt);
+        rblob[it2][2]=(uint8_t)((nq+nt)>>8);
+        rblob[it2][3]=(uint8_t)(nq+nt);
+        rblob[it2][4]=0; rblob[it2][5]=0;
+        w2=(uint16_t*)(rblob[it2]+hdr); s2=(const uint16_t*)(sb+16+nv*8);
+        for (f3=0;f3<nq;f3++){ EMIT_PLANE(w2);
+            for(i3=0;i3<12;i3++) w2[i3]=s2[i3]; w2+=12; s2+=12; }
+        for (f3=0;f3<nt;f3++){ EMIT_PLANE(w2);
+            w2[0]=s2[0]; w2[1]=s2[1]; w2[2]=s2[2];
+            w2[3]=(uint16_t)(nv+f3);
+            w2[4]=s2[3]; w2[5]=s2[4];
+            w2[6]=s2[5]; w2[7]=s2[6];
+            w2[8]=s2[7]; w2[9]=s2[8];
+            w2[10]=(uint16_t)((s2[7]+s2[3])>>1);
+            w2[11]=(uint16_t)((s2[8]+s2[4])>>1);
+            w2+=12; s2+=9; }
+        /* bake only the REAL verts each frame (the ROM source has no
+           midpoints); the appended verts are rebuilt post-bake from
+           the baked endpoints - midpoints commute with the affine
+           bake, so the result is exact. */
+        rvcnt[it2]=nv; rnv0[it2]=nv; rnq0[it2]=nq; rnt0[it2]=nt;
+        rblen[it2]=len;
+#endif
+      } }
+}
+
 #define ent_bat_blob   g_arena.g.bat
 #define ent_wolf_blob  g_arena.g.wolf
 #define ent_bear_blob  g_arena.g.bear
@@ -4085,13 +4199,6 @@ int main(void)
              overflow clamp made it an INVISIBLE ITEM (the exact failure the
              old 2304-byte comment warned about). */
 #endif
-          /* storage is g_arena (shared with the in-game enemy blobs - see the
-             union's note); this is only the local name for it. */
-#define rblob g_arena.t.rblob
-          const uint8_t *rsrc[6]; const uint8_t *ratl[6];
-          int rvcnt[6], rblen[6];
-          int rnv0[6], rnq0[6], rnt0[6];  /* per-item counts for the
-                                             post-bake midpoint fixup */
           /* PASSPORT OPEN: 0 = on the ring, 1..PASS_OPEN_TICKS = opening,
              PASS_OPEN_TICKS = fully open (the page view). */
           int popen = 0, prow = 0;   /* open-passport row: 0 Start, 1 Back */
@@ -4102,7 +4209,6 @@ int main(void)
              the leaf's model verts each frame before the bake. */
           int panim = 0;
           int introplay = 0;
-          static uint8_t p2src[240] __attribute__((aligned(8)));
 #ifdef STEADYREAD
           { static volatile int g_sr_init; g_sr_init = (SRGUARD); }
 #endif
@@ -4970,92 +5076,7 @@ bootvid_entry:
           /* PSX title ring order (reference video 17-22-54): RIGHT of Game
              is Screen Adjust, LEFT is Lara's Home; Sound and Controls fill
              the far side. Slot RING_N = the opened passport spread. */
-          rsrc[0]=pass_geom;   ratl[0]=pass_atlas;
-          rsrc[1]=detail_geom; ratl[1]=detail_atlas;
-          rsrc[2]=sound_geom;  ratl[2]=sound_atlas;
-          rsrc[3]=ctrl_geom;   ratl[3]=ctrl_atlas;
-          rsrc[4]=photo_geom;  ratl[4]=photo_atlas;
-          { int c7; for (c7 = 0; c7 < 232; c7++) p2src[c7] = pass2_geom[c7]; }
-          rsrc[5]=p2src;       ratl[5]=pass2_atlas;
-          { int it2;
-            for (it2=0; it2<6; it2++) {
-              const uint8_t *sb=rsrc[it2];
-              int nv=(sb[0]<<8)|sb[1], nq=(sb[2]<<8)|sb[3], nt=(sb[4]<<8)|sb[5];
-#ifndef STAGEDIET
-              int len=16+nv*8+nq*24+nt*18, i3;
-              if (len > (int)sizeof(rblob[0])) len = sizeof(rblob[0]);
-              for (i3=0;i3<len;i3++) rblob[it2][i3]=sb[i3];
-              rvcnt[it2]=nv; rblen[it2]=len;
-#else
-              /* title assets are LEGACY format — copy record-wise, inserting
-                 the dummy plane prefix the STAGEDIET kernel expects.
-                 ☠️ TRIS ARE PROMOTED TO REPEATED-CORNER QUADS (2026-08-05):
-                 the title path tears tri records on silicon (pad
-                 checkerboard, Sound headphones holes) while every all-quad
-                 item is solid — in-game tris are fine, so the fault sits in
-                 this path's tri handling. Every tri becomes a quad with
-                 v3=v2 / uv3=uv2: a degenerate fourth corner renders the same
-                 triangle through the proven quad path. */
-              /* the promoted quad's 4th corner must be a REAL vertex: a
-                 repeated corner makes a zero-length edge the kernel
-                 mishandles (still-broken headphones, the pad's notch). Each
-                 tri gets an appended vertex at the MIDPOINT of its closing
-                 edge - coverage is exactly the triangle, four distinct
-                 verts. 68k is big-endian, so s16 blob fields read native. */
-              int hdr=16+(nv+nt)*8, i3, f3;
-              int len=hdr+(nq+nt)*QREC;
-              uint16_t *w2; const uint16_t *s2;
-              /* per-item world scale (256 = 1.0): the PS1 reference
-                 (screencast 18-36-05) shows the closed passport at ~27%%
-                 of screen height; ours measured ~15%% - the model is
-                 authored small. 460/256 = x1.8. */
-              static const uint16_t rscale[6] = {460,256,256,256,256,256};
-              if (len > (int)sizeof(rblob[0])) { nq=0; nt=0; hdr=16+nv*8; len=hdr; }
-              for (i3=0;i3<16+nv*8;i3++) rblob[it2][i3]=sb[i3];
-              if (rscale[it2] != 256) {
-                  int16_t *vv2 = (int16_t*)(rblob[it2]+16);
-                  int k4;
-                  for (k4 = 0; k4 < nv; k4++) {
-                      vv2[k4*4+0] = (int16_t)(((int)vv2[k4*4+0]*rscale[it2])>>8);
-                      vv2[k4*4+1] = (int16_t)(((int)vv2[k4*4+1]*rscale[it2])>>8);
-                      vv2[k4*4+2] = (int16_t)(((int)vv2[k4*4+2]*rscale[it2])>>8);
-                  }
-              }
-              { const int16_t *sv=(const int16_t*)(rblob[it2]+16);
-                int16_t *dv=(int16_t*)(rblob[it2]+16+nv*8);
-                const uint16_t *tf=(const uint16_t*)(sb+16+nv*8+nq*24);
-                for (f3=0;f3<nt;f3++){
-                    int tv0=tf[f3*9+0], tv2=tf[f3*9+2];
-                    dv[f3*4+0]=(int16_t)((sv[tv0*4+0]+sv[tv2*4+0])>>1);
-                    dv[f3*4+1]=(int16_t)((sv[tv0*4+1]+sv[tv2*4+1])>>1);
-                    dv[f3*4+2]=(int16_t)((sv[tv0*4+2]+sv[tv2*4+2])>>1);
-                    dv[f3*4+3]=255; } }
-              /* staged header: every face is a quad, verts grew by nt */
-              rblob[it2][0]=(uint8_t)((nv+nt)>>8);
-              rblob[it2][1]=(uint8_t)(nv+nt);
-              rblob[it2][2]=(uint8_t)((nq+nt)>>8);
-              rblob[it2][3]=(uint8_t)(nq+nt);
-              rblob[it2][4]=0; rblob[it2][5]=0;
-              w2=(uint16_t*)(rblob[it2]+hdr); s2=(const uint16_t*)(sb+16+nv*8);
-              for (f3=0;f3<nq;f3++){ EMIT_PLANE(w2);
-                  for(i3=0;i3<12;i3++) w2[i3]=s2[i3]; w2+=12; s2+=12; }
-              for (f3=0;f3<nt;f3++){ EMIT_PLANE(w2);
-                  w2[0]=s2[0]; w2[1]=s2[1]; w2[2]=s2[2];
-                  w2[3]=(uint16_t)(nv+f3);
-                  w2[4]=s2[3]; w2[5]=s2[4];
-                  w2[6]=s2[5]; w2[7]=s2[6];
-                  w2[8]=s2[7]; w2[9]=s2[8];
-                  w2[10]=(uint16_t)((s2[7]+s2[3])>>1);
-                  w2[11]=(uint16_t)((s2[8]+s2[4])>>1);
-                  w2+=12; s2+=9; }
-              /* bake only the REAL verts each frame (the ROM source has no
-                 midpoints); the appended verts are rebuilt post-bake from
-                 the baked endpoints - midpoints commute with the affine
-                 bake, so the result is exact. */
-              rvcnt[it2]=nv; rnv0[it2]=nv; rnq0[it2]=nq; rnt0[it2]=nt;
-              rblen[it2]=len;
-#endif
-            } }
+          ring_stage();
 #ifndef NO_GAMEDRIVE
           { int mi;
             for (mi = 0; mi < 2 && mh < 0; mi++)
