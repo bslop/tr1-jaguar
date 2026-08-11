@@ -2138,6 +2138,7 @@ static union {
            biggest lever available. ☠️ If the title music stutters, THIS is
            the first thing to put back. */
         int8_t  mbuf[2][5120];
+        uint8_t fscr[160*QREC];   /* ring face-sort scratch, title only */
     } t;
     struct {                                   /* IN-GAME only */
         uint8_t bat [ENT_BAT_MAXDRAW][1792];
@@ -5825,7 +5826,10 @@ bootvid_entry:
                              white slab of captures 12-23-17/12-34-24. */
                           if (it2 == 1 || it2 == 2 || it2 == RING_N) {
                               int nf5 = rnq0[it2] + rnt0[it2];
-                              static uint8_t fscr[160*QREC];
+                              /* storage is g_arena's TITLE side: title-only
+                                 (the ring face sort), and that side is 7KB
+                                 under the game side, so this is free. */
+#define fscr (g_arena.t.fscr)
                               static int16_t fkey[160];
                               static uint8_t ford[160];
                               if (nf5 <= 160) {
