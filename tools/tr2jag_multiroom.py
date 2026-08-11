@@ -724,8 +724,61 @@ def main():
     entities=[]
     sp=r.p
     try:
-        r.seek(r.u32()*16)             # spriteTextures (PSX 16B)
-        r.seek(r.u32()*8)              # spriteSequences (8B)
+        _nst = r.u32(); _pst = r.p; r.seek(_nst*16)   # spriteTextures (PSX 16B)
+        _nss = r.u32(); _pss = r.p; r.seek(_nss*8)    # spriteSequences (8B)
+        # MRT_SPRITEAUDIT=1: TR1 renders medikits/ammo/pickups as SPRITES, not
+        # meshes - they are absent from the model table entirely, which is why
+        # a model audit for 93/94 comes back empty. Report the sequences so the
+        # renderer knows what it must billboard. Read-only; exits before any
+        # write, so it cannot touch the shipping assets.
+        if int(os.environ.get("MRT_SPRITEAUDIT","0")):
+            print("\n=== SPRITE SEQUENCES (%d) ===" % _nss)
+            for _i in range(_nss):
+                _o = struct.unpack_from("<i", r.d, _pss+_i*8)[0]
+                _l = struct.unpack_from("<h", r.d, _pss+_i*8+4)[0]
+                _s = struct.unpack_from("<h", r.d, _pss+_i*8+6)[0]
+                print("  objectID %3d  frames %3d  first sprite %4d" % (_o,-_l,_s))
+            print("\n=== SPRITE TEXTURES: %d ===" % _nst)
+            sys.exit(0)
+        globals()['_SPR_P'] = _pst; globals()['_SPR_N'] = _nst
+
+            # ---- MRT_SPRITEDUMP=7,8: decode SPRITE textures and write PNGs -----------
+        # TR1 renders medikits/ammo as SPRITES, not meshes (a model audit for 93/94
+        # is empty; the sprite-sequence audit shows 93->sprite 7, 94->sprite 8).
+        # PSX spriteTexture is 16B: int16 l,t,r,b (billboard extents in world
+        # units), uint16 clut, uint16 tile, uint8 u0,v0,u1,v1 - the SAME fields the
+        # objtex path already decodes, so tile_nibble/clut_rgb555 apply unchanged.
+        # Read-only: writes PNGs to MRT_SPRITEDUMP_OUT and exits before any asset
+        # write, so it cannot disturb the shipping tree.
+        if os.environ.get("MRT_SPRITEDUMP"):
+            from PIL import Image as _I
+            outd = os.environ.get("MRT_SPRITEDUMP_OUT", "/tmp")
+            for _si in [int(x) for x in os.environ["MRT_SPRITEDUMP"].split(",")]:
+                b = _SPR_P + _si*16
+                l,t,rr,bb = struct.unpack_from("<hhhh", data, b)
+                clut, tile = struct.unpack_from("<HH", data, b+8)
+                u0,v0,u1,v1 = struct.unpack_from("<BBBB", data, b+12)
+                w = u1-u0+1; h = v1-v0+1
+                print("  sprite %2d  tile %3d clut %5d  uv (%d,%d)-(%d,%d) = %dx%d"
+                      "  extents l%d t%d r%d b%d" % (_si,tile,clut,u0,v0,u1,v1,w,h,l,t,rr,bb))
+                im = _I.new("RGBA",(w,h))
+                px = im.load()
+                for yy in range(h):
+                    for xx in range(w):
+                        _sx = u0+xx; _sy = v0+yy
+                        _o = tiles_off+tile*TILE_PAGE_BYTES+(_sy*256+_sx)//2
+                        _b = data[_o]
+                        _nb = (_b>>4) if (_sx & 1) else (_b & 0x0F)
+                        _c = cluts_off+clut*CLUT_BYTES+_nb*2
+                        _v = data[_c] | (data[_c+1]<<8)
+                        r5,g5,b5 = (_v & 31), ((_v>>5) & 31), ((_v>>10) & 31)
+                        px[xx,yy] = (r5*8, g5*8, b5*8,
+                                     0 if (r5|g5|b5)==0 else 255)
+                fn = os.path.join(outd, "sprite%d.png" % _si)
+                im.resize((w*6,h*6), _I.NEAREST).save(fn)
+                print("      -> %s" % fn)
+            sys.exit(0)
+
         r.seek(r.u32()*16)             # cameras (16B)
         r.seek(r.u32()*16)             # soundSources (16B)
         nbox=r.u32(); r.seek(nbox*20)  # boxes (TR1 20B)
@@ -851,8 +904,13 @@ def main():
         sys.exit(0)
 
     # ---- MRT_ENEMYAUDIT=1: scope the enemy models (wolf/bear/bat) ----------
-    if int(os.environ.get("MRT_ENEMYAUDIT","0")):
+    # MRT_MODELAUDIT=83,93,94 scopes ANY model ids instead - same report, same
+    # early exit BEFORE anything is written, so it can never touch the shipping
+    # assets (the OUTDIR-overwrite trap).
+    if int(os.environ.get("MRT_ENEMYAUDIT","0")) or os.environ.get("MRT_MODELAUDIT"):
         _EN={7:"WOLF",8:"BEAR",9:"BAT"}
+        if os.environ.get("MRT_MODELAUDIT"):
+            _EN={int(x):("m%s"%x) for x in os.environ["MRT_MODELAUDIT"].split(",") if x.strip()}
         print("\n=== ENEMY MODELS (mesh/anim scope) ===")
         # models are ordered; anim ranges = this.anim .. next-model.anim
         mdl=[]
