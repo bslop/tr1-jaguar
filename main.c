@@ -3774,7 +3774,12 @@ static void ring_render(void *fb, int ringA, int spin)
             py[it2] = (py[it2]*256)/rg_scale[it2];
             pz[it2] = (pz[it2]*256)/rg_scale[it2];
         }
-        py[it2] >>= 1;                    /* 240-line ring into a 120-line game */
+        /* ☠️ NO Y ADJUSTMENT. The kernel's LOWRES projection is already
+           exactly half the title's - CENTER_Y 60 vs 120, FOCAL_Y 95 vs 190 -
+           so sy(120) == sy(240)/2 for free, and the OP stretches the 120-line
+           buffer back 2x on the way out. An extra >>1 here DOUBLE-halves it
+           and pushes most of the ring off the top; that is why only two items
+           landed on screen. */
         yw[it2] = (rg_yaw[it2] + ((f < 64) ? spin : 0)) & 1023;
         zi[it2] = pz[it2];
         pt[it2] = rg_rot[it2][0];
@@ -7011,8 +7016,9 @@ bootvid_entry:
                capture can see it. */
             { extern volatile uint32_t frame_count;
               static uint32_t amp; uint32_t f = frame_count;
-              if (f > 600u && !amp)        { pad |= PAD_PAUSE; amp = 1; }
-              else if (f > 900u && amp==1) { pad |= PAD_DOWN;  amp = 2; }
+              if (f > 600u && !amp)         { pad |= PAD_PAUSE; amp = 1; }
+              else if (f > 1100u && amp==1) { pad |= PAD_RIGHT; amp = 2; }
+              else if (f > 1600u && amp==2) { pad |= PAD_RIGHT; amp = 3; }
             }
 #endif
             /* PAUSE MENU: edge-triggered, and PAD_PAUSE is SWALLOWED so the
@@ -7036,8 +7042,13 @@ bootvid_entry:
                   if (pmedge & PAD_UP)   g_pausesel = (uint8_t)((g_pausesel + PAUSE_ITEMS - 1) % PAUSE_ITEMS);
                   if (pmedge & PAD_DOWN) g_pausesel = (uint8_t)((g_pausesel + 1) % PAUSE_ITEMS);
                   if (pmedge & (PAD_A|PAD_X)) {
-                      if (g_pausesel == 0) g_pause = 0;      /* RESUME  */
-                      else { g_dead = 1; g_pause = 0; }      /* RESTART */
+                      /* GAME (the passport) resumes; HOME restarts the level -
+                         the two the ring can actually honour today. The middle
+                         three are real TR1 pages with nothing behind them yet,
+                         so they close rather than pretend. */
+                      int rs = ((g_ringA * RG_N + 2048) / 4096) % RG_N;
+                      if (rs == 4) g_dead = 1;
+                      g_pause = 0;
                   }
               }
               pad &= ~PAD_PAUSE;
@@ -8510,12 +8521,24 @@ bootvid_entry:
                DBGROOM - plain 68k stores into a finished buffer, no Blitter,
                so it cannot race the kernel. */
             if (g_pause) {
-                /* THE 3D RING, over the frozen world. Tom is idle here (after
-                   gpu_sync, before the flip), which is exactly the window
-                   ring_render needs - it kicks the kernel once per item. */
+                /* THE 3D RING. Tom is idle here (after gpu_sync, before the
+                   flip), which is exactly the window ring_render needs - it
+                   kicks the kernel once per item.
+                   The world is BLACKED first: drawn over live gameplay the
+                   items read as objects floating in the cave rather than as a
+                   menu. TR1 dims the frozen frame; a clear is the same idea
+                   for a fraction of the work, and blit_band is the same call
+                   the in-game clear already uses. */
+                static const char *rlbl[RG_N] =
+                    { "GAME", "DETAIL", "SOUND", "CONTROLS", "HOME" };
                 uint8_t *pfb = (uint8_t *)video_backbuffer();
+                int rsel = ((g_ringA * RG_N + 2048) / 4096) % RG_N;
+                blit_band(pfb, 0, RENDER_H, CLEAR_IDX);
                 ring_render(pfb, g_ringA, g_ringspin);
-                menu_text(pfb, RENDER_W, RENDER_H, "PAUSED", 8, 8, 1, 2, 255);
+                /* label under the selected item, centred-ish and well left of
+                   x~240 (menu_text does not display past there) */
+                menu_text(pfb, RENDER_W, RENDER_H, rlbl[rsel], 130, 96, 1, 2, 255);
+                menu_text(pfb, RENDER_W, RENDER_H, "PAUSED", 8, 8, 1, 2, 245);
             }
 #ifdef ENEMIES
             /* HEALTH BAR: raw-pixel bar at the TOP-LEFT (the JLOOPS/LARACOUNT
