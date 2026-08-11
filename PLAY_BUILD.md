@@ -103,8 +103,16 @@ make MULTIROOM=1 GEOMDIRECT=1 SHADEPASS=1 JERRYPOSE=1 STAGEDIET=1 \
      TIMESTEP=1 ANIMRATE=1 OPDBL=1 LPLANES=1 AUTOSTART=1 \
      VCBIG=1 ENTITIES=1 SWANIM=1 DOORTEX=1 \
      BLOBCACHE=1 JCENT=1 JOVL=1 SECTLONG=1 \
-     INLINEMUL=1 OFFHOIST=1 VPACK=1 PADTEXT=136
+     INLINEMUL=1 OFFHOIST=1 VPACK=1 NOPCLIP=1 PADTEXT=136
 ```
+
+★ **`NOPCLIP=1` added 2026-08-10 — a coverage-hole fix that is FREE.** The
+per-room portal clip rect was carving hard axis-aligned holes: room 10 rendered
+with **22% of the screen never drawn** (the whole near floor). Drawing
+neighbour rooms unclipped cuts that to 1.5%, and it measures **6.67 fps, dead
+level with the clipped build** — the clip was almost never saving work, because
+only one room really draws anyway. No geometry leaks through walls (the
+far-first painter order repaints over it).
 
 Adds to the 2026-08-07 list: the 68k-eviction trio (`BLOBCACHE JCENT JOVL`),
 the long-aligned sector mirror (`SECTLONG`), and the kernel stack

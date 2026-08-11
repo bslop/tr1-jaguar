@@ -89,10 +89,26 @@ typedef int32_t fix;
  * are palette indices; I reserve CLUT[254]=black, [255]=white for the blink. */
 #ifdef FB8
 typedef uint8_t fbpix;
+#ifdef HOLEVIS
+/* ★ COVERAGE-GAP FINDER (2026-08-10).  Paint the per-frame clear WHITE instead
+   of black, so every pixel the renderer never covers is glaring instead of
+   invisible against a dark cave.  A black hole reads as "shadow" and hid the
+   r30 gap for the whole project; white cannot be mistaken for anything.
+   Pair with ROOMTOUR=1 DBGROOM=1 and one recording maps all 38 rooms.
+   Why 255 specifically:
+     - it IS white in the in-game palette (menu_text/the health bar use it and
+       render white in game, so this needs no palette guessing);
+     - art quantisation is restricted to 0..244, so no texture can collide;
+     - the rect-shade pass ORs k (0..7) into void pixels and 255|k == 255, so
+       the marker survives shading unchanged - the trap that made the ORIGINAL
+       254 clear drift into 255 and get reverted. */
+#define CLEAR_IDX 255
+#else
 #define CLEAR_IDX 0     /* was 254: the rect-shade pass ORs k into cleared
                            void pixels, and 254|k hit 255 = the white blink
                            reserve (white cave mouths). Palette base 0 is
                            now sorted darkest-first, so 0|k stays black. */
+#endif
 #define BLINK_ON  255
 #define BLINK_OFF 254
 #else

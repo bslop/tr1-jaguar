@@ -906,6 +906,15 @@ CFLAGS   += -DODRAWS
 CXXFLAGS += -DODRAWS
 endif
 
+# HOLEVIS=1: paint the per-frame clear WHITE so uncovered pixels are glaring.
+# A coverage gap normally reads as "shadow" against a dark cave - that is how
+# the r30 hole hid for the whole project. Pair with ROOMTOUR=1 DBGROOM=1 to map
+# all 38 rooms in one recording. Diagnostic arm, never ship.
+ifdef HOLEVIS
+CFLAGS   += -DHOLEVIS
+CXXFLAGS += -DHOLEVIS
+endif
+
 ifdef ANIMRATE
 CFLAGS   += -DANIMRATE
 CXXFLAGS += -DANIMRATE
