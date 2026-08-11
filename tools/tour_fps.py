@@ -16,6 +16,15 @@ METHOD, per segment: count beacon transitions, exactly as beacon_fps_fast does
 beacon's own patch" rule).  The beacon point is located ONCE over the whole
 clip so every room is read at the same pixel.
 
+☠️ THE BEACON IS THE ONLY INSTRUMENT THAT WORKS HERE, and it does not work in
+every arm.  Under PIPESTAGE=0 the flip ordering differs and the search locks
+onto a scene pixel (swing 0->226, ZERO transitions per segment) - that arm
+cannot be swept.  And framechange_fps.py's method is useless for a tour: Lara
+teleports and then STANDS STILL, so consecutive rendered frames are nearly
+identical and the picture-change count collapses to ~0.  Tried both, kept
+neither.  A per-room comparison therefore needs an arm where FPSBEACON is
+valid.
+
 usage: tour_fps.py <roll.mkv> <band_h> [hold_fields] [n_rooms]
 """
 import glob, os, subprocess, sys, tempfile
