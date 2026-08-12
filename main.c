@@ -2737,6 +2737,17 @@ static void build_ent_bridge(uint8_t *buf, int atlasW, int e)
 }
 static uint8_t g_entact[MRT_ENTCOUNT];   /* activated by a trigger      */
 static uint8_t g_swpull[MRT_ENTCOUNT];   /* switch already pulled       */
+/* CAMERA_TARGET (trigger action 6): while Lara stands on one of these
+   sectors the camera LOOKS AT a VIEW_TARGET entity instead of down her
+   heading.  LEVEL1 carries 12 camera commands and we extracted every one
+   from the start; ent_fire simply threw them away.  8 of the 9 targets are
+   a 2x4 sector block in room 2 all aiming at e4 - that is the scripted
+   opening view the PS1 gives you (Part 2 @ 3m16, settled by 3m22).
+   -1 = no override.  Re-armed every tick she is on a sector, so it lapses
+   by itself the moment she walks off - which is how TR1 behaves. */
+static int8_t g_camtgt = -1, g_camtgt_new = -1;
+#define CAMSTART_HOLD 200        /* ~3.3s at 60Hz, matching the PS1 */
+static int g_camhold;                    /* level-start establishing shot */
 static int16_t g_dooff[MRT_ENTCOUNT];    /* door swing angle, 0 = shut  */
 static int16_t g_doorbase[MRT_ENTCOUNT]; /* floor Y at the door, baked  */
 static int8_t  g_doorhinge[MRT_ENTCOUNT];/* -1/+1: end it is hinged on  */
@@ -2886,6 +2897,11 @@ static void ent_fire(int t)
         unsigned a = (w >> 10) & 0x1F, g = w & 0x3FF;
         if      (a == 0) { if (g < MRT_ENTCOUNT) g_entact[g] = 1; }
         else if (a == 1) k++;            /* CAMERA_SWITCH parameter word */
+        /* CAMERA_TARGET: aim at entity g until she steps off. ☠️ Set the
+           PENDING slot, not the live one - ent_update re-arms every tick and
+           clears what was not re-armed, so writing g_camtgt here would be
+           wiped by this same tick's clear. */
+        else if (a == 6) { if (g < MRT_ENTCOUNT) g_camtgt_new = (int8_t)g; }
     }
 }
 
@@ -2911,6 +2927,7 @@ static int ent_lara_sector(const uint8_t **rsect, int room, int wx, int wz,
 static void ent_update(const uint8_t **rsect, int room, int wx, int wz, int act)
 {
     int sx, sz, e;
+    g_camtgt_new = -1;                 /* nothing re-armed yet this tick */
     if (room >= 0 && ent_lara_sector(rsect, room, wx, wz, &sx, &sz)) {
         int t = ent_trig_at(room, sx, sz);
         if (t >= 0) {
@@ -2935,6 +2952,7 @@ static void ent_update(const uint8_t **rsect, int room, int wx, int wz, int act)
             }
         }
     }
+    g_camtgt = g_camtgt_new;           /* lapses when she walks off */
     for (e = 0; e < MRT_ENTCOUNT; e++)
         if (g_entact[e] && ent_is_door(mrt_ent[e].type)) {
             /* ON THE FIRST TICK, swing TOWARD the side Lara is standing on.
@@ -8148,17 +8166,71 @@ bootvid_entry:
                rotates WITHIN the frame while the world pans over ~0.3s. */
             { static int camyaw8 = -1;
               int tgt8 = (int)g_layaw << 8, d8, tk2;
-              if (camyaw8 < 0) camyaw8 = tgt8;
+              /* ★ LEVEL-START SIDE VIEW (user, 2026-08-11; PS1 Part 2 @
+                 3m06-3m10): the caves open on Lara seen from the SIDE,
+                 standing still, and the camera swings behind her over about
+                 two seconds.  The ease below already does exactly that - it
+                 just had nothing to ease FROM, because the first frame seeded
+                 the camera at her heading.  Seed it a quarter turn off and the
+                 existing d8>>2 chase produces the shot: no new state, no new
+                 code path, one constant. */
+              if (camyaw8 < 0) {
+                  camyaw8 = (tgt8 + (64 << 8)) & 65535;
+                  g_camhold = CAMSTART_HOLD;
+              }
+              /* ☠️ SEEDING ALONE IS NOT ENOUGH.  The chase takes 3/4 of the
+                 remaining angle per tick, so it converges in well under a
+                 second and the side view flashes past unseen - measured: by
+                 the first frame a FASTBOOT capture can reach, it had already
+                 settled.  The PS1 HOLDS the shot while she stands still
+                 (3m06-3m10) and only swings once she moves, so hold the seed
+                 for CAMSTART_HOLD ticks, and drop it early the moment she
+                 actually walks - the hold is an establishing shot, not a
+                 cutscene, and it must never fight the player for control. */
+              if (g_camhold) {
+                  if (pad) g_camhold = 0;   /* any input hands control back */
+                  /* ☠️ DECREMENT IN 60Hz TICKS, NOT FRAMES.  g_camhold is
+                     read once per RENDERED frame, and this game renders ~7 of
+                     those a second - a plain -- made a "3.3 second" hold last
+                     nearly THIRTY. g_ticks is how many 60Hz ticks this frame
+                     covers, which is the same clock the number is written in. */
+                  else { g_camhold -= g_ticks;
+                         if (g_camhold < 0) g_camhold = 0;
+                         goto cam_have_yaw; }
+              }
               d8 = ((tgt8 - camyaw8 + 32768) & 65535) - 32768;
               for (tk2 = g_ticks >> 1; tk2 > 0; tk2--)
                   { d8 = ((((int)g_layaw << 8) - camyaw8 + 32768) & 65535) - 32768;
                     camyaw8 = (camyaw8 + (d8 >> 2)) & 65535;
                     if (d8 && (d8 >> 2) == 0)      /* never stall the tail */
                         camyaw8 = (camyaw8 + (d8 > 0 ? 1 : -1)) & 65535; }
+            cam_have_yaw:
               { int cy1 = (camyaw8 >> 8) & 255, cy2 = (cy1 + 1) & 255, fr8 = camyaw8 & 255;
                 cY = COS(cy1) + (((COS(cy2) - COS(cy1)) * fr8) >> 8);
                 sY = SIN(cy1) + (((SIN(cy2) - SIN(cy1)) * fr8) >> 8); } }
 #endif
+            /* CAMERA_TARGET: swing the camera round so the VIEW_TARGET is
+               what you are looking at.  TR1 keeps the camera trailing Lara and
+               changes where it POINTS, so this recomputes the yaw basis from
+               (target - camera) and leaves CAMDIST/CAMHEIGHT alone.
+               ☠️ atan2 by table: the sin/cos tables are all we have, so walk
+               the 256-step yaw and keep the one whose forward vector best
+               matches the aim - 256 dot products once a frame is nothing next
+               to the frame we are in, and it cannot drift like an incremental
+               angle would. */
+            if (g_camtgt >= 0) {
+                int tx = mrt_ent[(int)g_camtgt].x, tz = mrt_ent[(int)g_camtgt].z;
+                int bx = g_lax - (int)(((int32_t)sY*CAMDIST)>>16);
+                int bz = g_laz - (int)(((int32_t)cY*CAMDIST)>>16);
+                int dx = tx - bx, dz = tz - bz;
+                int best = -1; int32_t bestd = -0x7FFFFFFF; int a8;
+                if (dx > 4096 || dx < -4096) { dx >>= 4; dz >>= 4; }
+                for (a8 = 0; a8 < 256; a8++) {
+                    int32_t d = ((int32_t)SIN(a8)>>8)*dx + ((int32_t)COS(a8)>>8)*dz;
+                    if (d > bestd) { bestd = d; best = a8; }
+                }
+                cY = COS(best); sY = SIN(best);
+            }
             camx = g_lax - (int)(((int32_t)sY*CAMDIST)>>16);
             camz = g_laz - (int)(((int32_t)cY*CAMDIST)>>16);
             camy = g_lafloor - CAMHEIGHT;
