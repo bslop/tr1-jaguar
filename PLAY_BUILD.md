@@ -1,5 +1,32 @@
 # The shipping build recipe (verified 2026-07-29)
 
+## ★★★★★ 2026-08-11 — EVERYTHING AT ONCE: `demo25_p0`
+```
+tools/gbuild.sh demo25 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 ENEMYTEX=1 \
+                       BLOBCACHE=1 JCENT=1 JOVL=1 SECTLONG=1 NOPCLIP=1 \
+                       VRESN=80 TRAPFLOOR=1 GYMSD=1
+```
+**Lit pad: 0.** Boot video + wolf fur + medikit sprites + collapsing floors +
+scripted cameras + 80-line + numbers off + native-240 loading screen, all in one
+ROM. Verified on silicon: EIDOS → CORE → the Los Alamos intro → the caves.
+
+★★★★★ **`GYMSD=1` IS WHAT MADE IT POSSIBLE.** 316,336 bytes of Lara's Home
+(`gym_atlas/geom/sect/index/pal`) were linked into every CAVES ROM — a level
+that can never be resident at the same time as the caves. Leaving it out:
+
+| | before | after |
+|---|---|---|
+| margin to the guard | 208 B | **311,920 B** |
+| ROM size | 1,653,100 | **1,341,468** |
+| pads that build | **2 of 6** | **6 of 6** |
+
+More pads that build is also a wider A10 lottery, which is free reliability.
+
+☠️ Selecting Lara's Home in a GYMSD build is REFUSED (the pointers are NULL
+stubs). The proper end state is streaming BOTH levels from the card into one
+shared buffer — this is the first step, not the whole thing.
+
+
 ## ★★★★★ 2026-08-11 — THE SHIPPABLE DEMO: `demo24_p136`
 ```
 tools/gbuild.sh demo24 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 \
