@@ -1,6 +1,26 @@
 # The shipping build recipe (verified 2026-07-29)
 
-## ★★★★★ 2026-08-11 — EVERYTHING AT ONCE: `demo25_p0`
+## ★★★★★ 2026-08-11 — EVERYTHING AT ONCE + GUNS: `demo27_p136`
+```
+tools/gbuild.sh demo27 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 ENEMYTEX=1 \
+                       BLOBCACHE=1 JCENT=1 JOVL=1 SECTLONG=1 NOPCLIP=1 \
+                       VRESN=80 TRAPFLOOR=1 GYMSD=1 GUNS=1
+```
+**Lit pad: 136.** Adds the PISTOLS and the full action map to demo25.
+
+    JUMP   A / keypad 2      ROLL  Y / 5
+    ACTION B / keypad 1      LOOK  Z / 6
+    WALK   C / keypad 3      DRAW  X / 4
+
+★ TR1 has **no separate fire button** — ACTION fires when the pistols are out.
+Verified on silicon: keypad 4 drew, ACTION fired, r20 wolf died (K00 → K01).
+
+☠️ **The bit-to-KEY table is the standard layout, not a measurement.** GDPAD
+injects the final mask and never touches the matrix, so proving which physical
+key asserts which bit needs fingers on a real pad: `PADPROBE=1` +
+`joypad_probe()` returns the raw matrix word for exactly that.
+
+## (previous) 2026-08-11 — EVERYTHING AT ONCE: `demo25_p0`
 ```
 tools/gbuild.sh demo25 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 ENEMYTEX=1 \
                        BLOBCACHE=1 JCENT=1 JOVL=1 SECTLONG=1 NOPCLIP=1 \
