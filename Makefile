@@ -1016,6 +1016,15 @@ CFLAGS   += -DRUNSPEED=$(RUNSPEED)
 CXXFLAGS += -DRUNSPEED=$(RUNSPEED)
 endif
 
+# PADPROBE=1: print the RAW controller matrix word on screen. Press each key on
+# a REAL pad and read which bit it asserts - GDPAD cannot answer this, it
+# injects the final mask and never touches the matrix. This is how the X/Y/Z
+# and keypad bit table stops being the standard layout and becomes measured.
+ifdef PADPROBE
+CFLAGS   += -DPADPROBE
+CXXFLAGS += -DPADPROBE
+endif
+
 ifdef GUNWIND
 CFLAGS   += -DGUNWIND
 CXXFLAGS += -DGUNWIND

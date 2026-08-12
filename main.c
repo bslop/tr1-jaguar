@@ -7381,6 +7381,20 @@ bootvid_entry:
               g_tturn = (int)d / TURNDIV; if (g_tturn < 2) g_tturn = 2;
               g_tanim = (int)d / ANIMDIV; if (g_tanim < 2) g_tanim = 2; }
 #endif
+#ifdef GUNS
+            /* ☠️ DRAW ON *OPTION* MUST BE READ BEFORE HOPDIAL, which does
+               `pad &= ~PAD_OPTION` whenever OPTION is held (it is a modifier
+               there: OPTION+direction tunes the hop cap). Reading it after
+               meant the toggle never fired on a real pad and the kill counter
+               stayed K00 while she was being mauled - the exact "pad consumers
+               must run LAST" trap, from the other side.
+               OPTION alone = draw/holster; OPTION+direction stays the dial. */
+            { static uint32_t opprev;
+              uint32_t opedge = pad & ~opprev; opprev = pad;
+              if ((opedge & PAD_OPTION)
+                  && !(pad & (PAD_UP|PAD_DOWN|PAD_LEFT|PAD_RIGHT)))
+                  { g_guns = !g_guns; sfx_play(1, SFX_PISTOL); } }
+#endif
 #ifdef HOPDIAL
             { static uint32_t hdprev;
               if (pad & PAD_OPTION) {
@@ -7541,6 +7555,14 @@ bootvid_entry:
 #ifdef GUNS
                 /* PAD_Z: draw / holster. ☠️ Rising edge only - a level check
                    would flip her every frame the button is down. */
+                /* ☠️ ACT_DRAW rides X and keypad 4, and BOTH of those bit
+                   assignments are the standard layout rather than something
+                   measured - the user could not draw the guns on a real pad.
+                   OPTION is one of the five buttons this project has actually
+                   decoded since day one, and in-game it is only ever a
+                   MODIFIER (OPTION+direction tunes HOPDIAL), so OPTION with no
+                   direction held is free and works on every controller.
+                   Keep it until PADPROBE settles the real table. */
                 if (redge & ACT_DRAW) { g_guns = !g_guns; sfx_play(1, SFX_PISTOL); }
 
 #endif
@@ -8759,6 +8781,23 @@ bootvid_entry:
                              (rise6 > 0 && rise6 <= LARA_GRABREACH + 64) ? 255 : 254);
               blit_fill_rect(dfb3, 311, 3, 5, 5,
                              (g_vault || g_lavy != 0 || g_autograb) ? 255 : 254); }
+#endif
+#ifdef PADPROBE
+            /* RAW MATRIX WORD on screen, so pressing a key on a real pad SAYS
+               which bit it asserts. GDPAD cannot answer this - it injects the
+               final mask and never touches the matrix - so it needs fingers on
+               the controller and one capture. Press each key in turn and read
+               the hex. */
+            { extern uint32_t joypad_probe(void);
+              uint32_t rw = joypad_probe();
+              char hx[12]; int hi2;
+              for (hi2 = 0; hi2 < 8; hi2++) {
+                  int nyb = (int)((rw >> ((7-hi2)*4)) & 15);
+                  hx[hi2] = (char)(nyb < 10 ? '0'+nyb : 'A'+nyb-10);
+              }
+              hx[8] = 0;
+              menu_text((uint8_t *)video_backbuffer(), RENDER_W, 240,
+                        hx, 4, 30, 1, 2, 255); }
 #endif
 #ifdef GUNDIAG
             /* ☠️ A FRAMEBUFFER BLOCK, NOT THE BORDER. The first version of this
