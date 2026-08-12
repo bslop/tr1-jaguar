@@ -7630,6 +7630,16 @@ bootvid_entry:
                                 g_enhp[be]=(uint8_t)ent_max_hp(mrt_ent[be].type);
                                 g_endying[be]=0;
                             }
+                        /* ☠️ AND LARA'S OWN HEALTH, for the same reason.
+                           The hp fix above moved the ENEMIES' non-zero seed
+                           here but left g_health in the reset block FASTBOOT
+                           skips, so every FASTBOOT arm ran with health 0000 -
+                           read straight off the HUD in the r20 combat test.
+                           It never showed in a shipping ROM (those boot the
+                           full chain and DO run the reset), which is exactly
+                           why it survived: the bug is invisible in the build
+                           you ship and fatal in the build you test with. */
+                        if (g_health <= 0) g_health = 1000;
                         g_batinit = 1;
                     }
                     /* AI: home toward Lara, bite on contact. Per-type: bats fly
