@@ -1,5 +1,41 @@
 # The shipping build recipe (verified 2026-07-29)
 
+## ★★★★★ 2026-08-11 — THE SHIPPABLE DEMO: `demo23_p136`
+```
+tools/gbuild.sh demo23 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 \
+                       BLOBCACHE=1 JCENT=1 JOVL=1 SECTLONG=1 NOPCLIP=1 VRESN=80
+```
+**Lit pad: 136.** ☠️ Only pads 0 and 136 build at all — the rest overflow the
+stack-headroom guard. Verified on silicon: the whole front end runs (EIDOS →
+CORE → the Los Alamos intro) and it drops into the caves.
+
+Carries everything shippable:
+- **`VRESN=80`** — 80 render lines through the OP's 3.0x scaler, full screen and
+  full FOV. Crosses the 8-field rung in the enemy-free ship recipe.
+- **numbers OFF** (`HUDTEXT` unset) — the 68k text readout was **+56%** of the
+  frame all by itself.
+- **medikit SPRITES** — the 7 medikits billboard the real TR1 sprite art;
+  cheaper than the cube placeholder they replace.
+- **scripted CAMERAS** — the level-start side view and the CAMERA_TARGET shots
+  the level has always carried.
+- **loading screen at native 240** — it had been decimated to `RENDER_H`.
+
+☠️☠️ **THE ONE THING IT CANNOT ALSO CARRY: `ENEMYTEX` (the wolf fur).**
+The demo recipe adds `BOOTVID` + the read-out panel, and with the skins on it is
+**3,728 bytes OVER** the guard; without them it fits with **208 bytes**. So it
+is a straight either/or today:
+
+| build | boot video | wolf fur | where |
+|---|---|---|---|
+| `demo23_p136` | ✅ | ✗ | THE SHIPPABLE ONE |
+| `build_play/play_p272.cof` | ✗ | ✅ | plain recipe, 352 B spare |
+
+The wolves still render with their per-type tone in demo23 — they are not
+untextured, just not furred. **Freeing the difference means the WOLF UV tables**
+(3,704 B for 251 faces of which only 114 are textured; a sparse form roughly
+halves it) — that is the next byte to hunt, and it is worth ~1.8KB of the 3,728.
+
+
 ## ☠️☠️ FIRST: CHECK THE ASSETS ARE THE SHIPPING SET, NOT THE EXTRACTOR DEFAULTS
 `head -8 mrt.h` before you build anything. It must say **`MRT_ROOMCOUNT 38`**
 and **`MRT_FACE_PLANES 1`**. If it says `5` and `0`, someone ran
