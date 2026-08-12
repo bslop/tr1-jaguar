@@ -1,24 +1,39 @@
 # The shipping build recipe (verified 2026-07-29)
 
-## ★★★★★ 2026-08-11 — EVERYTHING AT ONCE + GUNS: `demo27_p136`
+## ★★★★★ 2026-08-12 — GUNS YOU CAN ACTUALLY DRAW: `demo28_p272`
 ```
-tools/gbuild.sh demo27 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 ENEMYTEX=1 \
+tools/gbuild.sh demo28 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 ENEMYTEX=1 \
                        BLOBCACHE=1 JCENT=1 JOVL=1 SECTLONG=1 NOPCLIP=1 \
                        VRESN=80 TRAPFLOOR=1 GYMSD=1 GUNS=1
 ```
-**Lit pad: 136.** Adds the PISTOLS and the full action map to demo25.
+**Lit pad: 272** (demo27 was 136 — same flags, so this is the layout re-roll,
+not a setting).
 
-    JUMP   A / keypad 2      ROLL  Y / 5
-    ACTION B / keypad 1      LOOK  Z / 6
-    WALK   C / keypad 3      DRAW  X / 4
+    DRAW/HOLSTER  ★ OPTION      JUMP   A / keypad 2
+    ACTION/FIRE   B / keypad 1  WALK   C / keypad 3
+    ROLL  Y / 5                 LOOK   Z / 6
 
 ★ TR1 has **no separate fire button** — ACTION fires when the pistols are out.
-Verified on silicon: keypad 4 drew, ACTION fired, r20 wolf died (K00 → K01).
+**Verified on silicon: OPTION drew, ACTION fired, r20 wolf died (K00 → K01).**
 
-☠️ **The bit-to-KEY table is the standard layout, not a measurement.** GDPAD
-injects the final mask and never touches the matrix, so proving which physical
-key asserts which bit needs fingers on a real pad: `PADPROBE=1` +
-`joypad_probe()` returns the raw matrix word for exactly that.
+**Why OPTION and not X / keypad 4.** User on a real pad: *"I can't draw the
+guns."* X and keypad 4 both come from the standard bit layout, which this
+project has never measured — GDPAD injects the final mask and never touches the
+matrix, so both tested fine from the host and did nothing in the hand. OPTION
+has been decoded since day one and in-game is only ever a MODIFIER (OPTION +
+direction tunes HOPDIAL), so **OPTION with no direction held** is free on every
+controller, 3-button included. X / keypad 4 still work if they work for you.
+
+☠️☠️ **AND MOVING IT TO OPTION WAS NOT ENOUGH THE FIRST TIME.** `HOPDIAL` does
+`pad &= ~PAD_OPTION` whenever OPTION is held, ~100 lines ABOVE the draw check —
+so the bit was already gone and the counter stayed K00 while she was mauled.
+The edge must be read BEFORE HOPDIAL. That is the project's own *"pad consumers
+must run LAST"* rule from the other side: **a consumer that CLEARS a bit must
+run after everyone who wants to READ it.**
+
+★ `PADPROBE=1` prints the raw controller matrix word on screen — press each key
+on a real pad and it says which bit that key asserts. That is the only way to
+settle the bit-to-key table, and it is worth one minute with fingers on a pad.
 
 ## (previous) 2026-08-11 — EVERYTHING AT ONCE: `demo25_p0`
 ```
