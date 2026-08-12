@@ -83,6 +83,58 @@ reported **every mechanic ABSENT**. A broken test is not a result.
 hitscan with nothing in her hands. Everything else EXISTS; whether it *behaves*
 like the PS1 is what the driven tests below are for.
 
+
+## ★★★★★ WHAT THE TRIGGER TABLE SAYS — dug out of the data, not the video
+
+`mrt_trig` (110 triggers) + `mrt_trigcmd` (147 words) are already extracted, so
+switch-to-door pairing is TR1's real trigger data, not proximity — a switch can
+open a door rooms away, and one does.
+
+| door | room | fired by |
+|---|---|---|
+| e9 DOOR_4 | 11 | trig33 SWITCH in r11 |
+| **e12 DOOR_1** | **17** | ☠️ **NOTHING** |
+| **e13 DOOR_2** | **17** | ☠️ **NOTHING** |
+| e28 DOOR_3 | 25 | trig99 PAD in r28 |
+| e35/e36 DOOR_1+2 | 14 | trig61 SWITCH in **r20**, + ANTIPADs in r17 |
+| e43/e44 DOOR_1+2 | 34 | trig108 SWITCH in r34 |
+
+★ The r20 switch opening the r14 doors is confirmed real, and the r17 ANTIPADs
+*close* them behind Lara — TR1's "the door shuts behind you" mechanic, already
+in our data.
+☠️ **e12/e13 in r17 are the only doors nothing fires.** r17's sole exit is back
+to r14, so it is a sealed dead-end alcove. Whether TR1 opens them by a trigger
+our extractor drops, or they are permanently shut, is the one thing here the
+video has to settle — check what is behind the r14 doors at ~9m23.
+
+## ⬜ THE SCRIPTED CAMERAS ARE EXTRACTED AND THEN THROWN AWAY
+
+User: *"notice how the level starts and you have a view of Lara from the side.
+We need this too."* Confirmed in the footage — **Part 2 @ 3m16** is a low
+side-on shot of Lara in the doorway; by 3m22 it has settled into the normal
+follow camera.
+
+The level carries **12 camera commands** and we extract every one:
+
+    CAMERA_TARGET  9   (8 of them a 2x4 block of sectors in ROOM 2, all
+                        aiming at VIEW_TARGET e4 - a scripted view)
+    CAMERA_SWITCH  3   (trig61 with the r20 switch, trig108 with the r34
+                        switch - the classic cut to show the door opening)
+
+Both `VIEW_TARGET` entities are in `mrt_ent` (e4 in r2, e41 in r14).
+
+☠️ **`ent_fire` handles action 0 (ACTIVATE) and NOTHING ELSE.** CAMERA_SWITCH is
+explicitly skipped (`else if (a == 1) k++;` — it only steps over the parameter
+word) and CAMERA_TARGET falls through silently. So every scripted shot in the
+level is parsed and discarded. The camera is always the follow camera.
+⇒ **This is a rendering/camera job, not an extraction job** — the data is
+already there.
+
+## ⬜ STACKED ROOMS (from the plan view)
+Six room pairs share a footprint at different heights: 14/16, 18/22, 23/32,
+26/29, 33/35, 34/36. Five are adjacent; **23/32 is not** — worth a look, though
+a corridor passing over another is legitimate TR level design.
+
 ## ⬜ THE DRIVEN TEST PLAN (not yet run)
 ★★★★★ **The game can be driven from the host**: `GDPAD=1` + `tools/gdpad.sh`
 (masks: UP 1 DOWN 2 LEFT 4 RIGHT 8 A=jump 16 B=action 32 C=walk 64), and
@@ -99,6 +151,9 @@ mechanic can be tested where the PS1 does it, and captured:
 5. **death** — r22 (2 wolves) or r28 (bear). Damage rate and the death anim.
 6. **bridge** — r22, walk the 12 pieces end to end without falling through.
 7. **collapsing floor** — r19, currently nothing happens: the tiles are solid.
+8. **level-start camera** — r0/r2, the side-on opening shot above.
+9. **r17** — walk in through the r14 doors and confirm whether the alcove is
+   meant to open.
 
 ☠️ `gdpad` writes INPUT.BIN over the control endpoint **while the game runs** —
 never point it at a build that streams video or music from the cart, or the
