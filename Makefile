@@ -980,6 +980,16 @@ CFLAGS   += -DVRESN=$(VRESN)
 CXXFLAGS += -DVRESN=$(VRESN)
 endif
 
+# TRAPFLOOR=1: TR1's collapsing tiles (the 2 in r19). ☠️ OFF BY DEFAULT and NOT
+# shippable yet - it triggers correctly (she falls through) but the floor is
+# dropped a sector EVERY FRAME she is over the gap, so she takes continuous
+# fall damage instead of landing on the room below. It also does not fit: the
+# demo recipe is ~480 bytes over with it in.
+ifdef TRAPFLOOR
+CFLAGS   += -DTRAPFLOOR
+CXXFLAGS += -DTRAPFLOOR
+endif
+
 VIEWH_LADDER := 108 100 96 90 84 80 72 60
 ifdef VIEWH
 ifeq ($(filter $(VIEWH),$(VIEWH_LADDER)),)

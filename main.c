@@ -2759,6 +2759,38 @@ static int ent_is_switch(int t) { return t == MRT_ENT_SWITCH; }
    chasm. Their FLOOR collision is already in the sector data (she "doesn't
    fall"); they just were never DRAWN -> she walked on an invisible bridge. */
 static int ent_is_bridge(int t) { return t >= 68 && t <= 70; }
+/* TRAP_FLOOR (type 35/36): TR1's collapsing tile.  Solid until Lara stands on
+   it, then it shakes for about a second, drops away and takes the floor with
+   it.  It was the ONLY entity type in LEVEL1 with no runtime handler at all -
+   both of them sit in r19 and were simply solid ground.
+   g_tfall[e]: 0 solid · 1..TF_SHAKE counting down while she stands on it ·
+   TF_GONE the tile has fallen and no longer supports anything. */
+static int ent_is_trapfloor(int t) { return t == 35 || t == 36; }
+#ifdef TRAPFLOOR
+#define TF_SHAKE 50            /* ~0.8s at 60Hz, TR1's dwell before it goes */
+#define TF_GONE  255
+/* ☠️ INDEXED, not scanned.  LEVEL1 has exactly TWO collapsing tiles (both in
+   r19), so a 60-entry state array plus two 60-iteration scans per tick cost
+   336 bytes more than the ROM had - measured, it would not link.  Collect them
+   once at level start and the loops become two iterations. */
+#define TF_MAX 4
+static uint8_t g_tfe[TF_MAX];       /* entity index of each collapsing tile */
+static uint8_t g_tfs[TF_MAX];       /* its state (0 / counting / TF_GONE)   */
+static uint8_t g_tfn;               /* how many this level actually has     */
+/* Is (wx,wz) over a tile that has already fallen?  A TR sector is 1024 units
+   and the entity sits at its centre, so half a sector each way. */
+static int trapfloor_gone(int wx, int wz)
+{
+    int i;
+    for (i = 0; i < (int)g_tfn; i++) {
+        int e = g_tfe[i];
+        if (g_tfs[i] != TF_GONE) continue;
+        if (mr_iabs(wx - mrt_ent[e].x) < 512 && mr_iabs(wz - mrt_ent[e].z) < 512)
+            return 1;
+    }
+    return 0;
+}
+#endif /* TRAPFLOOR */
 
 /* -1 = that sector is off this room's map, 0 = open, 1 = solid */
 static int ent_cell_solid(const uint8_t *sp, int sx, int sz)
@@ -2953,6 +2985,21 @@ static void ent_update(const uint8_t **rsect, int room, int wx, int wz, int act)
         }
     }
     g_camtgt = g_camtgt_new;           /* lapses when she walks off */
+#ifdef TRAPFLOOR
+    /* collapsing tiles: arm under Lara's feet, then let go */
+    for (e = 0; e < (int)g_tfn; e++) {
+        int te = g_tfe[e];
+        if (g_tfs[e] == TF_GONE) continue;
+        if (g_tfs[e] == 0) {
+            if (room >= 0 && mr_iabs(wx - mrt_ent[te].x) < 512
+                          && mr_iabs(wz - mrt_ent[te].z) < 512)
+                g_tfs[e] = 1;            /* she stepped on it - start the shake */
+        } else {
+            int n = (int)g_tfs[e] + (g_ticks ? g_ticks : 1);
+            g_tfs[e] = (uint8_t)(n >= TF_SHAKE ? TF_GONE : n);
+        }
+    }
+#endif
     for (e = 0; e < MRT_ENTCOUNT; e++)
         if (g_entact[e] && ent_is_door(mrt_ent[e].type)) {
             /* ON THE FIRST TICK, swing TOWARD the side Lara is standing on.
@@ -6885,6 +6932,12 @@ bootvid_entry:
 #ifdef ENEMIES
         g_health = 1000; g_kills = 0; g_firecd = 0;
 #endif
+#ifdef TRAPFLOOR
+        g_tfn = 0;
+        { int e; for (e = 0; e < MRT_ENTCOUNT && g_tfn < TF_MAX; e++)
+              if (ent_is_trapfloor(mrt_ent[e].type)) {
+                  g_tfs[g_tfn] = 0; g_tfe[g_tfn++] = (uint8_t)e; } }
+#endif
         { int e; for (e = 0; e < MRT_ENTCOUNT; e++) {
               g_entact[e] = 0; g_swpull[e] = 0; g_dooff[e] = 0;
               g_pickgot[e] = 0;
@@ -7594,6 +7647,17 @@ bootvid_entry:
               if (room_floor_mr(rsect, roomCount, g_lax, g_laz, &fy)) {
                   g_lafloor = fy;
                   g_curroom = g_floorroom;   /* the room Lara stands in */
+#ifdef ENTITIES
+                  /* ☠️ AFTER the sector answer, never instead of it: the tile
+                     is real geometry and the room below is whatever the sector
+                     data says.  Dropping the support by one sector is what
+                     makes her fall through; the normal fall/land code then
+                     does the rest, so a collapsing tile needs no special
+                     animation path. */
+#ifdef TRAPFLOOR
+                  if (trapfloor_gone(g_lax, g_laz)) g_lafloor = fy + 1024;
+#endif
+#endif
               }
 #ifdef ENTITIES
               /* one tick of the level's own triggers: the sector Lara now
