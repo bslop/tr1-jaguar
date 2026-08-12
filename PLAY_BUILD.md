@@ -1,8 +1,8 @@
 # The shipping build recipe (verified 2026-07-29)
 
-## ★★★★★ 2026-08-11 — THE SHIPPABLE DEMO: `demo23_p136`
+## ★★★★★ 2026-08-11 — THE SHIPPABLE DEMO: `demo24_p136`
 ```
-tools/gbuild.sh demo23 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 \
+tools/gbuild.sh demo24 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 \
                        BLOBCACHE=1 JCENT=1 JOVL=1 SECTLONG=1 NOPCLIP=1 VRESN=80
 ```
 **Lit pad: 136.** ☠️ Only pads 0 and 136 build at all — the rest overflow the
@@ -27,7 +27,7 @@ is a straight either/or today:
 
 | build | boot video | wolf fur | where |
 |---|---|---|---|
-| `demo23_p136` | ✅ | ✗ | THE SHIPPABLE ONE |
+| `demo24_p136` | ✅ | ✗ | THE SHIPPABLE ONE |
 | `build_play/play_p272.cof` | ✗ | ✅ | plain recipe, 352 B spare |
 
 The wolves still render with their per-type tone in demo23 — they are not
