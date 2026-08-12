@@ -7541,10 +7541,10 @@ bootvid_entry:
 #ifdef GUNS
                 /* PAD_Z: draw / holster. ☠️ Rising edge only - a level check
                    would flip her every frame the button is down. */
-                if (redge & PAD_Z) { g_guns = !g_guns; sfx_play(1, SFX_PISTOL); }
+                if (redge & ACT_DRAW) { g_guns = !g_guns; sfx_play(1, SFX_PISTOL); }
 
 #endif
-                if ((redge & (PAD_Y|PAD_PAUSE)) && !g_rollt && !g_vault
+                if ((redge & ACT_ROLL) && !g_rollt && !g_vault
                     && !g_swim && g_lay >= g_lafloor - 4)
                     g_rollt = ROLL_TICKS; }
               if (g_rollt > 0) {
@@ -7876,7 +7876,15 @@ bootvid_entry:
                      * src/enemy.h, so a wolf takes six bullets exactly as it
                      * does on PS1. */
                     if (g_firecd > 0) g_firecd -= g_ticks;
+                    /* ★ TR1: ACTION fires when the weapons are drawn. A
+                       dedicated fire button was ours, not the original's - and
+                       PAD_X is now DRAW/holster. Without GUNS the old binding
+                       stands so nothing regresses. */
+#ifdef GUNS
+                    if ((pad & ACT_ACTION) && g_guns && g_firecd <= 0) {
+#else
                     if ((pad & PAD_X) && g_firecd <= 0) {
+#endif
                         int bestk=-1, bestd=1<<30;
                         int aimc = COS(g_layaw)>>8, aims = SIN(g_layaw)>>8;
                         for (be=0; be<MRT_ENTCOUNT; be++) {
