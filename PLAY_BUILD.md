@@ -1,6 +1,30 @@
 # The shipping build recipe (verified 2026-07-29)
 
-## ★★★★★ 2026-08-12 — GUNS YOU CAN ACTUALLY DRAW: `demo28_p272`
+## ★★★★★ 2026-08-12 — PISTOLS VISIBLE IN HER HANDS: `demo29_p272`
+Same flags as demo28 below, plus the fix that makes the pistols actually
+appear. **Lit pad: 272.** `GUNDBG=1` starts with them already drawn (handy for
+a capture without driving the pad).
+
+☠️☠️☠️ **THEY WERE NEVER DRAWING, AND THE REASON WAS UPSTREAM OF EVERYTHING I
+KEPT ADJUSTING.** `build_lara_part` is the only writer of the hand matrices
+`g_handm`, and under **`JERRYPOSE`** it never runs — `posed = 2` is set the
+moment `g_jerry_ok` is true. Every gun vertex went through an all-zero matrix
+onto a single point; all 17 faces were degenerate; the kernel drew nothing.
+Fix = `gun_pose_hands()`, which redoes the 14-op node walk and skips the
+300-vertex loop that is the expensive half.
+
+★★★★★ **Three fixes in a row produced NO visible change** — reverse the
+winding, scale 3x, float it 512 units clear of her body — and each null read as
+"not that knob". They were all multiplying zero. **A change that makes no
+difference is evidence about the INPUT, not about the knob.**
+
+☠️ **The 3x roll nearly produced a false positive**: dark blobs at the end of
+both arms looked like guns. They are her **thigh holsters** — the pistols hang
+exactly where TR1 paints them. Offsetting the mesh proved it (the blobs did not
+move). **Put a diagnostic somewhere the thing it could be confused with cannot
+be.**
+
+## (previous) 2026-08-12 — GUNS YOU CAN DRAW BUT NOT SEE: `demo28_p272`
 ```
 tools/gbuild.sh demo28 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 ENEMYTEX=1 \
                        BLOBCACHE=1 JCENT=1 JOVL=1 SECTLONG=1 NOPCLIP=1 \
