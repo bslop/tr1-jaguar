@@ -980,14 +980,27 @@ CFLAGS   += -DVRESN=$(VRESN)
 CXXFLAGS += -DVRESN=$(VRESN)
 endif
 
-# TRAPFLOOR=1: TR1's collapsing tiles (the 2 in r19). ☠️ OFF BY DEFAULT and NOT
-# shippable yet - it triggers correctly (she falls through) but the floor is
-# dropped a sector EVERY FRAME she is over the gap, so she takes continuous
-# fall damage instead of landing on the room below. It also does not fit: the
-# demo recipe is ~480 bytes over with it in.
+# TRAPFLOOR=1: TR1's collapsing tiles (the 2 in r19). VERIFIED on silicon with
+# enemies compiled OUT: she walks on, the tile lets go, she falls through and
+# LANDS (frame-to-frame change settles to 3.0).
+# ☠️ The "continuous fall damage" this was first gated for was a MISDIAGNOSIS -
+# it was the r24 wolf hunting her. The control that settled it: stand still on
+# solid ground two sectors from any tile and health still ran 0200 -> 0000.
+# Isolate the subsystem before blaming it.
 ifdef TRAPFLOOR
 CFLAGS   += -DTRAPFLOOR
 CXXFLAGS += -DTRAPFLOOR
+endif
+
+# GYMSD=1: leave Lara's Home OUT of the image (it belongs on the card).
+# ☠️ 316,336 bytes of gym_* blobs were linked into every CAVES ROM for a level
+# that can never be resident at the same time as the caves. Selecting Lara's
+# Home in a GYMSD build is refused rather than crashing - the pointers are
+# NULL stubs - until the loader that streams it from the SD exists.
+ifdef GYMSD
+CFLAGS   += -DGYMSD
+CXXFLAGS += -DGYMSD
+ASFLAGS  += -DGYMSD
 endif
 
 VIEWH_LADDER := 108 100 96 90 84 80 72 60

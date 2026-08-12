@@ -6324,8 +6324,21 @@ bootvid_entry:
                                         sfx_play(1, SFX_MENU_SHOW); }
                   else if (page == 3) { copen = 1;     /* Controls */
                                         sfx_play(1, SFX_MENU_SHOW); }
-                  else if (page == 4) { g_useset = 1;  /* Lara's Home */
-                                        sfx_play(1, SFX_MENU_SHOW); break; }
+                  else if (page == 4) {              /* Lara's Home */
+#ifdef GYMSD
+                      /* ☠️ Its assets are NOT in this image (GYMSD moves the
+                         316KB of gym_* blobs onto the card). The pointers are
+                         NULL stubs, so selecting it would drive the renderer
+                         straight through a null geom pointer. Refuse audibly
+                         and stay on the ring until the SD loader exists -
+                         REFUSING is the whole point: a silent select here is a
+                         hang on the one screen every viewer sees first. */
+                      sfx_play(1, SFX_MENU_SPIN);
+#else
+                      g_useset = 1;
+                      sfx_play(1, SFX_MENU_SHOW); break;
+#endif
+                  }
               }
           }
 #if !defined(NO_GAMEDRIVE) && defined(BOOTVID)
@@ -7655,7 +7668,27 @@ bootvid_entry:
                      does the rest, so a collapsing tile needs no special
                      animation path. */
 #ifdef TRAPFLOOR
-                  if (trapfloor_gone(g_lax, g_laz)) g_lafloor = fy + 1024;
+                  /* ☠️ ASK AGAIN FROM BELOW, do not offset the answer.  The
+                     first version just pushed the floor down a sector every
+                     frame she was over the gap, so she never landed and took
+                     CONTINUOUS fall damage - measured 1000 -> 0496 standing
+                     still in the hole.  room_floor_mr is Y-AWARE (it returns
+                     the reachable floor closest to g_flr_wy), so moving the
+                     search origin below the tile makes it return the room
+                     underneath, which is what the tile was hiding.  She then
+                     falls once and lands, and the ordinary fall/land code
+                     does the rest - a collapsing tile needs no animation
+                     path of its own. */
+                  if (trapfloor_gone(g_lax, g_laz)) {
+                      int fy2, save_wy = g_flr_wy;
+                      g_flr_wy = fy + 512;
+                      if (room_floor_mr(rsect, roomCount, g_lax, g_laz, &fy2)
+                          && fy2 > fy)
+                          g_lafloor = fy2;
+                      else
+                          g_lafloor = fy + 1024;   /* nothing below: let her drop */
+                      g_flr_wy = save_wy;
+                  }
 #endif
 #endif
               }

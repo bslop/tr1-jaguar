@@ -127,6 +127,14 @@ gymload_pal:
 cavesload_pal:
 	.incbin "cavesload_pal.bin"
 	.balign 8
+/* GYMSD=1: Lara's Home lives on the CARD, not in the image.
+   ☠️ 316,336 BYTES of gym_atlas/geom/sect/index/pal were linked into every
+   CAVES ROM - a level that is never in memory at the same time as the caves.
+   That single block is larger than everything the budget has been fighting
+   over all session (the wolf fur, the medikit sprites, the collapsing floor
+   and a gun model, several times over). The GameDrive is a mass storage
+   device; treat it like one. */
+#ifndef GYMSD
 	.globl gym_index
 gym_index:
 	.incbin "gym.bin"
@@ -147,6 +155,24 @@ gym_atlas:
 gym_pal:
 	.incbin "gym_pal.bin"
 	.balign 8
+#else
+	.balign 8
+	.globl gym_index
+gym_index:
+	.long 0
+	.globl gym_geom
+gym_geom:
+	.long 0
+	.globl gym_sect
+gym_sect:
+	.long 0
+	.globl gym_atlas
+gym_atlas:
+	.long 0
+	.globl gym_pal
+gym_pal:
+	.long 0
+#endif
 	.globl gym_lara
 gym_lara:
 	.incbin "gym_lara.bin"
