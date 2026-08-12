@@ -1,6 +1,31 @@
 # The shipping build recipe (verified 2026-07-29)
 
-## ★★★★★ 2026-08-12 — PISTOLS VISIBLE IN HER HANDS: `demo29_p272`
+## ★★★★★ 2026-08-12 — SHE AIMS THEM: `demo30_p0`
+Same flags as demo29, plus the ARM ANIMATION, the combat camera and the right
+sounds. **Lit pad: 0.**
+
+    DRAW/HOLSTER  ★ OPTION      ACTION/FIRE  B / keypad 1
+
+**What the pistols do now**: unholster animation on the arms (11 frames), settle
+into TR1's aim pose, recoil animation per shot, holster on the way back down;
+the camera pulls back while armed; UNHOLSTER/HOLSTER sounds instead of the
+gunshot.
+
+★ **The aim pose is arms UP beside her shoulder, barrels raised** - that is not
+a bug, it is what the PS1 does. Verified against `res/…Part 2…mp4` @ 8m20
+rather than argued from memory.
+
+☠️ **`SPAWNAT_ROOM=20` RENDERS LARA DEFORMED** - stretched torso, arms as long
+spikes. It predates all the gun work (the same deformation is in captures taken
+before any of it), so **never judge a MODEL change from a SPAWNAT arm**; it cost
+a full wrong diagnosis here. Default-spawn arms render her correctly.
+
+⬜ Unverified: the combat camera pull-back. The one driven test that could have
+shown it was confounded - the OPTION press also released the level-start
+establishing camera (any input drops `g_camhold`), so the camera moved for a
+different reason in that capture.
+
+## (previous) 2026-08-12 — PISTOLS VISIBLE IN HER HANDS: `demo29_p272`
 Same flags as demo28 below, plus the fix that makes the pistols actually
 appear. **Lit pad: 272.** `GUNDBG=1` starts with them already drawn (handy for
 a capture without driving the pad).
