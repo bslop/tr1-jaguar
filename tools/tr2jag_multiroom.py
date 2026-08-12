@@ -184,12 +184,16 @@ def _clampi16(v):
 
 def build_lara(data, pMeshData, pMeshOff, pAnims, pNodes, pFrame,
                pModels, modelsCount, objCount,
-               pStates=0, nStates=0, pRanges=0, nRanges=0, pCmds=0, nCmds=0):
-    # locate Lara: first model with type == 0 (ITEM_LARA)
+               pStates=0, nStates=0, pRanges=0, nRanges=0, pCmds=0, nCmds=0,
+               oid=0):
+    # locate Lara: model with objectID `oid`.  oid 0 = ITEM_LARA, oid 1 =
+    # LARA_PISTOLS - the SAME 15-mesh tree with the pistols modelled into the
+    # hand and thigh meshes, so every animation and the whole pose walk apply
+    # unchanged and a gun-armed Lara is a DATA swap, not a second rig.
     laraModel=-1
     for i in range(modelsCount):
-        if _u16(data, pModels+i*20) == 0: laraModel=i; break
-    if laraModel<0: raise SystemExit("!! Lara model (type 0) not found")
+        if _u16(data, pModels+i*20) == oid: laraModel=i; break
+    if laraModel<0: raise SystemExit("!! Lara model (type %d) not found" % oid)
     mo=pModels+laraModel*20
     mcount=_u16(data,mo+4); mstart=_u16(data,mo+6)
     node  =_u32(data,mo+8); anim  =_u16(data,mo+16)
@@ -742,7 +746,30 @@ def main():
             sys.exit(0)
         globals()['_SPR_P'] = _pst; globals()['_SPR_N'] = _nst
 
-            # ---- MRT_SPRITEDUMP=7,8: decode SPRITE textures and write PNGs -----------
+                # ---- MRT_GUNSCOPE=1: how big would GUN LARA be? -------------------
+        # Model 1 is LARA_PISTOLS: the SAME 15-mesh tree as Lara (model 0) but
+        # with the pistols modelled into the hand/thigh meshes. Report the cost
+        # before committing to a design. Read-only, exits before any write.
+        if int(os.environ.get("MRT_GUNSCOPE","0")):
+            for _oid,_nm in ((0,"LARA"),(1,"LARA_PISTOLS")):
+                _bi=-1
+                for _i in range(modelsCount):
+                    if _u16(data,pModels+_i*20)==_oid: _bi=_i; break
+                if _bi<0: print("  model %d absent"%_oid); continue
+                _mo=pModels+_bi*20
+                _mc=_u16(data,_mo+4); _ms=_u16(data,_mo+6)
+                _tv=0
+                for _m in range(_mc):
+                    _b=_u32(data,pMeshOff+(_ms+_m)*4); _base=pMeshData+_b
+                    _vc=_s16(data,_base+10); _tv+=abs(_vc)
+                print("  model %d %-13s meshes=%2d verts=%3d  -> %d bytes/frame"
+                      " (6 shorts each)" % (_oid,_nm,_mc,_tv,_tv*6))
+            print("\n  Lara ships %d baked frames today (mrt_lara.bin = %d bytes)"
+                  % (0, os.path.getsize(os.path.join(OUTDIR,PREFIX+"_lara.bin"))
+                     if os.path.exists(os.path.join(OUTDIR,PREFIX+"_lara.bin")) else 0))
+            sys.exit(0)
+
+    # ---- MRT_SPRITEDUMP=7,8: decode SPRITE textures and write PNGs -----------
         # TR1 renders medikits/ammo as SPRITES, not meshes (a model audit for 93/94
         # is empty; the sprite-sequence audit shows 93->sprite 7, 94->sprite 8).
         # PSX spriteTexture is 16B: int16 l,t,r,b (billboard extents in world
@@ -957,6 +984,29 @@ def main():
     lara = build_lara(data, pMeshData, pMeshOff, pAnims, pNodes, pFrame,
                       pModels, modelsCount, objCount,
                       pStates, nStates, pRanges, nRanges, pCmds, nCmds)
+
+    # ---- MRT_GUNONLY=1: bake GUN LARA (model 1) and EXIT ------------------
+    # ☠️ SURGICAL, like MRT_ENEMYONLY. A full regen is what corrupts Lara -
+    # this extractor no longer reproduces the shipping 8568 mesh - so this must
+    # never fall through into one. It writes mrt_gun.bin/.h ONLY.
+    # LARA_PISTOLS shares Lara's 15-mesh tree and differs by 36 vertices (the
+    # pistols in her hands and the holsters), so the runtime can keep every
+    # animation and just point at the other vertex/face tables.
+    if int(os.environ.get("MRT_GUNONLY","0")):
+        gun = build_lara(data, pMeshData, pMeshOff, pAnims, pNodes, pFrame,
+                         pModels, modelsCount, objCount,
+                         pStates, nStates, pRanges, nRanges, pCmds, nCmds,
+                         oid=1)
+        print("GUN LARA: %d verts, %dq %dt, %d frames"
+              % (gun['vcount'], len(gun['quads']), len(gun['tris']),
+                 gun['framecount']))
+        print("  vs Lara: %d verts, %dq %dt, %d frames"
+              % (lara['vcount'], len(lara['quads']), len(lara['tris']),
+                 lara['framecount']))
+        if gun['framecount'] != lara['framecount']:
+            print("  ☠️ FRAME COUNTS DIFFER - the runtime cannot share the"
+                  " animation table; a swap would desync her pose")
+        sys.exit(0)
 
     # MRT_ANIMPROBE=1: which animation does each enemy model point at, and how
     # many frames does it actually have? The BEAR bakes only ONE frame even
