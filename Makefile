@@ -1008,6 +1008,18 @@ endif
 # face grouping and baked LPLANES are untouched. Assets: MRT_GUNPATCH=1
 # python3 tools/tr2jag_multiroom.py  (appends the pistol objtex to the atlas
 # and writes mrt_gun.h).
+# RUNSPEED=<n>: Lara's run velocity, units per 30Hz frame. Default 47 = TR1's
+# own anim-0 record. The old (wrong) constant was 140; kept reachable so the
+# feel can be A/B'd on a TV instead of argued from a table.
+ifdef RUNSPEED
+CFLAGS   += -DRUNSPEED=$(RUNSPEED)
+CXXFLAGS += -DRUNSPEED=$(RUNSPEED)
+endif
+
+ifdef GUNWIND
+CFLAGS   += -DGUNWIND
+CXXFLAGS += -DGUNWIND
+endif
 ifdef GUNDIAG
 CFLAGS   += -DGUNDIAG
 CXXFLAGS += -DGUNDIAG

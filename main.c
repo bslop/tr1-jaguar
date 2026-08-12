@@ -616,7 +616,15 @@ static int room_floor_mr(const uint8_t **rsect, int n, int wx, int wz, int *floo
 #ifndef PROBE_AHEAD
 #define PROBE_AHEAD (WALK_SPEED*2)
 #endif           /* RUN: TR1 anim 0, units per 30 Hz frame */
-#define RUN_SPEED_TR1  47
+/* RUNSPEED=<n> (build parameter): the pre-2026-08 constant was 140 and the
+   walk 70. Those are NOT the original game's numbers - 47/15 are, read out of
+   the level's own animation records - but the user asked to be able to put the
+   old feel back now that the frame rate is higher, and feel is their call to
+   make on a TV, not mine to argue from a table. Default stays ground truth. */
+#ifndef RUNSPEED
+#define RUNSPEED 47
+#endif
+#define RUN_SPEED_TR1  RUNSPEED
 #define WALK_SPEED_TR1 15       /* PAD_C walk: TR1 anim 1 (0.32x run, not 0.5) */
 #define BACK_SPEED_TR1  5       /* TR1 anim 38 BACK: speed 5, accel -0.625  */
 /* ☠️ TR1 anim 88 FAST_BACK has speed **0** and accel **+4.6667/frame** - the
@@ -2615,8 +2623,20 @@ static void build_gun_hand(uint8_t *buf, int atlasW, int hand)
     }
     for (i = 0; i < nq; i++) {
         EMIT_PLANE(w);
+        /* ☠️ WINDING. Lara's own faces go through the extractor's _windfix;
+           these did not, so if the kernel back-face-culls them nothing draws
+           at all - which is exactly the symptom. GUNWIND=1 reverses them to
+           settle which way round they belong. */
+#ifdef GUNWIND
+        w[0]=gq[i][3]; w[1]=gq[i][2]; w[2]=gq[i][1]; w[3]=gq[i][0];
+#else
         w[0]=gq[i][0]; w[1]=gq[i][1]; w[2]=gq[i][2]; w[3]=gq[i][3];
+#endif
+#ifdef GUNWIND
+        for (k = 0; k < 4; k++) { w[4+k*2]=guv[i][(3-k)*2]; w[5+k*2]=guv[i][(3-k)*2+1]; }
+#else
         for (k = 0; k < 8; k++) w[4+k]=guv[i][k];
+#endif
         w += 12;
     }
 }
@@ -7522,13 +7542,7 @@ bootvid_entry:
                 /* PAD_Z: draw / holster. ☠️ Rising edge only - a level check
                    would flip her every frame the button is down. */
                 if (redge & PAD_Z) { g_guns = !g_guns; sfx_play(1, SFX_PISTOL); }
-#ifdef GUNDIAG
-                /* DIAGNOSTIC: border GREEN while the pistols are meant to be
-                   out. Separates "the toggle never fired" from "the toggle
-                   fired and the blob did not draw" - three fixes in a row were
-                   aimed at the render side on the assumption the input worked. */
-                *(volatile uint16_t *)0xF00058u = g_guns ? 0x003E : 0x0000;
-#endif
+
 #endif
                 if ((redge & (PAD_Y|PAD_PAUSE)) && !g_rollt && !g_vault
                     && !g_swim && g_lay >= g_lafloor - 4)
@@ -8738,6 +8752,17 @@ bootvid_entry:
               blit_fill_rect(dfb3, 311, 3, 5, 5,
                              (g_vault || g_lavy != 0 || g_autograb) ? 255 : 254); }
 #endif
+#ifdef GUNDIAG
+            /* ☠️ A FRAMEBUFFER BLOCK, NOT THE BORDER. The first version of this
+               poked 0xF00058, which CRUMB() also writes - so a black border
+               proved nothing and nearly sent me hunting the input path on a
+               false negative. FPSBEACON's real estate is known to survive to
+               the flip, so use the same trick: white block = pistols drawn. */
+            { uint8_t *dfb = (uint8_t *)video_backbuffer();
+              int dy, dx; uint8_t v = g_guns ? 255 : 0;
+              for (dy = 40; dy < 48; dy++)
+                  for (dx = 32; dx < 64; dx++) dfb[dy*RENDER_W + dx] = v; }
+#endif
 #ifdef FPSBEACON
             /* content-independent frame clock: a 32x8 block toggling on every
                PUBLISHED frame.  Written after gpu_sync (Tom idle) and before
@@ -9587,7 +9612,13 @@ bootvid_entry:
                          against 1.25), which is indistinguishable from "the
                          feature is off". Follow the blob that is known to
                          appear. */
-                      if (g_guns && g_gunok) {
+                      /* ☠️ g_gunok DROPPED FROM THE GATE (2026-08-11): it is
+                         set inside build_lara_part, and if that runs in mesh
+                         RANGES the m1>=14 test can simply never be true in the
+                         path that matters. Gating a first-light test on a flag
+                         you have not proved is set is how three rolls read as
+                         "the feature does nothing". */
+                      if (g_guns) {
                           int gh;
                           for (gh = 0; gh < 2 && dn < 37; gh++) {
                               dn++;
