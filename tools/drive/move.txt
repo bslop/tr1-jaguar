@@ -1,0 +1,13 @@
+# mask seconds   -- UP 1 DOWN 2 LEFT 4 RIGHT 8 A=jump 16 B=action 32 C=walk 64
+0 3
+1 4
+0 1
+1 2
+17 2
+0 3
+2 2
+0 1
+4 2
+0 1
+8 2
+0 2
