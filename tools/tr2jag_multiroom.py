@@ -185,7 +185,7 @@ def _clampi16(v):
 def build_lara(data, pMeshData, pMeshOff, pAnims, pNodes, pFrame,
                pModels, modelsCount, objCount,
                pStates=0, nStates=0, pRanges=0, nRanges=0, pCmds=0, nCmds=0,
-               oid=0):
+               oid=0, swap_oid=None, swap_meshes=()):
     # locate Lara: model with objectID `oid`.  oid 0 = ITEM_LARA, oid 1 =
     # LARA_PISTOLS - the SAME 15-mesh tree with the pistols modelled into the
     # hand and thigh meshes, so every animation and the whole pose walk apply
@@ -198,11 +198,27 @@ def build_lara(data, pMeshData, pMeshOff, pAnims, pNodes, pFrame,
     mcount=_u16(data,mo+4); mstart=_u16(data,mo+6)
     node  =_u32(data,mo+8); anim  =_u16(data,mo+16)
 
+    # MESH SUBSTITUTION (swap_oid/swap_meshes): take these mesh slots from a
+    # DIFFERENT model, keeping this one's tree, nodes and animations.
+    # ★ That is exactly what TR1's "draw pistols" is: LARA_PISTOLS (model 1)
+    # carries real geometry ONLY in meshes 10 and 13 - the hands, with the
+    # pistols modelled in - and DUMMIES (all 20v/12q/12t) everywhere else.
+    # Substituting those two gives a gun-armed Lara that every one of her 160
+    # animations still drives, because the skeleton never changed.
+    mstart2 = None
+    if swap_oid is not None and swap_meshes:
+        _sm=-1
+        for i in range(modelsCount):
+            if _u16(data,pModels+i*20)==swap_oid: _sm=i; break
+        if _sm<0: raise SystemExit("!! swap model %d not found"%swap_oid)
+        mstart2=_u16(data,pModels+_sm*20+6)
+
     # --- per-mesh: verts + faces (topology constant across frames) ---
     meshes=[]; quads=[]; tris=[]; vbase_of=[]; total_v=0
     col_indices=set(); colored_faces=0
     for i in range(mcount):
-        boff=_u32(data, pMeshOff+(mstart+i)*4); base=pMeshData+boff
+        _ms = mstart2 if (mstart2 is not None and i in swap_meshes) else mstart
+        boff=_u32(data, pMeshOff+(_ms+i)*4); base=pMeshData+boff
         vCount=_s16(data, base+10); vAbs=abs(vCount); p=base+12
         verts=[]
         for j in range(vAbs):
@@ -1024,7 +1040,7 @@ def main():
         gun = build_lara(data, pMeshData, pMeshOff, pAnims, pNodes, pFrame,
                          pModels, modelsCount, objCount,
                          pStates, nStates, pRanges, nRanges, pCmds, nCmds,
-                         oid=1)
+                         oid=0, swap_oid=1, swap_meshes=(10, 13))
         print("GUN LARA: %d verts, %dq %dt, %d frames"
               % (gun['vcount'], len(gun['quads']), len(gun['tris']),
                  gun['framecount']))
