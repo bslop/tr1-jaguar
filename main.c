@@ -1288,7 +1288,11 @@ static SkMat ps_m;                    /* current matrix across parts        */
 static SkMat  g_handm[2];
 static int    g_gunT[7];          /* laC,laS,rx0,rz0,base_y,offX,offZ */
 static int    g_gunok;            /* both hands captured this frame   */
+#ifdef GUNDBG
+static int    g_guns = 1;         /* already drawn - no pad press needed */
+#else
 static int    g_guns;             /* pistols drawn                    */
+#endif
 #endif
 static int   ps_sp;                   /* matrix stack depth across parts    */
 static uint16_t *ps_w;                /* vert write cursor across parts     */
@@ -2596,6 +2600,46 @@ static int build_ent_sprite(uint8_t *buf, int atlasW, int e)
    ☠️ The transform MUST mirror build_lara_part's vertex loop exactly - mesh
    matrix, then heading, then sector origin and floor - or the gun swims
    relative to the arm it is supposed to be attached to. */
+/* ☠️☠️☠️ JERRY POSES LARA, AND JERRY DOES NOT WRITE g_handm.
+   build_lara_part is the ONLY writer of the hand matrices, and under JERRYPOSE
+   it NEVER RUNS - `posed = 2` the instant g_jerry_ok is set, before the draw
+   loop is even entered. So g_handm stayed an all-zero matrix, every gun vertex
+   mapped to the same single point, all 17 faces were degenerate, and the
+   kernel emitted nothing.
+   ★★★★★ That is why three separate "fixes" changed NOTHING on screen: with a
+   zero matrix, reversing the winding, scaling 3x and floating the mesh 512
+   units clear of her body are all multiplying zero. A change that makes NO
+   visible difference is evidence about the INPUT, not about the knob.
+   The repair is cheap because the costly half of the pose is the 300-vertex
+   loop: the node walk itself is 14 matrix ops, so we redo just that. */
+static void gun_pose_hands(void)
+{
+    const uint8_t *fr  = g_sk_frames + g_lframe * g_sk_framestride;
+    const uint8_t *ang = fr + 6;
+    const uint8_t *rfr = g_sk_frames + g_anim_start * g_sk_framestride;
+    int rootx=rd16(rfr), rooty=rd16(rfr+2), rootz=rd16(rfr+4);
+    int mc = g_sk_mcount, i, sp = 0;
+    SkMat m;
+    if (mc > 14) mc = 14;           /* mesh 13 is the last one we need */
+    for (i = 0; i < mc; i++) {
+        const uint8_t *a3 = ang + i*3;
+        if (i == 0) { sk_ident(&m); sk_translate(&m, rootx, rooty, rootz); }
+        else {
+            const int16_t *nd = sknode + (i-1)*4;
+            if (nd[0] & 1) m = g_skstack[--sp];    /* POP  */
+            if (nd[0] & 2) g_skstack[sp++] = m;    /* PUSH */
+            sk_translate(&m, nd[1], nd[2], nd[3]);
+        }
+        sk_rot_yxz(&m, a3[0], a3[1], a3[2]);
+        if (i == 10) g_handm[0] = m; else if (i == 13) g_handm[1] = m;
+    }
+    /* the same outer placement build_lara_part's vertex loop applies */
+    g_gunT[0]=COS(g_layaw)>>2; g_gunT[1]=SIN(g_layaw)>>2;
+    g_gunT[2]=g_lax & 255;     g_gunT[3]=g_laz & 255;
+    g_gunT[4]=g_lay + LARA_FEET;
+    g_gunT[5]=g_lax >> 8;      g_gunT[6]=g_laz >> 8;
+    g_gunok = 1;
+}
 static void build_gun_hand(uint8_t *buf, int atlasW, int hand)
 {
     const SkMat *mm = &g_handm[hand];
@@ -2607,6 +2651,16 @@ static void build_gun_hand(uint8_t *buf, int atlasW, int hand)
     int laC=g_gunT[0], laS=g_gunT[1], rx0=g_gunT[2], rz0=g_gunT[3];
     int base_y=g_gunT[4], offX=g_gunT[5], offZ=g_gunT[6];
     uint16_t *h = (uint16_t *)buf, *w; int i, k;
+    /* ✅ WINDING WAS NOT THE PROBLEM (measured 2026-08-12: a roll drawing the
+       right hand as baked and the left REVERSED showed neither, because the
+       matrix feeding both was zero). GUNWIND stays as the knob if the pistols
+       ever turn out inside-out from some angle. */
+    int rev =
+#ifdef GUNWIND
+        1;
+#else
+        0;
+#endif
     h[0]=(uint16_t)nv; h[1]=(uint16_t)nq; h[2]=0;
     h[3]=(uint16_t)atlasW; h[4]=(uint16_t)g_ltx_atH;
     h[5]=(uint16_t)offX; h[6]=0; h[7]=(uint16_t)offZ;
@@ -2616,27 +2670,23 @@ static void build_gun_hand(uint8_t *buf, int atlasW, int hand)
         int mx=mm->t[0]+((mul16(mm->R[0][0],lx)+mul16(mm->R[0][1],ly)+mul16(mm->R[0][2],lz))>>12);
         int my=mm->t[1]+((mul16(mm->R[1][0],lx)+mul16(mm->R[1][1],ly)+mul16(mm->R[1][2],lz))>>12);
         int mz=mm->t[2]+((mul16(mm->R[2][0],lx)+mul16(mm->R[2][1],ly)+mul16(mm->R[2][2],lz))>>12);
-        w[0]=(uint16_t)(int16_t)(((mul16(mx,laC)+mul16(mz,laS))>>14)+rx0);
-        w[1]=(uint16_t)(int16_t)(base_y+my);
-        w[2]=(uint16_t)(int16_t)(((mul16(-mx,laS)+mul16(mz,laC))>>14)+rz0);
-        w[3]=255; w += 4;
+        { int rx=((mul16(mx,laC)+mul16(mz,laS))>>14)+rx0;
+          int rz=((mul16(-mx,laS)+mul16(mz,laC))>>14)+rz0;
+          int wy=base_y+my;
+          w[0]=(uint16_t)(int16_t)rx;
+          w[1]=(uint16_t)(int16_t)wy;
+          w[2]=(uint16_t)(int16_t)rz;
+          w[3]=255; w += 4; }
     }
     for (i = 0; i < nq; i++) {
         EMIT_PLANE(w);
-        /* ☠️ WINDING. Lara's own faces go through the extractor's _windfix;
-           these did not, so if the kernel back-face-culls them nothing draws
-           at all - which is exactly the symptom. GUNWIND=1 reverses them to
-           settle which way round they belong. */
-#ifdef GUNWIND
-        w[0]=gq[i][3]; w[1]=gq[i][2]; w[2]=gq[i][1]; w[3]=gq[i][0];
-#else
-        w[0]=gq[i][0]; w[1]=gq[i][1]; w[2]=gq[i][2]; w[3]=gq[i][3];
-#endif
-#ifdef GUNWIND
-        for (k = 0; k < 4; k++) { w[4+k*2]=guv[i][(3-k)*2]; w[5+k*2]=guv[i][(3-k)*2+1]; }
-#else
-        for (k = 0; k < 8; k++) w[4+k]=guv[i][k];
-#endif
+        if (rev) {
+            w[0]=gq[i][3]; w[1]=gq[i][2]; w[2]=gq[i][1]; w[3]=gq[i][0];
+            for (k = 0; k < 4; k++) { w[4+k*2]=guv[i][(3-k)*2]; w[5+k*2]=guv[i][(3-k)*2+1]; }
+        } else {
+            w[0]=gq[i][0]; w[1]=gq[i][1]; w[2]=gq[i][2]; w[3]=gq[i][3];
+            for (k = 0; k < 8; k++) w[4+k]=guv[i][k];
+        }
         w += 12;
     }
 }
@@ -9667,6 +9717,11 @@ bootvid_entry:
                          "the feature does nothing". */
                       if (g_guns) {
                           int gh;
+                          /* ALWAYS - not just under JERRYPOSE. One code path
+                             that is correct however Lara got posed beats a
+                             second one that is right only in the config you
+                             happened to test. It is 14 matrix ops. */
+                          gun_pose_hands();
                           for (gh = 0; gh < 2 && dn < 37; gh++) {
                               dn++;
                               build_gun_hand(ent_gun_blob[gh], atlasW, gh);

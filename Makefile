@@ -1033,6 +1033,13 @@ ifdef GUNDIAG
 CFLAGS   += -DGUNDIAG
 CXXFLAGS += -DGUNDIAG
 endif
+# GUNDBG=1: start with the pistols ALREADY DRAWN, so a plain capture shows them
+# without driving the pad. (It began life as a winding discriminator; winding
+# turned out to be innocent - see gun_pose_hands in main.c.)
+ifdef GUNDBG
+CFLAGS   += -DGUNDBG
+CXXFLAGS += -DGUNDBG
+endif
 ifdef GUNS
 CFLAGS   += -DGUNS
 CXXFLAGS += -DGUNS
