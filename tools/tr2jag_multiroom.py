@@ -746,7 +746,35 @@ def main():
             sys.exit(0)
         globals()['_SPR_P'] = _pst; globals()['_SPR_N'] = _nst
 
-                # ---- MRT_GUNSCOPE=1: how big would GUN LARA be? -------------------
+                # ---- MRT_MESHSCOPE=99: per-MESH breakdown of one model ------------
+        if os.environ.get("MRT_MESHSCOPE"):
+            _oid=int(os.environ["MRT_MESHSCOPE"])
+            _bi=-1
+            for _i in range(modelsCount):
+                if _u16(data,pModels+_i*20)==_oid: _bi=_i; break
+            if _bi<0: print("model %d absent"%_oid); sys.exit(0)
+            _mo=pModels+_bi*20; _mc=_u16(data,_mo+4); _ms=_u16(data,_mo+6)
+            print("\n=== model %d, %d meshes ===" % (_oid,_mc))
+            for _m in range(_mc):
+                _b=_u32(data,pMeshOff+(_ms+_m)*4); _base=pMeshData+_b
+                _vc=_s16(data,_base+10); _va=abs(_vc); _p=_base+12
+                _bb=None
+                for _j in range(_va):
+                    _x=_s16(data,_p); _y=_s16(data,_p+2); _z=_s16(data,_p+4); _p+=8
+                    _bb=(_x,_y,_z,_x,_y,_z) if _bb is None else (
+                        min(_bb[0],_x),min(_bb[1],_y),min(_bb[2],_z),
+                        max(_bb[3],_x),max(_bb[4],_y),max(_bb[5],_z))
+                _p += _va*8 if _vc>0 else _va*2
+                _rc=_u16(data,_p); _p+=2+_rc*10
+                _tc=_u16(data,_p)
+                print("  mesh %d: verts=%3d quads=%2d tris=%2d  bbox %dx%dx%d"
+                      % (_m,_va,_rc,_tc,
+                         (_bb[3]-_bb[0]) if _bb else 0,
+                         (_bb[4]-_bb[1]) if _bb else 0,
+                         (_bb[5]-_bb[2]) if _bb else 0))
+            sys.exit(0)
+
+        # ---- MRT_GUNSCOPE=1: how big would GUN LARA be? -------------------
         # Model 1 is LARA_PISTOLS: the SAME 15-mesh tree as Lara (model 0) but
         # with the pistols modelled into the hand/thigh meshes. Report the cost
         # before committing to a design. Read-only, exits before any write.
