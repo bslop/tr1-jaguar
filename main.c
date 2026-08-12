@@ -1293,6 +1293,54 @@ static int    g_guns = 1;         /* already drawn - no pad press needed */
 #else
 static int    g_guns;             /* pistols drawn                    */
 #endif
+/* ---- ARM ANIMATION -------------------------------------------------------
+   Swapping meshes 10/13 puts pistols in her fists, but her ARMS keep doing
+   whatever the body animation says - she stands and runs with the guns hanging
+   at her sides. TR1 drives the arms from the WEAPON model's own animations
+   while the body keeps its normal one; that is what makes her arms come up and
+   point, and it is the difference between "holding guns" and "aiming".
+   mrt_gunanim.h carries LARA_PISTOLS' arm joints for AIM/DRAW/FIRE, 18 bytes
+   per frame = meshes 8,9,10 (right arm) then 11,12,13 (left) - contiguous, so
+   the override is one 18-byte copy at offset 8*3 of the frame's angle block. */
+#include "mrt_gunanim.h"
+enum { GST_OFF=0, GST_DRAW, GST_AIM, GST_READY, GST_FIRE, GST_HOLSTER };
+#ifdef GUNDBG
+static int    g_gunst = GST_READY;
+static int    g_gunf  = GA_AIM_N-1;
+#else
+static int    g_gunst, g_gunf;
+#endif
+static uint8_t g_angbuf[16*3];
+static int    g_combat;           /* 0..256 ease into the combat camera */
+#endif
+#ifdef GUNS
+/* This frame's joint angles, with the ARMS replaced by the weapon animation
+   whenever the pistols are out. Holstered returns the raw frame pointer, so
+   the normal path pays nothing.
+   ☠️ It must feed EVERY poser - Jerry included. Jerry poses the body, so
+   patching only the 68k copy would aim the guns while her actual arms stayed
+   at her sides. */
+static const uint8_t *lara_angles(void)
+{
+    const uint8_t *ang = g_sk_frames + g_lframe * g_sk_framestride + 6;
+    const unsigned char *arm;
+    int i, n, f = g_gunf;
+    if (g_gunst == GST_OFF) return ang;
+    switch (g_gunst) {
+    case GST_DRAW: case GST_HOLSTER:
+        arm = GA_DRAW[f < GA_DRAW_N ? f : GA_DRAW_N-1]; break;
+    case GST_FIRE:
+        arm = GA_FIRE[f < GA_FIRE_N ? f : GA_FIRE_N-1]; break;
+    default:
+        arm = GA_AIM [f < GA_AIM_N  ? f : GA_AIM_N-1];  break;
+    }
+    n = g_sk_mcount * 3;
+    if (n > (int)sizeof(g_angbuf)) n = (int)sizeof(g_angbuf);
+    for (i = 0; i < n; i++) g_angbuf[i] = ang[i];
+    /* meshes 8..13 are contiguous -> one 18-byte window at 8*3 */
+    for (i = 0; i < 18 && 24+i < n; i++) g_angbuf[24+i] = arm[i];
+    return g_angbuf;
+}
 #endif
 static int   ps_sp;                   /* matrix stack depth across parts    */
 static uint16_t *ps_w;                /* vert write cursor across parts     */
@@ -1308,8 +1356,12 @@ static void build_lara_part(uint8_t *buf, int atlasW, int m0, int m1)
     g_gunT[4]=base_y; g_gunT[5]=offX; g_gunT[6]=offZ;
     if (m1 >= 14) g_gunok = 1;      /* meshes 10 and 13 have been posed */
 #endif
+#ifdef GUNS
+    const uint8_t *ang  = lara_angles();   /* arms overridden when armed */
+#else
     const uint8_t *fr   = g_sk_frames + g_lframe * g_sk_framestride;
     const uint8_t *ang  = fr + 6;                          /* current-frame angles */
+#endif
     const uint8_t *rfr  = g_sk_frames + g_anim_start * g_sk_framestride;
     int rootx=rd16(rfr), rooty=rd16(rfr+2), rootz=rd16(rfr+4);  /* in-place root */
     int mc = g_sk_mcount, i, k;
@@ -2614,8 +2666,7 @@ static int build_ent_sprite(uint8_t *buf, int atlasW, int e)
    loop: the node walk itself is 14 matrix ops, so we redo just that. */
 static void gun_pose_hands(void)
 {
-    const uint8_t *fr  = g_sk_frames + g_lframe * g_sk_framestride;
-    const uint8_t *ang = fr + 6;
+    const uint8_t *ang = lara_angles();
     const uint8_t *rfr = g_sk_frames + g_anim_start * g_sk_framestride;
     int rootx=rd16(rfr), rooty=rd16(rfr+2), rootz=rd16(rfr+4);
     int mc = g_sk_mcount, i, sp = 0;
@@ -7442,8 +7493,47 @@ bootvid_entry:
             { static uint32_t opprev;
               uint32_t opedge = pad & ~opprev; opprev = pad;
               if ((opedge & PAD_OPTION)
-                  && !(pad & (PAD_UP|PAD_DOWN|PAD_LEFT|PAD_RIGHT)))
-                  { g_guns = !g_guns; sfx_play(1, SFX_PISTOL); } }
+                  && !(pad & (PAD_UP|PAD_DOWN|PAD_LEFT|PAD_RIGHT))) {
+                  /* ☠️ NOT SFX_PISTOL. Drawing fired the GUNSHOT sample as a
+                     stand-in and it sounded like she shot on every draw (user,
+                     2026-08-12). TR1 has its own pair: events 6/7. */
+                  if (g_gunst == GST_OFF)
+                      { g_gunst = GST_DRAW; g_gunf = 0; sfx_play(1, SFX_UNHOLSTER); }
+                  else if (g_gunst != GST_HOLSTER)
+                      { g_gunst = GST_HOLSTER; g_gunf = GA_DRAW_N-1;
+                        sfx_play(1, SFX_HOLSTER); }
+              } }
+            /* ---- ARM ANIMATION TICK. TR1 has no holster animation: it plays
+               the unholster one BACKWARDS (OpenLara wpnGetAnimIndex), so
+               HOLSTER walks GA_DRAW down. Advance in 30 Hz ticks, not frames -
+               at ~7 fps a per-frame step would make the draw take seconds. */
+            { int st;
+              for (st = g_ticks >> 1; st > 0; st--) {
+                switch (g_gunst) {
+                case GST_DRAW:
+                    if (++g_gunf >= GA_DRAW_N) { g_gunst = GST_AIM; g_gunf = 0; }
+                    break;
+                case GST_AIM:
+                    if (++g_gunf >= GA_AIM_N) { g_gunst = GST_READY; g_gunf = GA_AIM_N-1; }
+                    break;
+                case GST_FIRE:
+                    if (++g_gunf >= GA_FIRE_N) { g_gunst = GST_READY; g_gunf = GA_AIM_N-1; }
+                    break;
+                case GST_HOLSTER:
+                    if (--g_gunf <= 0) { g_gunst = GST_OFF; g_gunf = 0; }
+                    break;
+                default: break;
+                } }
+              /* the pistols are IN HER HANDS for the whole draw and holster -
+                 she pulls them out, they do not appear at the end */
+              g_guns = (g_gunst != GST_OFF);
+              /* ease the combat camera in/out so the change reads as a camera
+                 move rather than a cut */
+              { int want = (g_gunst == GST_OFF) ? 0 : 256;
+                int d = (want - g_combat) >> 2;
+                if (!d && want != g_combat) d = (want > g_combat) ? 1 : -1;
+                g_combat += d * (g_ticks >> 1);
+                if (g_combat < 0) g_combat = 0; else if (g_combat > 256) g_combat = 256; } }
 #endif
 #ifdef HOPDIAL
             { static uint32_t hdprev;
@@ -7613,7 +7703,13 @@ bootvid_entry:
                    MODIFIER (OPTION+direction tunes HOPDIAL), so OPTION with no
                    direction held is free and works on every controller.
                    Keep it until PADPROBE settles the real table. */
-                if (redge & ACT_DRAW) { g_guns = !g_guns; sfx_play(1, SFX_PISTOL); }
+                if (redge & ACT_DRAW) {
+                    if (g_gunst == GST_OFF)
+                        { g_gunst = GST_DRAW; g_gunf = 0; sfx_play(1, SFX_UNHOLSTER); }
+                    else if (g_gunst != GST_HOLSTER)
+                        { g_gunst = GST_HOLSTER; g_gunf = GA_DRAW_N-1;
+                          sfx_play(1, SFX_HOLSTER); }
+                }
 
 #endif
                 if ((redge & ACT_ROLL) && !g_rollt && !g_vault
@@ -7953,7 +8049,8 @@ bootvid_entry:
                        PAD_X is now DRAW/holster. Without GUNS the old binding
                        stands so nothing regresses. */
 #ifdef GUNS
-                    if ((pad & ACT_ACTION) && g_guns && g_firecd <= 0) {
+                    if ((pad & ACT_ACTION) && g_firecd <= 0
+                        && (g_gunst == GST_READY || g_gunst == GST_FIRE)) {
 #else
                     if ((pad & PAD_X) && g_firecd <= 0) {
 #endif
@@ -7977,6 +8074,8 @@ bootvid_entry:
                             if (fd < bestd) { bestd=fd; bestk=be; }
                         }
                         g_firecd = 6;                        /* ~5 shots/sec */
+                        /* recoil: restart the FIRE arm anim on every shot */
+                        g_gunst = GST_FIRE; g_gunf = 0;
 #ifdef AUTOFIRE
                         g_shots++;
                         if (bestk >= 0) g_hits++;
@@ -8515,8 +8614,17 @@ bootvid_entry:
                 }
                 cY = COS(best); sY = SIN(best);
             }
-            camx = g_lax - (int)(((int32_t)sY*CAMDIST)>>16);
-            camz = g_laz - (int)(((int32_t)cY*CAMDIST)>>16);
+            /* COMBAT CAMERA: TR1 pulls the camera BACK when the weapons are
+               out (OpenLara camera.h: CAM_OFFSET_COMBAT = FOLLOW + 512, over a
+               1536 follow offset). Our CAMDIST 1200 stands in for that 1536,
+               so the same ratio is +400. g_combat eases 0..256 so it reads as
+               a camera move, not a cut. */
+            { int cdist = CAMDIST;
+#ifdef GUNS
+              cdist += (400 * g_combat) >> 8;
+#endif
+              camx = g_lax - (int)(((int32_t)sY*cdist)>>16);
+              camz = g_laz - (int)(((int32_t)cY*cdist)>>16); }
             camy = g_lafloor - CAMHEIGHT;
             g_camx = camx; g_camy = camy; g_camz = camz;   /* for Lara depth sort */
             g_camcY = cY; g_camsY = sY;    /* billboard basis for the medikits */
@@ -9186,7 +9294,11 @@ bootvid_entry:
                         const void*,const void*,void*,int32_t,int32_t,int32_t,
                         int32_t,int32_t,int32_t,int32_t,int32_t,uint32_t);
                     const uint8_t *rfr = g_sk_frames + g_anim_start * g_sk_framestride;
+#ifdef GUNS
+                    const uint8_t *ang = lara_angles();  /* arms follow the guns */
+#else
                     const uint8_t *ang = g_sk_frames + g_lframe * g_sk_framestride + 6;
+#endif
                     int offX = g_lax >> 8, offZ = g_laz >> 8;
                     uint16_t *h = (uint16_t *)lara_blob;
                     h[0]=(uint16_t)g_lnv; h[1]=(uint16_t)g_lnq; h[2]=(uint16_t)g_lnt;

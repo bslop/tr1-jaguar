@@ -28,8 +28,13 @@ OUT  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # actually fire; she can now.
 WANTED = [ (0,"STEP",0), (4,"LAND",0), (31,"GRUNT",0.8),
            (108,"MENU_SPIN",0), (111,"MENU_SHOW",0), (112,"MENU_HIDE",0),
-           (8,"PISTOL",0.2) ]   # 0.2s: a pistol crack is short, and sfx.bin is linked
+           (8,"PISTOL",0.2),    # 0.2s: a pistol crack is short, and sfx.bin is linked
                                 #  into the ROM so every byte is BSS budget
+           # Drawing the pistols was firing the GUNSHOT sample as a stand-in
+           # (user-reported 2026-08-12: "Why does Option make a shooting
+           # noise?"). TR1 has its own pair, and it is the sound that tells you
+           # the draw happened at all. Events from OpenLara src/format.h:1447.
+           (6,"UNHOLSTER",0.5), (7,"HOLSTER",0.5) ]
 
 raw=open(LEVEL,'rb').read()
 # --- sound offsets/data (loadTR1_PSX fixed layout) ---
