@@ -1041,6 +1041,38 @@ def main():
                          pModels, modelsCount, objCount,
                          pStates, nStates, pRanges, nRanges, pCmds, nCmds,
                          oid=0, swap_oid=1, swap_meshes=(10, 13))
+        # ☠️ DO THE GUN FACES REFERENCE TEXTURES THE ATLAS ACTUALLY HAS?
+        # The atlas is packed from what the ROOMS and LARA use. Model 1's hand
+        # meshes are extra geometry with their own objtex ids, and if those are
+        # not packed the pistols render garbage texels - which would look like
+        # a UV bug and cost a day.
+        _lt=set(); _gt=set()
+        for _f in lara['quads']+lara['tris']:
+            if not _f['colored']: _lt.add(_f['tex'])
+        for _f in gun['quads']+gun['tris']:
+            if not _f['colored']: _gt.add(_f['tex'])
+        _new=_gt-_lt
+        print("  gun textured-face objtex: %d, of which NOT used by Lara: %d %s"
+              % (len(_gt), len(_new), sorted(_new)[:12]))
+        # narrow it to the SWAPPED meshes: only 10 and 13 are new geometry
+        _vb=gun['vbase_of']
+        def _mesh_of(_v):
+            for _m in range(len(_vb)-1,-1,-1):
+                if _v>=_vb[_m]: return _m
+            return 0
+        _ht=set(); _hc=0; _hn=0
+        for _f in gun['quads']+gun['tris']:
+            if _mesh_of(_f['v'][0]) in (10,13):
+                _hn+=1
+                if _f['colored']: _hc+=1
+                else: _ht.add(_f['tex'])
+        print("  HAND meshes (10,13): %d faces, %d flat-colour, textures %s"
+              % (_hn,_hc,sorted(_ht)))
+        print("  of those textures, missing from Lara's atlas: %s"
+              % sorted(_ht-_lt))
+        _gc=sum(1 for _f in gun['quads']+gun['tris'] if _f['colored'])
+        print("  gun FLAT-COLOUR faces: %d of %d"
+              % (_gc, len(gun['quads'])+len(gun['tris'])))
         print("GUN LARA: %d verts, %dq %dt, %d frames"
               % (gun['vcount'], len(gun['quads']), len(gun['tris']),
                  gun['framecount']))
