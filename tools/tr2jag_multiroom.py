@@ -1286,6 +1286,137 @@ def main():
               % (PREFIX,len(atl)//AW,PREFIX))
         sys.exit(0)
 
+    # ---- MRT_GUNPATCH=1: the GUN HANDS -> atlas rows + mrt_gun.h ------------
+    # LARA_PISTOLS (model 1) carries real geometry in ONLY meshes 10 and 13 -
+    # the hands with the pistols modelled in (24 verts / 17 quads each; her bare
+    # hands are 8/6). Everything else in that model is a dummy. So "draw
+    # pistols" is those two meshes, and the runtime can hang them off the hand
+    # matrices the skinner already computes instead of rebuilding her skin.
+    # ☠️ Their textures are NOT in the atlas: the atlas is packed from what the
+    # ROOMS and LARA use, and objtex 529,532..540 are neither. Appended here,
+    # same surgical contract as MRT_DOORPATCH: read the shipping pal+atlas,
+    # append rows, write back, emit the header, EXIT before anything else.
+    if int(os.environ.get("MRT_GUNPATCH","0")):
+        AW=256
+        STEP=int(os.environ.get("MRT_GUNPATCH_STEP","1"))
+        pal_b=open(os.path.join(OUTDIR,PREFIX+"_pal.bin"),"rb").read()
+        pal=[(pal_b[i*2]<<8)|pal_b[i*2+1] for i in range(256)]
+        pal_rgb=[((c>>11)&31,(c>>1)&31,(c>>6)&31) for c in pal]
+        def nearest(r5,g5,b5):
+            bi=0; bd=1<<30
+            for i in range(256):
+                pr,pg,pb=pal_rgb[i]
+                d=(r5-pr)**2+(g5-pg)**2+(b5-pb)**2
+                if d<bd: bd=d; bi=i
+            return bi
+        # --- read model 1 meshes 10 and 13 straight out of the level ---
+        _bi=-1
+        for i in range(modelsCount):
+            if _u16(data,pModels+i*20)==1: _bi=i; break
+        if _bi<0: raise SystemExit("!! LARA_PISTOLS (model 1) not found")
+        _ms=_u16(data,pModels+_bi*20+6)
+        hands={}
+        for hi,mi in ((0,10),(1,13)):
+            boff=_u32(data,pMeshOff+(_ms+mi)*4); base=pMeshData+boff
+            vC=_s16(data,base+10); vA=abs(vC); p=base+12
+            vs=[]
+            for j in range(vA):
+                vs.append((_s16(data,p),_s16(data,p+2),_s16(data,p+4))); p+=8
+            p += vA*8 if vC>0 else vA*2
+            rc=_u16(data,p); p+=2; qs=[]
+            for q in range(rc):
+                v=[_u16(data,p),_u16(data,p+2),_u16(data,p+4),_u16(data,p+6)]
+                fl=_u16(data,p+8); p+=10
+                qs.append((v, fl&0x7FFF))
+            tc=_u16(data,p); p+=2; ts=[]
+            for t in range(tc):
+                v=[_u16(data,p),_u16(data,p+2),_u16(data,p+4)]
+                fl=_u16(data,p+6); p+=8
+                ts.append((v, fl&0x7FFF))
+            hands[hi]=dict(verts=vs,quads=qs,tris=ts)
+            print("GUNPATCH hand %d (mesh %d): %d verts %dq %dt"
+                  % (hi,mi,len(vs),len(qs),len(ts)))
+        # --- append every textured objtex these faces use ---
+        atl=bytearray(open(os.path.join(OUTDIR,PREFIX+"_atlas.bin"),"rb").read())
+        assert len(atl)%AW==0
+        H0=len(atl)//AW
+        need=set()
+        for h in hands.values():
+            for (v,tex) in h['quads']+h['tris']:
+                if tex>=256 and tex<len(objtex): need.add(tex)
+        rects={}; px=0; ay=len(atl)//AW; band=0; rows_added=0
+        for tex in sorted(need):
+            o=objtex[tex]; ts_=o.get('ts',1)
+            us=[q[0] for q in o['uv']]; vs_=[q[1] for q in o['uv']]
+            u0,v0,u1,v1=min(us),min(vs_),max(us),max(vs_)
+            w=(u1-u0)//STEP+1; h=(v1-v0)//STEP+1
+            if w>64 or h>64:          # ☠️ the junk-4th-corner trap, again
+                us=us[:3]; vs_=vs_[:3]
+                u0,v0,u1,v1=min(us),min(vs_),max(us),max(vs_)
+                w=(u1-u0)//STEP+1; h=(v1-v0)//STEP+1
+            if px+w>AW:               # shelf full - start a new band
+                ay+=band; atl+=bytearray(AW*band); rows_added+=band
+                px=0; band=0
+            if h>band:
+                atl+=bytearray(AW*(h-band)); rows_added+=(h-band); band=h
+            for yy in range(h):
+                for xx in range(w):
+                    sx=(u0+xx*STEP)*ts_; sy=(v0+yy*STEP)*ts_
+                    _o=tiles_off+o['tile']*TILE_PAGE_BYTES+(sy*256+sx)//2
+                    _b=data[_o]
+                    nib=(_b>>4) if (sx & 1) else (_b & 0x0F)
+                    _c=cluts_off+o['clut']*CLUT_BYTES+nib*2
+                    _v=data[_c]|(data[_c+1]<<8)
+                    atl[(ay+yy)*AW+px+xx]=nearest(_v&31,(_v>>5)&31,(_v>>10)&31)
+            rects[tex]=(px,ay,u0,v0)
+            px+=w
+        open(os.path.join(OUTDIR,PREFIX+"_atlas.bin"),"wb").write(atl)
+        print("GUNPATCH: %d objtex -> +%d atlas rows (now %d)"
+              % (len(need),rows_added,len(atl)//AW))
+        def guv(tex,n):
+            """0xFFFF = flat-colour face; main.c falls back to a swatch."""
+            if tex not in rects: return [0xFFFF]*(n*2)
+            px0,py0,u0,v0=rects[tex]; o=objtex[tex]; out=[]
+            for i in range(n):
+                u,v=o['uv'][i] if i<len(o['uv']) else o['uv'][-1]
+                out += [px0+(u-u0)//STEP, py0+(v-v0)//STEP]
+            return out
+        with open(os.path.join(OUTDIR,PREFIX+"_gun.h"),"w") as f:
+            f.write("// generated by MRT_GUNPATCH - Lara's PISTOL HANDS.\n")
+            f.write("// LARA_PISTOLS (model 1) meshes 10 (right) and 13 (left):\n")
+            f.write("// the hand WITH the gun. Drawn at the hand matrices the\n")
+            f.write("// skinner already computes, so her skin is untouched.\n")
+            f.write("// Textures appended to %s_atlas.bin at rows %d..\n"
+                    % (PREFIX,H0))
+            up=PREFIX.upper()
+            for hi in (0,1):
+                h=hands[hi]; nm="R" if hi==0 else "L"
+                f.write("#define %s_GUN%s_VCOUNT %d\n"%(up,nm,len(h['verts'])))
+                f.write("#define %s_GUN%s_QCOUNT %d\n"%(up,nm,len(h['quads'])))
+                f.write("#define %s_GUN%s_TCOUNT %d\n"%(up,nm,len(h['tris'])))
+                f.write("static const short %s_GUN%s_v[%d][3] = {\n"%(up,nm,max(1,len(h['verts']))))
+                for (x,y,z) in h['verts']: f.write("  {%d,%d,%d},\n"%(x,y,z))
+                if not h['verts']: f.write("  {0,0,0},\n")
+                f.write("};\n")
+                f.write("static const unsigned short %s_GUN%s_q[%d][4] = {\n"%(up,nm,max(1,len(h['quads']))))
+                for (v,tex) in h['quads']: f.write("  {%d,%d,%d,%d},\n"%tuple(v))
+                if not h['quads']: f.write("  {0,0,0,0},\n")
+                f.write("};\n")
+                f.write("static const unsigned short %s_GUN%s_quv[%d][8] = {\n"%(up,nm,max(1,len(h['quads']))))
+                for (v,tex) in h['quads']: f.write("  {"+",".join("%d"%c for c in guv(tex,4))+"},\n")
+                if not h['quads']: f.write("  {65535,65535,65535,65535,65535,65535,65535,65535},\n")
+                f.write("};\n")
+                f.write("static const unsigned short %s_GUN%s_t[%d][3] = {\n"%(up,nm,max(1,len(h['tris']))))
+                for (v,tex) in h['tris']: f.write("  {%d,%d,%d},\n"%tuple(v))
+                if not h['tris']: f.write("  {0,0,0},\n")
+                f.write("};\n")
+                f.write("static const unsigned short %s_GUN%s_tuv[%d][6] = {\n"%(up,nm,max(1,len(h['tris']))))
+                for (v,tex) in h['tris']: f.write("  {"+",".join("%d"%c for c in guv(tex,3))+"},\n")
+                if not h['tris']: f.write("  {65535,65535,65535,65535,65535,65535},\n")
+                f.write("};\n")
+        print("GUNPATCH: wrote %s_gun.h" % PREFIX)
+        sys.exit(0)
+
     # ---- MRT_PICKPATCH=1: append the PICKUP SPRITES to the EXISTING atlas ---
     # Same surgical contract as MRT_DOORPATCH: read the SHIPPING pal + atlas,
     # append rows, write back, EXIT before anything else. TR1 draws medikits as

@@ -1003,6 +1003,20 @@ CXXFLAGS += -DGYMSD
 ASFLAGS  += -DGYMSD
 endif
 
+# GUNS=1: Lara draws pistols (PAD_Z). The gun HANDS are LARA_PISTOLS' meshes
+# 10/13, hung off the hand matrices the skinner already computes - her skin,
+# face grouping and baked LPLANES are untouched. Assets: MRT_GUNPATCH=1
+# python3 tools/tr2jag_multiroom.py  (appends the pistol objtex to the atlas
+# and writes mrt_gun.h).
+ifdef GUNDIAG
+CFLAGS   += -DGUNDIAG
+CXXFLAGS += -DGUNDIAG
+endif
+ifdef GUNS
+CFLAGS   += -DGUNS
+CXXFLAGS += -DGUNS
+endif
+
 VIEWH_LADDER := 108 100 96 90 84 80 72 60
 ifdef VIEWH
 ifeq ($(filter $(VIEWH),$(VIEWH_LADDER)),)

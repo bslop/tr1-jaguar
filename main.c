@@ -47,6 +47,9 @@ __attribute__((used, noinline)) void pad_main_probe(void)
 #if defined(ENTITIES) && defined(DOORTEX)
 #include "mrt_door.h"       /* door/lever atlas UV rects (MRT_DOORPATCH) */
 #include "mrt_pick.h"       /* medikit SPRITE atlas rects (MRT_PICKPATCH) */
+#ifdef GUNS
+#include "mrt_gun.h"        /* pistol HANDS (MRT_GUNPATCH): model 1 mesh 10/13 */
+#endif
 #endif
 #if defined(ENTITIES) && defined(ENEMIES)
 #include "mrt_bat.h"        /* bat model: posed fly-cycle frames + faces */
@@ -1266,6 +1269,19 @@ static int g_lp_cull;                            /* faces culled this frame    *
  * different GPU room draw (pose ~60ms > one room's ~40ms of GPU time).
  * Persistent state carries the matrix stack between parts. */
 static SkMat ps_m;                    /* current matrix across parts        */
+#ifdef GUNS
+/* GUNS: the pistols are LARA_PISTOLS' hand meshes (10 = right, 13 = left) hung
+   off the hand matrices the skinner ALREADY computes, so her skin, her face
+   grouping and her baked LPLANES table are all untouched - the alternative was
+   swapping the flat vertex array and re-deriving every one of them.
+   Captured during the pose walk; g_gunT carries the outer placement the vertex
+   loop applies (heading, sector origin, floor) so the gun lands in the same
+   world space her hand does. */
+static SkMat  g_handm[2];
+static int    g_gunT[7];          /* laC,laS,rx0,rz0,base_y,offX,offZ */
+static int    g_gunok;            /* both hands captured this frame   */
+static int    g_guns;             /* pistols drawn                    */
+#endif
 static int   ps_sp;                   /* matrix stack depth across parts    */
 static uint16_t *ps_w;                /* vert write cursor across parts     */
 static int32_t ps_mdepth[16]; static int ps_morder[16];
@@ -1275,6 +1291,11 @@ static void build_lara_part(uint8_t *buf, int atlasW, int m0, int m1)
     int offX = g_lax >> 8, offZ = g_laz >> 8;
     int rx0 = g_lax & 255, rz0 = g_laz & 255;
     int base_y = g_lay + LARA_FEET;
+#ifdef GUNS
+    g_gunT[0]=laC; g_gunT[1]=laS; g_gunT[2]=rx0; g_gunT[3]=rz0;
+    g_gunT[4]=base_y; g_gunT[5]=offX; g_gunT[6]=offZ;
+    if (m1 >= 14) g_gunok = 1;      /* meshes 10 and 13 have been posed */
+#endif
     const uint8_t *fr   = g_sk_frames + g_lframe * g_sk_framestride;
     const uint8_t *ang  = fr + 6;                          /* current-frame angles */
     const uint8_t *rfr  = g_sk_frames + g_anim_start * g_sk_framestride;
@@ -1323,6 +1344,10 @@ static void build_lara_part(uint8_t *buf, int atlasW, int m0, int m1)
             sk_translate(&m, nd[1], nd[2], nd[3]);
         }
         sk_rot_yxz(&m, a3[0], a3[1], a3[2]);
+#ifdef GUNS
+        /* m IS this mesh's matrix at this point - one compare per mesh */
+        if (i == 10) g_handm[0] = m; else if (i == 13) g_handm[1] = m;
+#endif
 #ifdef LPLANES
         /* camera -> this mesh's local space: undo the mesh matrix (R is
          * orthonormal, so R^T is its inverse) after undoing Lara's heading. */
@@ -2557,6 +2582,52 @@ static int build_ent_sprite(uint8_t *buf, int atlasW, int e)
     w[10]=(uint16_t)u0; w[11]=(uint16_t)v1;
     return 0;
 }
+
+#ifdef GUNS
+/* One pistol hand as a standalone blob, placed by the captured hand matrix.
+   ☠️ The transform MUST mirror build_lara_part's vertex loop exactly - mesh
+   matrix, then heading, then sector origin and floor - or the gun swims
+   relative to the arm it is supposed to be attached to. */
+static void build_gun_hand(uint8_t *buf, int atlasW, int hand)
+{
+    const SkMat *mm = &g_handm[hand];
+    const short (*gv)[3]        = hand ? MRT_GUNL_v   : MRT_GUNR_v;
+    const unsigned short (*gq)[4]  = hand ? MRT_GUNL_q   : MRT_GUNR_q;
+    const unsigned short (*guv)[8] = hand ? MRT_GUNL_quv : MRT_GUNR_quv;
+    int nv = hand ? MRT_GUNL_VCOUNT : MRT_GUNR_VCOUNT;
+    int nq = hand ? MRT_GUNL_QCOUNT : MRT_GUNR_QCOUNT;
+    int laC=g_gunT[0], laS=g_gunT[1], rx0=g_gunT[2], rz0=g_gunT[3];
+    int base_y=g_gunT[4], offX=g_gunT[5], offZ=g_gunT[6];
+    uint16_t *h = (uint16_t *)buf, *w; int i, k;
+    h[0]=(uint16_t)nv; h[1]=(uint16_t)nq; h[2]=0;
+    h[3]=(uint16_t)atlasW; h[4]=(uint16_t)g_ltx_atH;
+    h[5]=(uint16_t)offX; h[6]=0; h[7]=(uint16_t)offZ;
+    w = (uint16_t *)(buf + 16);
+    for (i = 0; i < nv; i++) {
+        int lx=gv[i][0], ly=gv[i][1], lz=gv[i][2];
+        int mx=mm->t[0]+((mul16(mm->R[0][0],lx)+mul16(mm->R[0][1],ly)+mul16(mm->R[0][2],lz))>>12);
+        int my=mm->t[1]+((mul16(mm->R[1][0],lx)+mul16(mm->R[1][1],ly)+mul16(mm->R[1][2],lz))>>12);
+        int mz=mm->t[2]+((mul16(mm->R[2][0],lx)+mul16(mm->R[2][1],ly)+mul16(mm->R[2][2],lz))>>12);
+        w[0]=(uint16_t)(int16_t)(((mul16(mx,laC)+mul16(mz,laS))>>14)+rx0);
+        w[1]=(uint16_t)(int16_t)(base_y+my);
+        w[2]=(uint16_t)(int16_t)(((mul16(-mx,laS)+mul16(mz,laC))>>14)+rz0);
+        w[3]=255; w += 4;
+    }
+    for (i = 0; i < nq; i++) {
+        EMIT_PLANE(w);
+        w[0]=gq[i][0]; w[1]=gq[i][1]; w[2]=gq[i][2]; w[3]=gq[i][3];
+        for (k = 0; k < 8; k++) w[4+k]=guv[i][k];
+        w += 12;
+    }
+}
+/* ☠️ 512 WAS AN OVERFLOW, and it wrote past the array into whatever followed.
+   Header 16 + verts 24*8 = 192 + faces 17*(12 plane + 24 record) = 612 -> 820.
+   The first silicon roll drew NOTHING and the frame diff was indistinguishable
+   from capture noise (1.32 against a 1.40 noise floor), which is exactly what
+   a smashed blob looks like from outside. Size it from the real counts. */
+#define GUN_BLOB_SZ (16 + 24*8 + 17*(QREC + LPLANE_PREFIX*2) + 64)
+static uint8_t ent_gun_blob[2][GUN_BLOB_SZ] __attribute__((aligned(8)));
+#endif
 
 static void build_ent_pickup(uint8_t *buf, int atlasW, int e)
 {
@@ -7447,6 +7518,18 @@ bootvid_entry:
                  way she came, as in the original. */
               { static uint32_t rprev;
                 uint32_t redge = pad & ~rprev; rprev = pad;
+#ifdef GUNS
+                /* PAD_Z: draw / holster. ☠️ Rising edge only - a level check
+                   would flip her every frame the button is down. */
+                if (redge & PAD_Z) { g_guns = !g_guns; sfx_play(1, SFX_PISTOL); }
+#ifdef GUNDIAG
+                /* DIAGNOSTIC: border GREEN while the pistols are meant to be
+                   out. Separates "the toggle never fired" from "the toggle
+                   fired and the blob did not draw" - three fixes in a row were
+                   aimed at the render side on the assumption the input worked. */
+                *(volatile uint16_t *)0xF00058u = g_guns ? 0x003E : 0x0000;
+#endif
+#endif
                 if ((redge & (PAD_Y|PAD_PAUSE)) && !g_rollt && !g_vault
                     && !g_swim && g_lay >= g_lafloor - 4)
                     g_rollt = ROLL_TICKS; }
@@ -9495,6 +9578,27 @@ bootvid_entry:
                       displist[1+dn*4+1] = (0u<<16) | 319u;
                       displist[1+dn*4+2] = (0u<<16) | (uint32_t)(VIEW_H-1);
                       displist[1+dn*4+3] = 0;        /* Tom self-transform */
+#ifdef GUNS
+                      /* ☠️ THE PISTOLS GO IN THE DISPLIST, NOT THE DIRECT
+                         gpu_geotex CALL. Under PIPELINE the whole frame is one
+                         dispatch and that direct call is the FALLBACK path -
+                         drawing there rendered nothing at all, and the frame
+                         diff sat exactly on the capture noise floor (1.17
+                         against 1.25), which is indistinguishable from "the
+                         feature is off". Follow the blob that is known to
+                         appear. */
+                      if (g_guns && g_gunok) {
+                          int gh;
+                          for (gh = 0; gh < 2 && dn < 37; gh++) {
+                              dn++;
+                              build_gun_hand(ent_gun_blob[gh], atlasW, gh);
+                              displist[1+dn*4+0] = (uint32_t)ent_gun_blob[gh];
+                              displist[1+dn*4+1] = (0u<<16) | 319u;
+                              displist[1+dn*4+2] = (0u<<16) | (uint32_t)(VIEW_H-1);
+                              displist[1+dn*4+3] = 0;
+                          }
+                      }
+#endif
                       displist[0] = dn + 1;
                       lara_disp = 1;
 #ifdef NOLARA
@@ -9601,6 +9705,19 @@ bootvid_entry:
 #endif
                     gpu_geotex_setclip(0, 319, 0, VIEW_H-1);
                     gpu_geotex(lara_blob, fb, camblk, S_atlas, (uint32_t)atlasW);
+#ifdef GUNS
+                    /* the pistols ride the hand matrices captured during her
+                       pose, so they are drawn straight after her with the same
+                       clip and camera - no extra state, no skin changes. */
+                    if (g_guns && g_gunok) {
+                        int gh;
+                        for (gh = 0; gh < 2; gh++) {
+                            build_gun_hand(ent_gun_blob[gh], atlasW, gh);
+                            gpu_geotex(ent_gun_blob[gh], fb, camblk,
+                                       S_atlas, (uint32_t)atlasW);
+                        }
+                    }
+#endif
                 }
                 HB(13);  /* stage 13: props+Lara done */
             }
