@@ -746,8 +746,33 @@ $(BUILD)/%.o: %.c | $(BUILD)
 # jcc68k's ~1.9x text + __mulsi3 for non-power-of-2 scaling (y*320) is a
 # per-frame tax there. Flips when cobweb's register-allocator follow-up
 # lands. (Their own end-to-end verification was also 7-of-8-except-main.)
+# JCCMAIN=1: build main.c with COBWEB's jcc68k instead of gcc.
+# ☠️ The pin below says "for PERFORMANCE ... the game crawls", and that was
+# true when jcc68k emitted ~1.9x gcc's text on the per-frame path. IT NO LONGER
+# DOES: after the address-mode/peephole work (cobweb 9ed8042) main.c measures
+# 97,392 B of .text against gcc's 98,689 - 0.99x, i.e. slightly SMALLER.
+# ☠️☠️☠️ AND IT STILL DOES NOT WORK - THE SIZE WAS THE WRONG MEASUREMENT.
+# The jcc68k build compiles, links, and comes out 1% SMALLER than gcc, and then
+# CRASHES: run in jsim it executes 936,874 ILLEGAL INSTRUCTIONS with the 68k PC
+# off at 0x1638E2 and 2 DSP divide-by-zeros, against 0 illegal / PC 0x00E2AC
+# for the identical gcc build (2026-08-16, cobweb 9ed8042). So the pin STAYS,
+# and the reason recorded above ("~1.9x text") is now the wrong reason: the gap
+# is closed, correctness is not.
+# ★★★★★ Size, and even a clean link, say nothing about whether code RUNS. The
+# emulator's illegal-instruction counter answered in one shot what a byte
+# comparison could not.
+# ⬜ This flag is kept as the REPRODUCTION for cobweb: build with JCCMAIN=1 and
+# run the ROM in jagemu to see it. Narrowing it means bisecting a 33,587-line
+# asm output - start by diffing which TUs jcc68k already passes (7 of 9) for
+# the construct main.c uses that they do not.
+ifdef JCCMAIN
+$(BUILD)/main.o: main.c | $(BUILD)
+	$(JCC68K) $< -o $(BUILD)/main.jcc.s -I. $(filter -D%,$(CFLAGS))
+	$(JAS) $(BUILD)/main.jcc.s --68000 --elf-obj -o $@
+else
 $(BUILD)/main.o: main.c | $(BUILD)
 	$(CC) $(CFLAGS) $(MAINCFLAGS) -c $< -o $@
+endif
 # joypad.c/gd_input.c pinned to gcc: controls went DEAD on hardware with
 # them on jcc68k (user 2026-07-20; jagemu's injected input can't see the
 # real strobe-scan timing). Suspect MMIO access width/ordering in the pad

@@ -4658,7 +4658,14 @@ int main(void)
            Page 0 = title art (New Game), page 1 = mansion art (Lara's Home).
            LEFT/RIGHT flips pages passport-style; any fire button selects.
            (Lara's Home boots the caves until GYM.PSX is extracted.) */
-        { extern const uint8_t  title_img[],  gymload_img[];
+        /* ☠️ gymload_img IS NOT LINKED. The 76,800-byte loading IMAGES were
+           dropped to fit the 2MB budget and now stream from the card
+           (GYMLOAD.DAT); only the palettes stayed resident. This extern and
+           the `(void)` below were vestigial, and gcc's dead-code elimination
+           hid the dangling reference - building main.c with jcc68k, which does
+           not fold that branch, failed the LINK on an undefined gymload_img.
+           A symbol that does not exist should not be declared. */
+        { extern const uint8_t  title_img[];
           extern const uint16_t title_pal[],  gymload_pal[];
           extern const uint8_t  pass_geom[], pass_atlas[];
           /* INV_PASSPORT (model 71), the OPENED spread. Model 81 (closed) is
@@ -5700,7 +5707,7 @@ bootvid_entry:
                   const uint8_t *simg = title_img;   /* art constant; the
                                           3D relic (passport/photo) IS the page */
                   int i2, d, xx, yy;
-                  (void)gymload_img; (void)gymload_pal;
+                  (void)gymload_pal;
                   if (shown != page)
                       video_set_clut(title_pal);
 #ifdef LOWRES
