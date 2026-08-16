@@ -2237,6 +2237,7 @@ def main():
     if len(col_indices) > 30:
         print("!! more than 30 distinct colored indices:", col_indices)
     col_pal={}                 # colored index -> palette slot
+    _spill=[]
     print("lara colored-face tones (idx->RGB16):", end=" ")
     # LARA_COLRAMP (2026-07-26): under RAMP_PAL, point each flat tone at the
     # nearest RAMP BASE (bi*RAMP_M) instead of a reserved flat slot 246..253.
@@ -2253,11 +2254,34 @@ def main():
                    key=lambda i:(tr-_ramp_bases[i][0])**2+(tg-_ramp_bases[i][1])**2
                                +(tb-_ramp_bases[i][2])**2)
             col_pal[ci]=bi*RAMP_M
-        else:
+        elif LARA_COL_BASE+j <= 253:
             slot=LARA_COL_BASE+j
             palette[slot]=tone; col_pal[ci]=slot
+        else:
+            # ☠️ THE RESERVED FLAT BAND IS ONLY 8 SLOTS (246..253; 254/255 are
+            # the UI black/white). The Caves has exactly 8 colour indices and
+            # fits; LARA'S HOME HAS 13 and walked straight off the end of the
+            # 256-entry palette - `IndexError: list assignment index out of
+            # range` - which is why the mansion could not be extracted at all
+            # under the full recipe, and why the container had to fall back to
+            # a reduced flag set just to emit its headers.
+            # Past the band, point the tone at the NEAREST COLOUR ALREADY IN
+            # THE PALETTE instead of demanding a new slot. Under RAMP_PAL that
+            # lands on a ramp entry, so a runtime shade k still steps down the
+            # ramp rather than walking into the UI colours - the same reasoning
+            # as LARA_COLRAMP above, applied only where it is forced.
+            tr,tg,tb=((tone>>11)&31,(tone>>1)&31,(tone>>6)&31)
+            def _d(pi):
+                c=palette[pi]
+                return (tr-((c>>11)&31))**2+(tg-((c>>1)&31))**2+(tb-((c>>6)&31))**2
+            col_pal[ci]=min(range(254), key=_d)
+            _spill.append(ci)
         print("%d:%04x%s" % (ci, tone, "->ramp%d"%(col_pal[ci]//RAMP_M) if _COLRAMP else ""), end=" ")
     print()
+    if _spill:
+        print("  NOTE: %d colour index(es) past the %d-slot flat band matched to "
+              "the nearest palette entry instead: %s"
+              % (len(_spill), 254-LARA_COL_BASE, _spill))
     # LARA_TONEAUDIT=1: for each flat-colour index, dump the objtex source rect
     # and a histogram of the texels inside it, split opaque/transparent.  Index
     # 8 resolved to 0x0000 and painted her hips black; this says whether the
