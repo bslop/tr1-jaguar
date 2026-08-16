@@ -65,8 +65,18 @@ end)
     # ☠️ THE HANDOFF NOTE IS THE DELIVERABLE. A run that advanced the counter
     # without updating AUTORUN_STATE.md has thrown away everything it learned
     # the moment the context ends.
-    if [ -z "$(git -C "$HERE" status --porcelain -- AUTORUN_STATE.md)" ]; then
-        echo "☠️ REFUSING: AUTORUN_STATE.md was not updated this run."
+    #
+    # ☠️ COMPARE CONTENT, NOT TREE STATE. The first version tested `git status
+    # --porcelain -- AUTORUN_STATE.md` and refused a run that HAD updated the
+    # file but had already committed it mid-run - the tree was clean, so the
+    # check saw "untouched". A guard that misfires on correct behaviour gets
+    # switched off, which is worse than no guard. Hash the file against the
+    # value stamped at the end of the previous run instead: exact, and immune
+    # to when (or whether) the change was committed.
+    STAMP="$HERE/tools/.lastrun"
+    NOWHASH=$(sha256sum "$STATE" 2>/dev/null | cut -d" " -f1)
+    if [ -f "$STAMP" ] && [ "$NOWHASH" = "$(cat "$STAMP" 2>/dev/null)" ]; then
+        echo "☠️ REFUSING: AUTORUN_STATE.md is byte-identical to last run."
         echo "   The next context starts from that file and nothing else."
         echo "   Update 'NEXT STEP' and 'WHAT CHANGED', then re-run."
         exit 1
@@ -74,11 +84,12 @@ end)
 
     NEXT=$((N + 1))
     sed -i "s/^RUN: .*/RUN: $NEXT/" "$STATE"
+    sha256sum "$STATE" | cut -d" " -f1 > "$HERE/tools/.lastrun"
 
     # Commit BY PATH. Never `git add -A` — this tree carries disc-derived
     # assets that must not be committed (see .gitignore) and generated headers.
     git -C "$HERE" add -u 2>/dev/null
-    git -C "$HERE" add AUTORUN_STATE.md 2>/dev/null
+    git -C "$HERE" add AUTORUN_STATE.md tools/.lastrun 2>/dev/null
     if git -C "$HERE" diff --cached --quiet; then
         echo "run $N: nothing to commit"
     else

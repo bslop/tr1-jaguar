@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 1
+RUN: 2
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
