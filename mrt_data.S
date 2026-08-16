@@ -177,9 +177,18 @@ gym_pal:
 gym_lara:
 	.incbin "gym_lara.bin"
 	.balign 8
+/* ☠️☠️ gym_lskin USED TO .incbin ITS OWN 110,016 B COPY - AND IT SAT OUTSIDE
+ * THE GYMSD #endif, so every shipping ROM carried it even though GYMSD stubs
+ * out the rest of the mansion. It is a pure duplicate: _lskin is "skeleton +
+ * ALL-animation joint angles" (tr2jag_multiroom.py), which is Lara's SKELETON
+ * and is therefore level-independent - a freshly extracted gym_lskin.bin is
+ * BYTE-IDENTICAL to mrt_lskin.bin, and stays identical across TEXSCALE 2 vs 4
+ * (no atlas dependence at all). The per-level binding that DOES differ lives
+ * in gym_lara.bin, which is still its own blob below.
+ * build_cof.sh cmp's the two files and FAILS THE BUILD if they ever diverge,
+ * so this alias cannot silently render Lara wrong in the mansion. */
 	.globl gym_lskin
-gym_lskin:
-	.incbin "gym_lskin.bin"
+	.set gym_lskin, mrt_lskin
 	.section .note.GNU-stack,"",%progbits
 
 /* jcc68k keeps the statically-dead single-room data references that

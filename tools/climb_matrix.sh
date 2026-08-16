@@ -89,6 +89,31 @@ grab() {  # grab <out.png>  - a short recording, last frame (single grabs race t
   ffmpeg -hide_banner -loglevel error -sseof -2 -i "$OUT/g.mkv" -frames:v 1 -y "$1" 2>/dev/null
 }
 
+# ☠️☠️☠️ THE WHOLE MEASURE CYCLE IS **ONE** ACQUISITION - INCLUDING THE WAITS.
+# This loop used to take FIVE separate leases per pad: power-cycle (lease),
+# enumeration wait (UNLOCKED), upload (lease), 14s settle (UNLOCKED), grab
+# (lease). PROTOCOL.md rule 2 forbids exactly that, and it is the same bug that
+# already shipped in jag_quake/scripts/flash.sh - here it was worse, because it
+# sat inside a per-class loop that yanks the SHARED MAINS unattended on every
+# pass. Two failures, both of which look like somebody ELSE's bug:
+#   - another project mid-capture gets power-cycled out from under it, and
+#     reads the result as a boot failure in THEIR code;
+#   - our own grab, in the unlocked 14s window, can photograph ANOTHER
+#     project's frame - and a capture that belongs to someone else is worse
+#     than a failed capture, because it looks like a result.
+# Caught by jag_bubsy3d reading this file, 2026-08-16. The build stays OUTSIDE
+# the lock (it is minutes long and touches no hardware); jaghw is re-entrant
+# via JAGHW_HELD, so grab()'s own inner lease nests instead of deadlocking.
+cycle_one() {   # cycle_one <rom> <out.png>  - power, upload, settle, capture
+  (cd "$ROOT" && ./jag_gd.sh power cycle >/dev/null 2>&1)
+  until lsusb 2>/dev/null | grep -qi "03eb:800e"; do sleep 3; done
+  (cd "$ROOT" && ./jag_gd.sh upload "$1" >/dev/null 2>&1 </dev/null)
+  sleep 14
+  grab "$2"
+}
+export -f cycle_one grab
+export ROOT JAGHW OUT
+
 printf '%-10s %-6s %-8s %-8s %s\n' CLASS RISE BEFORE AFTER RESULT | tee "$OUT/report.txt"
 # ☠️ READ THE CENSUS INTO AN ARRAY FIRST, DO NOT PIPE IT INTO THE LOOP. The
 # build, the upload and drive.sh all read stdin, and inside a `... | while read`
@@ -107,11 +132,8 @@ for LINE in "${SPOTS[@]}"; do
     LIT=""
     for P in 0 136 272 408 544 816; do
         R="$HERE/build_cm_$CLS/cm_${CLS}_p$P.cof"; [ -f "$R" ] || continue
-        (cd "$ROOT" && ./jag_gd.sh power cycle >/dev/null 2>&1)
-        until lsusb 2>/dev/null | grep -qi "03eb:800e"; do sleep 3; done
-        (cd "$ROOT" && ./jag_gd.sh upload "$R" >/dev/null 2>&1 </dev/null)
-        sleep 14
-        grab "$OUT/${CLS}_boot.png"
+        "$JAGHW" run --lease 300 -- \
+            bash -c 'cycle_one "$1" "$2"' _ "$R" "$OUT/${CLS}_boot.png" </dev/null
         [ "$(verdict "$OUT/${CLS}_boot.png")" -ge 0 ] 2>/dev/null && { LIT=$P; break; }
     done
     if [ -z "$LIT" ]; then

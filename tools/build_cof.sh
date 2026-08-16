@@ -164,6 +164,25 @@ case "$BUILD_FLAGS" in
   *) say "Extracting Lara's Home (Mansion)"
      env $MRTENV TRLEVEL="$PSX/GYM.PSX" TRPREFIX=gym python3 tools/tr2jag_multiroom.py ;;
 esac
+# ☠️ GUARD FOR THE gym_lskin ALIAS. mrt_data.S no longer .incbin's a second
+# copy of Lara's skeleton for the mansion - gym_lskin is a .set alias onto
+# mrt_lskin, which saves 110,016 B in EVERY ROM (the old copy sat outside the
+# GYMSD #endif, so even builds that ship no mansion carried it). That alias is
+# only correct while the two extractions agree. They do today, by construction:
+# _lskin is skeleton + all-animation joint angles, with no atlas dependence.
+# If a future extractor change makes them diverge, Lara must get her own blob
+# back - so FAIL LOUDLY here rather than render her wrong in Lara's Home.
+if [ -f gym_lskin.bin ] && [ -f mrt_lskin.bin ]; then
+    if cmp -s mrt_lskin.bin gym_lskin.bin; then
+        echo "   gym_lskin == mrt_lskin (alias valid, saves $(stat -c%s gym_lskin.bin) B)"
+    else
+        echo "☠️ BUILD STOPPED: gym_lskin.bin and mrt_lskin.bin DIVERGED."
+        echo "   mrt_data.S aliases gym_lskin onto mrt_lskin; that is now WRONG."
+        echo "   Restore the .incbin for gym_lskin in mrt_data.S before shipping."
+        exit 1
+    fi
+fi
+
 say "Title + loading backgrounds"
 TR_DELDATA="$ASSETS" python3 tools/gen_titlebg.py
 say "Title passport + Lara's-Home photo"

@@ -1035,6 +1035,22 @@ CFLAGS   += -DTRAPFLOOR
 CXXFLAGS += -DTRAPFLOOR
 endif
 
+# GYMTEST=1 / CAVETEST=1: boot straight into Lara's Home / the Caves, skipping
+# the title ring. ☠️☠️ BOTH #ifdefs HAVE EXISTED IN main.c FOR AGES AND NEITHER
+# WAS EVER PLUMBED HERE - so -DGYMTEST never reached the compiler and a GYMTEST
+# arm silently rendered THE CAVES. It was caught by diffing the arm against a
+# caves build and getting ZERO differing pixels out of 25,600. Same class of
+# bug as ENEMIES, which was unplumbed for months: never test "is X wired" by
+# grepping for the flag NAME - check that it reaches the compile line.
+ifdef GYMTEST
+CFLAGS   += -DGYMTEST
+CXXFLAGS += -DGYMTEST
+endif
+ifdef CAVETEST
+CFLAGS   += -DCAVETEST
+CXXFLAGS += -DCAVETEST
+endif
+
 # GYMSD=1: leave Lara's Home OUT of the image (it belongs on the card).
 # ☠️ 316,336 bytes of gym_* blobs were linked into every CAVES ROM for a level
 # that can never be resident at the same time as the caves. Selecting Lara's

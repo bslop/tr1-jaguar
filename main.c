@@ -2463,11 +2463,9 @@ static int ent_is_enemy(int t) { return t==7 || t==8 || t==9; }
    swatch". Every enemy used to sample cell 1, so a bat, a wolf and a bear were
    the SAME grey silhouette. Spread them across the strip so the three read
    apart at a glance: bat darkest, bear dark brown, wolf lightest.
-   ⬜ This is still FLAT COLOUR, not texture. The extractor already keeps each
-   enemy face's real tex id ("Faces keep their tex id") but DISCARDS it when it
-   writes mrt_wolf.h - only vertex indices are emitted. Real enemy skins =
-   emit those ids + get their objtex into the atlas (the MRT_DOORPATCH trick,
-   but for many textures). */
+   ✅ DONE for all three: MRT_ENEMYTEX packs each enemy's real objtex into
+   the atlas (the MRT_DOORPATCH trick, many textures) and the models carry UVs.
+   The tone swatch is now only the ENEMYTEX-off fallback. */
 #define ENT_TONE_BAT   0
 #define ENT_TONE_BEAR  1
 #define ENT_TONE_WOLF  3
@@ -2533,14 +2531,16 @@ static void build_ent_bat(uint8_t *buf, int atlasW, int e, int frame)
                     MRT_BAT_verts[frame], MRT_BAT_VCOUNT,
                     MRT_BAT_quads, MRT_BAT_QCOUNT,
                     MRT_BAT_tris, MRT_BAT_TCOUNT, ENT_TONE_BAT,
-                    /* ☠️ 0,0 = use the tone swatch. The shipping skins are
-                       WOLF ONLY: the bat's quv/tuv are 100% 0xFFFF (checked, every
-                       face flat), so passing them changes NOTHING visually and
-                       costs 560 bytes of ROM in tables that say "no texture"
-                       41 times. The ROM has ZERO margin with ENEMYTEX on, so
-                       that is real money. Re-point these the moment the bat
-                       actually gets skinned. */
+                    /* ✅ RE-POINTED. This said "the shipping skins are WOLF
+                       ONLY: the bat's quv/tuv are 100% 0xFFFF", and it was true -
+                       but only because MRT_ENEMYTEX_MODELS defaulted to "wolf"
+                       on a budget note GYMSD had already made obsolete. The
+                       bat is skinned now, so these tables carry real UVs. */
+                    #ifdef ENEMYTEX
+                    MRT_BAT_quv, MRT_BAT_tuv);
+                    #else
                     0, 0);
+                    #endif
 }
 static void build_ent_wolf(uint8_t *buf, int atlasW, int e, int frame)
 {
@@ -2560,14 +2560,16 @@ static void build_ent_bear(uint8_t *buf, int atlasW, int e, int frame)
                     MRT_BEAR_verts[frame], MRT_BEAR_VCOUNT,
                     MRT_BEAR_quads, MRT_BEAR_QCOUNT,
                     MRT_BEAR_tris, MRT_BEAR_TCOUNT, ENT_TONE_BEAR,
-                    /* ☠️ 0,0 = use the tone swatch. The shipping skins are
-                       WOLF ONLY: the bear's quv/tuv are 100% 0xFFFF (checked, every
-                       face flat), so passing them changes NOTHING visually and
-                       costs 3648 bytes of ROM in tables that say "no texture"
-                       261 times. The ROM has ZERO margin with ENEMYTEX on, so
-                       that is real money. Re-point these the moment the bear
-                       actually gets skinned. */
+                    /* ✅ RE-POINTED. This said "the shipping skins are WOLF
+                       ONLY: the bear's quv/tuv are 100% 0xFFFF", and it was true -
+                       but only because MRT_ENEMYTEX_MODELS defaulted to "wolf"
+                       on a budget note GYMSD had already made obsolete. The
+                       bear is skinned now, so these tables carry real UVs. */
+                    #ifdef ENEMYTEX
+                    MRT_BEAR_quv, MRT_BEAR_tuv);
+                    #else
                     0, 0);
+                    #endif
 }
 #endif
 

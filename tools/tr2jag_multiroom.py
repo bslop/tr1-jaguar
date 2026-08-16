@@ -1660,11 +1660,27 @@ def main():
         # LINKED INTO THE ROM, so every skinned model is BSS budget: all three
         # cost ~82KB and overflow the 0x1FC000 guard. Default to the wolf - it
         # is the enemy you actually meet in the Caves (6 of them; one bear).
-        _want=set(os.environ.get("MRT_ENEMYTEX_MODELS","wolf").split(","))
+        # ☠️ THIS DEFAULTED TO "wolf" ALONE, AND THE REASON EXPIRED. The note
+        # above says all three "cost ~82KB and overflow the 0x1FC000 guard" -
+        # written before GYMSD freed 311,920 B, and before MRT_ENEMYTEX_STEP=2
+        # half-res packing. Measured now: all three cost +22,528 B of atlas
+        # (345,600 -> 368,128) and the ROM builds on every pad.
+        # It mattered: the BAT was the most numerous enemy in the Caves (7 of
+        # them, against 6 wolves and 1 bear) and rendered with NO TEXTURE AT
+        # ALL - 0 of 41 faces - which is what "the bats aren't populated" looks
+        # like. Bat now has all 5 textures TR1 gives it; bear 123 of 129.
+        _want=set(os.environ.get("MRT_ENEMYTEX_MODELS","wolf,bat,bear").split(","))
         tids=set()
         for _nm,e in sorted(ens.items()):
+            # ☠️ THIS USED TO REQUIRE tex>=256, DROPPING EVERY COLOURED FACE.
+            # In TR1 a face with tex<256 is still an objtex entry - a degenerate
+            # 1x1 rect whose single texel IS the colour - so it packs exactly
+            # like a skin, just tiny. Excluding them is why the BAT stayed a
+            # grey silhouette even after it was "skinned": 34 of its 41 faces
+            # are coloured, not textured (wolf 137/251, bear 20/261). The bat
+            # was the enemy that texturing alone helped LEAST.
             t2=set(tex for (v,tex) in e['quads']+e['tris']
-                   if tex>=256 and tex<len(objtex))
+                   if tex<len(objtex))
             print("   %-5s %3d distinct textures%s" %
                   (_nm,len(t2)," (skinned)" if _nm in _want else " (flat)"))
             if _nm in _want: tids |= t2
@@ -1694,6 +1710,10 @@ def main():
                     u0,v0,u1,v1=a0,b0,a1,b1
                     uv=uv[:3]
             bw=(u1-u0)//ENTEX_STEP+1; bh=(v1-v0)//ENTEX_STEP+1
+            # a 1x1 colour rect packs as a 1px cell; give every cell at least
+            # 2x2 so UV interpolation has room to land inside it.
+            if bw<2: bw=2
+            if bh<2: bh=2
             # ☠️ SANITY CLAMP. A mesh skin patch is 16x16 or so; a handful of
             # objtex in this set span most of a 256x256 tile page (216x256),
             # which is not a wolf's fur - including them blew the atlas up by
@@ -1701,7 +1721,7 @@ def main():
             # 64x64 is not a character skin, so drop it to the flat tone.
             if bw>64 or bh>64:
                 _skip.append((tid,bw,bh)); continue
-            boxes.append((bh,bw,tid,u0,v0))
+            boxes.append((bh,bw,tid,u0,v0,u1,v1))
         boxes.sort(reverse=True)
         print("ENEMYTEX: %d skinnable, %d oversized rejected (>64px)"
               % (len(boxes), len(_skip)))
@@ -1727,12 +1747,12 @@ def main():
                 print("   %-5s %d of %d faces colored" % (nm,c,len(e['quads'])+len(e['tris'])))
             sys.exit(0)
         import collections as _c
-        _h=_c.Counter((h,w) for h,w,_t,_u,_v in boxes)
+        _h=_c.Counter((h,w) for h,w,_t,_u,_v,_U,_V in boxes)
         print("ENEMYTEX box sizes (hxw -> count):",
               sorted(_h.items(), key=lambda kv:-kv[0][0]*kv[0][1])[:10])
-        print("ENEMYTEX total texels:", sum(h*w for h,w,_t,_u,_v in boxes))
+        print("ENEMYTEX total texels:", sum(h*w for h,w,_t,_u,_v,_U,_V in boxes))
         px=0; py=H0; shelf=0
-        for h,w,tid,u0,v0 in boxes:
+        for h,w,tid,u0,v0,u1,v1 in boxes:
             if px+w>AW: px=0; py+=shelf; shelf=0
             if py+h>len(atl)//AW: atl+=bytearray(AW*(py+h-len(atl)//AW))
             o=objtex[tid]; ts=o.get('ts',1)
@@ -1743,8 +1763,15 @@ def main():
                     # than the whole image has spare. Sampling every OTHER texel
                     # quarters that to ~13KB. A wolf is a few dozen pixels tall
                     # on a 320x120 screen, so the detail was never visible.
-                    sx = (u0 + xx*ENTEX_STEP) * ts
-                    sy = (v0 + yy*ENTEX_STEP) * ts
+                    # ☠️ CLAMP INTO THE RECT. Boxes are padded (min 2x2), and
+                    # a padded cell stepping past its own rect samples the
+                    # NEIGHBOURING texture's texels - which for a 1x1 colour
+                    # face means the cell is the wrong colour entirely.
+                    _sx = u0 + xx*ENTEX_STEP; _sy = v0 + yy*ENTEX_STEP
+                    if _sx > u1: _sx = u1
+                    if _sy > v1: _sy = v1
+                    sx = _sx * ts
+                    sy = _sy * ts
                     r5,g5,b5,a=clut_rgb555(o['clut'],
                         tile_nibble(o['tile'], sx, sy))
                     atl[(py+yy)*AW+px+xx]=nearest(r5,g5,b5)
