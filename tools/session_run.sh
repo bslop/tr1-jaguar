@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# session_run.sh — the per-run ritual for jag_openlara.
+#
+#   tools/session_run.sh start    peek at the world before doing work
+#   tools/session_run.sh end "<one-line summary of what this run did>"
+#                               commit + push + advance the run counter
+#   tools/session_run.sh status   where am I, is a report due
+#
+# WHY THIS EXISTS (user, 2026-08-16): "Create a way to continue running
+# immediately after the context is complete. Then, every 25 runs, you show me
+# exactly where you're at with your progress... Each run, you commit and push
+# to your repo."
+#
+# The hard part is not the counter, it is that a context ends without warning.
+# Anything a future run needs must be ON DISK, not in the conversation. So
+# `end` refuses to complete quietly if AUTORUN_STATE.md was not touched: the
+# handoff note IS the deliverable, and a run that advanced the counter without
+# updating it has lost whatever it learned.
+set -uo pipefail
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+STATE="$HERE/AUTORUN_STATE.md"
+SHARED="${SHARED:-/home/jvilla/Documents/Git/jaguar-shared}"
+REPORT_EVERY=25
+
+# ☠️ PUSH TO `wip`, NOT `origin`. origin is bslop/tr1-jaguar and it is PUBLIC;
+# pushing there IS the release, which the user has explicitly gated on his own
+# sign-off and wants coordinated with a video. `wip` is bslop/jag_openlara,
+# private, and is what "commit and push to your repo" means here.
+PUSH_REMOTE="${PUSH_REMOTE:-wip}"
+
+runno() { grep -m1 '^RUN:' "$STATE" 2>/dev/null | awk '{print $2}' | tr -cd '0-9'; }
+
+case "${1:-status}" in
+
+start)
+    echo "=== jag_openlara run $(runno) ==="
+    # 1. the oracle. Standing order: cobweb updates change what is POSSIBLE
+    #    here, not just what is buggy, so a stale copy means routing around a
+    #    limitation that no longer exists.
+    "$HERE/tools/cobweb_check.sh" 2>&1 | sed 's/^/  /'
+    # 2. the shared notes. Five sessions write hardware facts into this repo;
+    #    reading it is how we avoid re-measuring what someone already paid for.
+    if git -C "$SHARED" fetch -q origin 2>/dev/null; then
+        n=$(git -C "$SHARED" rev-list --count HEAD..origin/main 2>/dev/null || echo 0)
+        if [ "${n:-0}" != "0" ]; then
+            echo "  jaguar-shared: $n NEW commit(s) — read before assuming anything"
+            git -C "$SHARED" log --oneline --no-decorate HEAD..origin/main | head -12 | sed 's/^/    /'
+        else
+            echo "  jaguar-shared: up to date"
+        fi
+    else
+        echo "  jaguar-shared: fetch failed (offline?)"
+    fi
+    # 3. who holds the rig. Cheap, read-only, and stops us planning a hardware
+    #    step that is not ours to take.
+    [ -f "$SHARED/hw/jaghw" ] && "$SHARED/hw/jaghw" status 2>/dev/null | head -4 | sed 's/^/  /'
+    echo "  --- next step, from AUTORUN_STATE.md ---"
+    sed -n '/^## NEXT STEP/,/^## /p' "$STATE" 2>/dev/null | head -14 | sed 's/^/  /'
+    ;;
+
+end)
+    SUMMARY="${2:?usage: session_run.sh end \"<what this run did>\"}"
+    N=$(runno); N=${N:-0}
+
+    # ☠️ THE HANDOFF NOTE IS THE DELIVERABLE. A run that advanced the counter
+    # without updating AUTORUN_STATE.md has thrown away everything it learned
+    # the moment the context ends.
+    if [ -z "$(git -C "$HERE" status --porcelain -- AUTORUN_STATE.md)" ]; then
+        echo "☠️ REFUSING: AUTORUN_STATE.md was not updated this run."
+        echo "   The next context starts from that file and nothing else."
+        echo "   Update 'NEXT STEP' and 'WHAT CHANGED', then re-run."
+        exit 1
+    fi
+
+    NEXT=$((N + 1))
+    sed -i "s/^RUN: .*/RUN: $NEXT/" "$STATE"
+
+    # Commit BY PATH. Never `git add -A` — this tree carries disc-derived
+    # assets that must not be committed (see .gitignore) and generated headers.
+    git -C "$HERE" add -u 2>/dev/null
+    git -C "$HERE" add AUTORUN_STATE.md 2>/dev/null
+    if git -C "$HERE" diff --cached --quiet; then
+        echo "run $N: nothing to commit"
+    else
+        git -C "$HERE" commit -q -m "run $N: $SUMMARY" && echo "run $N committed"
+    fi
+    BR=$(git -C "$HERE" branch --show-current)
+    if git -C "$HERE" push -q "$PUSH_REMOTE" "$BR" 2>&1; then
+        echo "run $N pushed to $PUSH_REMOTE/$BR"
+    else
+        echo "☠️ push to $PUSH_REMOTE failed — work is committed locally, not backed up"
+    fi
+
+    if [ $((NEXT % REPORT_EVERY)) -eq 0 ]; then
+        echo
+        echo "════════════════════════════════════════════════════════════"
+        echo "  RUN $NEXT — PROGRESS REPORT IS DUE TO THE USER."
+        echo "  He decides whether the direction is still valid; that is the"
+        echo "  point of the checkpoint, so do not summarise it away."
+        echo "  Show: what shipped, what is blocked, what the next 25 buys."
+        echo "════════════════════════════════════════════════════════════"
+    fi
+    ;;
+
+status)
+    N=$(runno); N=${N:-0}
+    echo "run $N; next report at $(( (N/REPORT_EVERY + 1) * REPORT_EVERY ))"
+    git -C "$HERE" log --oneline -3 | sed 's/^/  /'
+    ;;
+
+*) echo "usage: session_run.sh {start|end \"<summary>\"|status}"; exit 2 ;;
+esac
