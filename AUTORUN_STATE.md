@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 5
+RUN: 6
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,72 +17,71 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**Lara's Home: 68k VECTOR 64 IS OVERWRITTEN WITH `MAGIC_DONE`. Half fixed.**
+**✅ LARA'S HOME NO LONGER CRASHES — she renders. Now make it look right.**
 
-Run 4 found the actual mechanism, proved it, fixed one of two causes, and
-localised the second precisely.
+Run 5 fixed it. Verified on the GYMTEST p0 build:
 
-### What is proven
+    vector 64 = 0x00004158 (vblank_stub, INTACT)   was 0x0A3DD05E
+    illegal   = 0                                   was 1
+    gpu instret at f900 = 249,067,610               was frozen at 908,590
+    filmstrip: Lara stands in the mansion, stable across 900 frames
 
-    mansion  $100 (vector 64) = 0A3DD05E  (MAGIC_DONE)
-             $104 (vector 65) = 0A3D0001  (MAGIC_HELLO)
-             $108/$10C        = 00004054  (exc_catch, untouched)
-    caves    $100             = 00004158  (vblank_stub, INTACT)
+**ROOT CAUSE (closed):** a kick launches **whatever is resident in GPU SRAM**.
+`g_kernel_cur` cached which kernel that was, but `gpu_jvdec_load()` replaced
+SRAM without invalidating it — so `gpu_kernel_select()` skipped the copy and the
+world kick **ran the VIDEO kernel**. The param blocks overlap with different
+meanings: `params[6]` is `atlas_width` (256 = **0x100**) to the world kernel and
+the **mailbox address** to jvdec. So jvdec wrote its magics to `$100`/`$104` =
+68k **vectors 64 and 65**; vector 64 is TOM/VBLANK, the next vertical interrupt
+jumped to `0x0A3DD05E`, and the 68000 died inside the ISR.
 
-The GPU kernel signals completion with `alldone: store r0,(r30)` where **r30 is
-the mailbox pointer**, and `mailbox[1] = MAGIC_HELLO` is stored at `r30+4`. Both
-magics landed on **vectors 64 and 65**, so `r30` was `0x100`. Vector 64 is the
-TOM/VBLANK vector, so the next vertical interrupt "returned" to `0x0A3DD05E` and
-the 68000 died **inside the ISR** — the stack carries TWO exception frames, the
-outer one taken at `cpu_stop_unless`'s `stop #$2000`.
+Fix: `gpu_kernel_ensure()` called after `G_CTRL = 0` in all six kicks
+(`gpu.c`), plus `gpu_jvdec_load()` now invalidates and `gpu_jvdec_done()`
+restores. Also fixed on the way: **every** kick now sets `params[1]` (the
+mailbox pointer) — `gpu_jvdec_kick` reuses that slot as `prevLen` and six kicks
+never restored it. Published as
+`jaguar-shared/techniques/gpu-kernel-residency.md` (d958f35).
 
-★★★★★ This is why the failure looked like a GPU wedge AND like a rendering bug.
-The stripes on screen were `exc_catch`'s crash beacon; the halted GPU was
-`exc_catch`'s own `clr.l 0xF02114`. **Neither symptom was the bug.**
+### What to do next
 
-⬜ **Does this explain the A10 BOOT LOTTERY?** `video_flip_force`'s `VECDIAG`
-probe exists solely to ask "is vector 64 still `vblank_stub`?", and the recorded
-A10 root cause is *"VI never fires"*. A clobbered vector 64 would produce exactly
-that, and would be codegen/layout dependent — i.e. a lottery. **Worth checking on
-a failing caves pad**: peek `$100` on each `PADTEXT` roll. If a black pad shows
-`0A3DD05E`, this bug and the boot lottery are the same bug.
+1. **⬜ THE BIG ONE — is this the A10 BOOT LOTTERY?** The recorded A10 root
+   cause is *"VI never fires"*, and `video_flip_force`'s `VECDIAG` probe exists
+   purely to ask "is vector 64 still `vblank_stub`?". A clobbered vector 64
+   produces exactly that, and residency depends on layout/timing — i.e. a
+   lottery. **Test: `jagemu peek <rom> --at 0x100 --len 4` on each `PADTEXT`
+   roll of a CAVES build, before and after this fix.** If black pads showed
+   `0A3DD05E` and now do not, this fix just closed the boot lottery too. Cheap,
+   entirely offline, and by far the highest-value item open.
+2. **Make the mansion look right.** It renders but is dark and sparse. Check
+   the `TEXSCALE=4` atlas (90,112 B, 256x352) is being sampled correctly and
+   whether the mansion needs its own lighting/shade band.
+3. **Re-verify the Caves did not regress** — `gpu_kernel_ensure()` is on every
+   kick now. Rebuild an alias1-equivalent caves ROM and compare fps/screens.
+4. Then return to the queue: #3 title audio, #12 flat-floor fps A/B.
 
-### FIXED this run (keep — correct regardless)
-
-`params[1]` is the kernel's `r30` source (`load (r1),r30 ; [1] mailbox`), and
-**`gpu_jvdec_kick` reuses `params[1]` as `prevLen`**. Six kick paths set
-`params[0,8,12,...]` but never restored `params[1]`:
-`gpu_geomxform_kick`, `gpu_textured_kick`, `gpu_geotex_kick`,
-`gpu_geotex_dispatch`, `gpu_geomdirect` — all now set
-`*(G_PARAMS + 4) = (uint32_t)mailbox`. Verified: `params[1]` at the world kick
-went from a stale `0x001D33A0` to `0x001D33F0`, which **is** the C `mailbox`
-symbol (`nm`: `001d33f0 b mailbox`).
-
-### NOT fixed — the remaining cause
-
-The vector is **still** clobbered with `params[1]` correct, so **`r30` is being
-destroyed INSIDE the kernel**. Evidence: at halt `r30 = 0x0015A050`, which is
-`params[5]` (the atlas pointer) — not a mailbox at all. The clobber happens
-between **f166 and f172**, on the first world kick.
-
-NEXT PROBES:
-1. **Find who clobbers r30 in `gpu_geotex.gas`.** It is documented as callee-
-   saved: line 1496 *"r30 = mailbox"* as an input, line 3729 *"Preserves
-   r10-r21, r4-r6, r30"*. Grep every write to r30 and check each routine on the
-   list-mode path honours that. `grep -n "r30" gpu_geotex.gas`.
-2. **Use the probe-label trick** (run 3) to catch it live: `jagemu serve` +
-   `ctl run 166` then step, watching r30 in `ctl state`.
-3. **Cheap containment while hunting**: have the kernel reload r30 from
-   `params[1]` immediately before `alldone`'s store. That is a 2-instruction
-   guard; if the vector then stays intact it confirms the diagnosis exactly and
-   makes the mansion testable while the real culprit is found.
-4. **Then check the A10 link** (see above) — potentially the bigger prize.
-
-☠️ Do not chase GPU PC `0xF0317C` or "the GPU wedged" — run 3 disproved both.
-☠️ Do not A/B against `ARCHIVE_PRERELEASE_2026-08-15/gym_before` (its
-`gym_lskin` differs from `mrt_lskin`; the run-1 alias would feed the mansion the
-Caves skeleton).
+☠️ Note the GYMTEST caveat: `GYMTEST` jumps past `gpu_jvdec_done()`, which is
+why the restore-based fix alone did not work and the kick-based one was needed.
+The kick-based fix is the correct one regardless — some path will always skip a
+restore.
 ☠️ Rebuild the exact pad before symbolising. p0 command is in run 3's notes.
+
+---
+
+## WHAT CHANGED IN RUN 5 (2026-08-16)
+
+- ✅✅ **Lara's Home is fixed** — no crash, vector intact, Lara renders. The bug
+  that made it "broken" is closed.
+- ✅ **`gpu_kernel_ensure()`** added and called from all six kicks; jvdec load
+  invalidates residency, jvdec done restores it.
+- ✅ **All kicks now set `params[1]`** (mailbox pointer), closing a second,
+  independent instance of the same overlap hazard.
+- ✅ **Published `techniques/gpu-kernel-residency.md`** to jaguar-shared — the
+  general lesson (a kick launches whatever is resident; overlapping param slots
+  turn a stale kernel into vector-table corruption) plus the diagnostic that cut
+  through it: dump GPU SRAM and byte-compare against every built kernel.
+- ★ Method note: the bug wore three disguises — "renderer bug" (the stripes were
+  the crash beacon), "GPU wedge" (exc_catch halts Tom itself), and "corrupt
+  pointer" (it was a constant, +2). Runs 2-4 each chased one.
 
 ---
 

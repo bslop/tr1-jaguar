@@ -33,9 +33,32 @@ extern const uint8_t gpu_kernel[], gpu_kernel_end[];
  * The title phase runs HQ; entering the game re-selects the normal kernel. */
 extern const uint8_t gpu_kernel_hq[], gpu_kernel_hq_end[];
 static int g_kernel_cur = 0;             /* 0 = game kernel (boot default) */
+static int g_kernel_prevideo = 0;        /* which kernel jvdec displaced */
+static int g_kernel_want = 0;            /* last kernel explicitly asked for */
+
+/* ☠️ ENSURE THE RIGHT KERNEL IS RESIDENT BEFORE A KICK.
+   A kick writes G_PC and sets G_CTRL=1 - it launches WHATEVER is in GPU SRAM.
+   gpu_jvdec_load() replaces that SRAM, so any kick between a video decode and
+   the next explicit select ran the VIDEO kernel with WORLD params. The two
+   param blocks overlap catastrophically: jvdec takes params[6] as its mailbox
+   address, while a world kick puts atlas_width (256 = 0x100) there, so jvdec
+   wrote its magics onto 68k vectors 64/65 and killed the vblank vector.
+   Restoring in gpu_jvdec_done() is not enough - paths exist that never reach
+   it (GYMTEST jumps straight past). Making the KICK responsible closes the
+   whole class: it costs one int compare when nothing moved. */
+void gpu_kernel_ensure(void)
+{
+    if (g_kernel_cur != g_kernel_want) {
+        int w = g_kernel_want;
+        g_kernel_cur = -1;               /* force the copy */
+        gpu_kernel_select(w);
+    }
+}
+
 void gpu_kernel_select(int hq)
 {
     const uint32_t *src; uint32_t n, i; volatile uint32_t *dst;
+    g_kernel_want = hq;
     if (hq == g_kernel_cur) return;
     src = hq ? (const uint32_t *)gpu_kernel_hq : (const uint32_t *)gpu_kernel;
     n   = hq ? (uint32_t)(gpu_kernel_hq_end - gpu_kernel_hq) / 4
@@ -90,6 +113,9 @@ void gpu_jvdec_load(void)
     volatile uint32_t *dst = (volatile uint32_t *)G_SRAM;
     uint32_t i;
     G_CTRL = 0;
+#ifdef MULTIROOM
+    gpu_kernel_ensure();   /* never launch whatever jvdec left behind */
+#endif
     /* STOP-SETTLE (2026-08-07, the load-corruption root): G_CTRL=0 posts
        but Tom keeps executing for a while - SRAM writes issued before he
        actually halts get mangled. Loads issued long after a stop (game
@@ -102,6 +128,20 @@ void gpu_jvdec_load(void)
     { volatile uint32_t d; for (d = 0; d < 4000; d++) ; }
     for (i = 0; i < n; i++)
         dst[i] = src[i];
+#ifdef MULTIROOM
+    /* ☠️☠️☠️ THIS OVERWROTE GPU SRAM AND LEFT g_kernel_cur LYING.
+       gpu_kernel_select() early-returns when it believes the requested kernel
+       is already resident - so after a video decode it skipped the copy and
+       THE WORLD KICK LAUNCHED THE JVDEC KERNEL. jvdec reads its mailbox from
+       params[6], which a world kick sets to atlas_width = 256 = 0x100, so it
+       wrote MAGIC_HELLO/MAGIC_DONE to 0x104/0x100 - 68k VECTORS 65 and 64.
+       Vector 64 is TOM/VBLANK, so the next vertical interrupt jumped to
+       0x0A3DD05E and the 68000 died inside the ISR.
+       Proven by dumping GPU SRAM at the failing frame and byte-comparing it
+       against every built kernel: gpu_jvdec.bin matched exactly. */
+    g_kernel_prevideo = g_kernel_cur;
+    gpu_kernel_dirty();
+#endif
 }
 
 /* Restore the boot-time param block after the clips: gpu_init wrote the
@@ -116,6 +156,11 @@ void gpu_jvdec_done(void)
     *(volatile uint32_t *)(G_PARAMS + 4)  = (uint32_t)mailbox;
     *(volatile uint32_t *)(G_PARAMS + 20) = 0;
     *(volatile uint32_t *)(G_PARAMS + 24) = 0;
+#ifdef MULTIROOM
+    /* Restoring the PARAMS is not enough - jvdec also displaced the KERNEL
+       ITSELF. Put back whatever was resident before the clip. */
+    gpu_kernel_select(g_kernel_prevideo > 0 ? 1 : 0);
+#endif
 }
 
 /* ASYNC split (2026-08-06, user: "make the video player less jumpy"):
@@ -251,6 +296,16 @@ int gpu_spanfill(const uint32_t *list, uint32_t count, uint16_t *fb)
     uint32_t i;
 
     G_CTRL = 0;
+    /* ☠️☠️☠️ THE MAILBOX POINTER — THIS ONE WAS THE LIVE BUG.
+       EVERY kernel (spanfill, textured, geomdirect, geomxform, geotex) reads
+       its mailbox address from params[1], and gpu_jvdec_kick REUSES params[1]
+       as prevLen. spanfill ran after a video decode with params[1] still
+       holding a LENGTH (0x100), so its kernel wrote MAGIC_HELLO/MAGIC_DONE
+       through it - landing on 68k VECTORS 64 and 65. Vector 64 is TOM/VBLANK,
+       so the next vertical interrupt jumped to 0x0A3DD05E and the 68000 died
+       inside the ISR. That is the whole Lara's-Home "renders garbage" bug:
+       the stripes were exc_catch's crash beacon, not a render. */
+    *(volatile uint32_t *)(G_PARAMS + 4) = (uint32_t)mailbox;
     *(volatile uint32_t *)(G_PARAMS + 0) = (uint32_t)list;
     *(volatile uint32_t *)(G_PARAMS + 8) = count;
     *(volatile uint32_t *)(G_PARAMS + 12) = (uint32_t)fb;
@@ -279,6 +334,9 @@ void gpu_geomxform_kick(const uint32_t *list, uint32_t count, uint16_t *fb,
                         const uint32_t *camblock)
 {
     G_CTRL = 0;
+#ifdef MULTIROOM
+    gpu_kernel_ensure();   /* never launch whatever jvdec left behind */
+#endif
     *(volatile uint32_t *)(G_PARAMS + 0) = (uint32_t)list;
     *(volatile uint32_t *)(G_PARAMS + 8) = count;
     *(volatile uint32_t *)(G_PARAMS + 12) = (uint32_t)fb;
@@ -402,6 +460,9 @@ void gpu_textured_kick(const uint32_t *list, uint32_t count, void *fb,
                        const void *atlas, uint32_t atlas_width, const void *pal)
 {
     G_CTRL = 0;
+#ifdef MULTIROOM
+    gpu_kernel_ensure();   /* never launch whatever jvdec left behind */
+#endif
     *(volatile uint32_t *)(G_PARAMS + 0)  = (uint32_t)list;
     *(volatile uint32_t *)(G_PARAMS + 8)  = count;
     *(volatile uint32_t *)(G_PARAMS + 12) = (uint32_t)fb;
@@ -535,6 +596,9 @@ void gpu_geotex_kick(const void *room, void *fb, const void *camblk,
                      const void *atlas, uint32_t atlas_width)
 {
     G_CTRL = 0;
+#ifdef MULTIROOM
+    gpu_kernel_ensure();   /* never launch whatever jvdec left behind */
+#endif
 #ifdef KSWAP
     { int _k; for (_k = 0; _k < KSWAP; _k++) kernel_reload(); }
 #endif
@@ -589,6 +653,9 @@ void gpu_geotex_dispatch(const uint32_t *list, void *fb, const void *camblk,
                               scratch (rect-shade + task 6). Callers batch by
                               5; the current room stays last in each batch. */
     G_CTRL = 0;
+#ifdef MULTIROOM
+    gpu_kernel_ensure();   /* never launch whatever jvdec left behind */
+#endif
     sl[0] = n;
     for (i = 0; i < n*4; i++) sl[1+i] = list[1+i];
     *(volatile uint32_t *)(G_PARAMS + 0)  = list[1];         /* first room */
@@ -642,6 +709,9 @@ int gpu_geomdirect(const uint32_t *roomlist, uint32_t roomcount, uint16_t *fb,
                    uint32_t laracount)
 {
     G_CTRL = 0;
+#ifdef MULTIROOM
+    gpu_kernel_ensure();   /* never launch whatever jvdec left behind */
+#endif
     /* ☠️ mailbox pointer — same reason as the other kicks (params[1] = r30). */
     *(volatile uint32_t *)(G_PARAMS + 4)  = (uint32_t)mailbox;
     *(volatile uint32_t *)(G_PARAMS + 0)  = (uint32_t)roomlist;
