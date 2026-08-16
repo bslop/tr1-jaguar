@@ -32,13 +32,42 @@ spots() { python3 "$HERE/tools/ledge_census.py" --top 1 | grep -E "^   room" -B0
 
 verdict() {   # verdict <png> -> the lit cell index, or -1
 python3 - "$1" <<'EOF'
-import sys
+import sys, glob, os
 from PIL import Image
 import numpy as np
-im = np.array(Image.open(sys.argv[1]).convert('L')).astype(float)
-cols = np.where(im.max(axis=0) > 18)[0]; rows = np.where(im.max(axis=1) > 18)[0]
-if not len(cols) or not len(rows): print(-1); raise SystemExit
-x0, x1, y0, y1 = cols.min(), cols.max(), rows.min(), rows.max()
+# ☠️ DO NOT DERIVE THE PICTURE BOX FROM ONE FRAME'S CONTENT. Rooms in this
+# game can render almost entirely BLACK (see the open black-geometry bugs), and
+# then the "bounding box of non-black pixels" collapses onto whatever is lit -
+# so the readout cells get sampled in the wrong place and a perfectly good boot
+# reports as unreadable. Take the box from the MAXIMUM over every frame of the
+# recording (the OP's display area is fixed, so more frames = truer bounds).
+src = sys.argv[1]
+mkv = os.path.join(os.path.dirname(src), "g.mkv")
+acc = None
+if os.path.exists(mkv):
+    os.system("ffmpeg -hide_banner -loglevel error -i '%s' -vf fps=4 -y '%s/_bx%%03d.png' 2>/dev/null"
+              % (mkv, os.path.dirname(src)))
+    for f in sorted(glob.glob(os.path.join(os.path.dirname(src), "_bx*.png"))):
+        a = np.array(Image.open(f).convert('L')).astype(float)
+        acc = a if acc is None else np.maximum(acc, a)
+        os.remove(f)
+im = np.array(Image.open(src).convert('L')).astype(float)
+if acc is None: acc = im
+# Locate the FULL-WIDTH calibration rule the ROM paints near the bottom: the
+# widest near-solid run of bright pixels in the lower half. Its ends ARE the
+# picture box, so this works even when the room itself renders black.
+low = acc[acc.shape[0] // 2:, :]
+best = 0; bx0 = bx1 = byr = 0
+for r in range(low.shape[0]):
+    lit = np.where(low[r] > 140)[0]
+    if len(lit) > best and (lit.max() - lit.min() + 1) - len(lit) < 40:
+        best, bx0, bx1, byr = len(lit), int(lit.min()), int(lit.max()), r
+if best < 300: print(-1); raise SystemExit
+x0, x1 = bx0, bx1
+FBH0 = 80                                   # VRESN: the rule is at row FBH0-20
+yrow = acc.shape[0] // 2 + byr
+ph = yrow / ((FBH0 - 20) / float(FBH0))
+y0 = 0; y1 = int(ph) - 1
 pw, ph = x1-x0+1, y1-y0+1
 FBH = 80                                  # VRESN
 def px(fx, fy): return x0+pw*fx/320.0, y0+ph*fy/float(FBH)
@@ -94,12 +123,20 @@ for LINE in "${SPOTS[@]}"; do
     # the probe only reaches 256 - so at spawn the verdict is legitimately 0
     # (flat) no matter how good the ledge is. Walk her into it FIRST, read the
     # verdict there, and only then ask for the climb.
-    printf '0 2\n1 6\n0 2\n' > "$OUT/$CLS.walk.txt"
-    "$HERE/tools/drive.sh" "$OUT/walk_$CLS" "$OUT/$CLS.walk.txt" >/dev/null 2>&1 </dev/null
+    # ☠️ ONE SECOND, NOT SIX. Run speed is 47 units per 30Hz tick = ~1410
+    # units/second, and the census stands her ONE CELL (512 units, ~0.36s) from
+    # the ledge. Walking 6s carried her about EIGHT SECTORS past it, so the
+    # "before" frame showed her in open ground with no ledge in sight and every
+    # class reported a flat verdict. Walk just far enough to reach the wall.
+    printf '0 2\n1 1\n0 2\n' > "$OUT/$CLS.walk.txt"
+    # ☠️ DO NOT SWALLOW THE DRIVER'S OUTPUT. It failed silently for three runs
+    # (a bad path from the release scrub) and every class read "REFUSED".
+    "$HERE/tools/drive.sh" "$OUT/walk_$CLS" "$OUT/$CLS.walk.txt" >"$OUT/$CLS.walk.log" 2>&1 </dev/null
+    grep -qi "NO CAPTURE\|No such file" "$OUT/$CLS.walk.log" && echo "  !! driver failed for $CLS - see $OUT/$CLS.walk.log"
     grab "$OUT/${CLS}_before.png"
     B=$(verdict "$OUT/${CLS}_before.png")
-    printf '33 7\n0 3\n' > "$OUT/$CLS.climb.txt"
-    "$HERE/tools/drive.sh" "$OUT/climb_$CLS" "$OUT/$CLS.climb.txt" >/dev/null 2>&1 </dev/null
+    printf '33 4\n0 3\n' > "$OUT/$CLS.climb.txt"
+    "$HERE/tools/drive.sh" "$OUT/climb_$CLS" "$OUT/$CLS.climb.txt" >"$OUT/$CLS.climb.log" 2>&1 </dev/null
     grab "$OUT/${CLS}_after.png"
     A=$(verdict "$OUT/${CLS}_after.png")
     if [ "$A" = "0" ] && [ "$B" != "0" ]; then RES="CLIMBED"

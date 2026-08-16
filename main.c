@@ -9017,6 +9017,16 @@ bootvid_entry:
                  "verdict 7", which this code cannot even produce.  Black band
                  behind everything, and a CALIBRATION cell that is always lit
                  so the reader locks the grid instead of guessing it. */
+              /* ☠️ SELF-CALIBRATING READOUT. Reading 5x5 cells off a capture
+                 means first finding the picture box, and that box was derived
+                 from the bounding box of non-black pixels - which COLLAPSES in
+                 rooms that render almost entirely black (room 11 does). The
+                 instrument then reports "unreadable" on a console that booted
+                 perfectly, and three ROMs were written off as boot failures.
+                 Fix it at the source: paint a FULL-WIDTH rule at a known row.
+                 Its two ends ARE the picture box, whatever the scene is doing. */
+              { int _x; uint8_t *_fb = (uint8_t *)video_backbuffer();
+                for (_x = 0; _x < RENDER_W; _x++) _fb[(RENDER_H-20)*RENDER_W+_x] = 255; }
               blit_fill_rect(dfb3, 168, RENDER_H-18, 152, 15, 254);   /* bottom, not top */
               blit_fill_rect(dfb3, 170, RENDER_H-16, 5, 5, 255);      /* calibration */
               for (c6 = 0; c6 < 10; c6++)

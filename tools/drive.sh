@@ -21,8 +21,8 @@
 # cart will race its own gd_freads and lock the console.
 set -uo pipefail
 OUT="${1:?usage: drive.sh <outdir> <script>}"; SCRIPT="${2:?}"
-JAGHW="${JAGHW:-$HOME/jaguar-shared/hw/jaghw}"
-JAGGD="${JAGGD:-$HOME/open_jaggd/jaggd}"
+JAGHW="${JAGHW:-$HOME/Documents/Git/jaguar-shared/hw/jaghw}"
+JAGGD="${JAGGD:-$HOME/Documents/Git/open_jaggd/jaggd}"
 export JAGHW_PROJECT=jag_openlara
 mkdir -p "$OUT"; TMP=$(mktemp -d)
 SECS=$(awk 'BEGIN{s=0} !/^#/ && NF==2 {s+=$2} END{printf "%d", s+3}' "$SCRIPT")

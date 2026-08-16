@@ -15,7 +15,7 @@
 # the write races the game's own gd_freads and locks the console.  FASTBOOT
 # builds stream neither.
 set -uo pipefail
-GD="${GD:-./jag_gd.sh}"
+GD="${GD:-$HOME/Documents/Git/jag_openlara/jag_gd.sh}"
 TMP=$(mktemp -d)
 press() {                       # $1 = mask, $2 = seconds
     printf "$(printf '\\x%02x\\x%02x' $(( ($1>>8)&255 )) $(( $1&255 )))" > "$TMP/INPUT.BIN"

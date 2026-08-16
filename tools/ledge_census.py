@@ -70,8 +70,15 @@ def load(prefix):
         for cx in range(xS):
             col = []
             for cz in range(zS):
-                fy = struct.unpack_from(">h", sect, soff + 12 + (cx * zS + cz) * 6)[0]
-                col.append(fy & 0xFFFF if fy < 0 else fy)
+                base = soff + 12 + (cx * zS + cz) * 6
+                fy = struct.unpack_from(">h", sect, base)[0]
+                # e[4]/e[5] are the X/Z SLANTS the runtime applies across the
+                # cell (fy -= slant*frac). A sloped cell has no single floor
+                # height, so a "rise" computed from its base value is not a
+                # step - room 0 alone is 41/120 sloped and produced test spots
+                # that were open hillside, not ledges.
+                sx, sz = struct.unpack_from(">bb", sect, base + 4)
+                col.append((fy & 0xFFFF if fy < 0 else fy, sx, sz))
             cells.append(col)
         rooms.append(dict(r=r, xS=xS, zS=zS, ix=ix, iz=iz, cells=cells))
     return rooms
@@ -83,17 +90,17 @@ def census(rooms):
         xS, zS, cells = rm["xS"], rm["zS"], rm["cells"]
         for cx in range(xS):
             for cz in range(zS):
-                here = cells[cx][cz]
-                if here in (WALL, OPEN):
-                    continue
+                here, hsx, hsz = cells[cx][cz]
+                if here in (WALL, OPEN) or hsx or hsz:
+                    continue                      # sloped: no single height
                 hf = struct.unpack(">h", struct.pack(">H", here))[0]
                 for dx, dz, yaw, label in DIRS:
                     nx, nz = cx + dx, cz + dz
                     if not (0 <= nx < xS and 0 <= nz < zS):
                         continue
-                    there = cells[nx][nz]
-                    if there in (WALL, OPEN):
-                        continue
+                    there, tsx, tsz = cells[nx][nz]
+                    if there in (WALL, OPEN) or tsx or tsz:
+                        continue                  # sloped ledge top: skip
                     nf = struct.unpack(">h", struct.pack(">H", there))[0]
                     rise = hf - nf                 # +Y is DOWN: positive = step UP
                     if rise <= 0:
