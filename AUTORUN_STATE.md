@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 8
+RUN: 9
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,46 +17,57 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**✅✅✅ LARA'S HOME IS SHIPPABLE IN-ROM — 6 of 6 pads, 1,554,268 B.**
+**✅✅✅ LARA'S HOME WORKS THROUGH THE REAL MENU, AND THE RELEASE NOW SHIPS IT.**
 
-☠️ **CORRECTION TO RUNS 5 AND 6.** Both said the mansion "links fine". It did
-not. Those builds used a bare `make`, and **only `gbuild.sh` enforces the
-stack-headroom guard**. Under `gbuild.sh` the run-6 configuration
-**SKIPPED ALL SIX PADS**: `__bss_end 2,091,952 > 0x1FC000`, over by 11,573 B.
-★ *"It linked" from a bare `make` is not evidence that it fits.* Always confirm
-with `gbuild.sh` and count the `.cof` files.
+Run 8 verified the path the user actually reported broken — not the GYMTEST
+shortcut. Filmstrip: black → **TOMB RAIDER title with the ring menu** → the
+mansion interior renders and stays stable. `illegal=0`, `vector64 = 0x00004158`.
 
-Fixed by dropping **STATICS** from the mansion extraction only:
+New test hook **`AUTOGYM=1`** (plumbed in the Makefile, verified on the compile
+line): breaks out of the ring loop exactly where a real A-press on page 4 does,
+so it runs the whole menu exit — loading screen, level setup, `gpu_jvdec_done()`
+— unlike `GYMTEST`, which jumps to `menu_done` from far earlier and skips all
+of it. **Use AUTOGYM, not GYMTEST, for anything about the mansion from now on.**
 
-    TEXSCALE=2                       atlas 188,416          does not link
-    RAMP_PAL + TEXSCALE=4 + STATICS  geom 205,968 + 134,144  0 of 6 pads
-    RAMP_PAL + TEXSCALE=4, NO STATICS geom 153,896 + 78,848  6 of 6 pads ✅
+☠️ **`AUTOSTART` now yields to `AUTOGYM`** (`#if defined(AUTOSTART) &&
+!defined(AUTOGYM)`). Both hooks `break` out of the ring and AUTOSTART is FIRST,
+so an AUTOGYM arm built with AUTOSTART also on silently landed in the CAVES and
+would have read as "the mansion is broken again". The flag reached the compile
+line and was still preempted — *landing is not the same as taking effect*.
 
-STATICS bakes the furniture into the rooms and costs **107,368 B** across
-geom+atlas — far more than the 11,573 needed. The interior still reads correctly
-without it at 320x80 (verified by screenshot: lit walls, tiled floor, Lara).
-`RAMP_PAL` stays ON — it is what makes the mansion lit rather than near-black.
-
-Verified: `gymship2` pads 0/272/544 → `illegal=0`, `maxluma=255`,
-`vector64 = 0x00004158` (intact). Recipe encoded in `tools/build_cof.sh` with a
-new `$MRTENV_NOSTATICS` (built by OMITTING the flag — the extractor reads these
-as presence flags, so `STATICS=0` would read as SET).
+**`tools/build_cof.sh` no longer passes `GYMSD`.** Under GYMSD the ring
+deliberately REFUSES Lara's Home (null stubs), so the item was unreachable, not
+just absent — that is what "Lara's house is broken" looked like from the title
+screen. It now fits: 6 of 6 pads, ROM 1,554,268 B.
 
 ### What to do next
-1. **Reach the mansion through the real MENU.** ☠️ Note `main.c` ~6565: under
-   **GYMSD the menu deliberately REFUSES** Lara's Home (null stubs, "a silent
-   select here is a hang on the one screen every viewer sees first"). Now that
-   it fits, the release should build **without GYMSD** so the item actually
-   works — decide that, then drive the ring with `jagemu --press` to confirm.
-2. **Run `tools/build_cof.sh` end to end** — it changed twice now (run 6 and
-   run 7). Prove the release path and that the `gym_lskin == mrt_lskin` guard
-   passes.
-3. Then the queue: #3 title audio (SFX jumps + music skips), #12 flat-floor fps
-   A/B, #2 full run-through (rig, batched — capture card still unplugged).
+1. **Run `tools/build_cof.sh` END TO END.** It has changed in runs 6, 7 and 8
+   and has NOT been executed once since. This is now the highest-risk item: the
+   release recipe is unproven. Confirm the `gym_lskin == mrt_lskin` guard fires
+   correctly, all six pads build, and the four videos still convert.
+2. **Docker container build** — same recipe, from the user's disc.
+3. Then the queue: #3 title audio (SFX jumps + music skips on menu moves — an
+   emulator-answerable item via `jagemu audio`), #12 flat-shaded floor fps A/B,
+   #2 full run-through (rig, batched; capture card still unplugged).
 
-☠️ Do not re-test the A10-lottery/vector-64 link offline — run 6 showed all six
-pre-fix CAVES pads had vector 64 intact, and jagemu boots every pad, so the
-lottery is not reproducible here.
+☠️ Only `gbuild.sh` enforces the stack-headroom guard — a bare `make` does not.
+Count the `.cof` files.
+☠️ The mansion needs `TEXSCALE=4` + `RAMP_PAL` + **no** `STATICS`.
+
+---
+
+## WHAT CHANGED IN RUN 8 (2026-08-16)
+
+- ✅✅ **Mansion verified through the real menu path** and the release now ships
+  it selectable (`GYMSD` dropped from `build_cof.sh`).
+- ✅ **`AUTOGYM=1` added** — the first offline test that covers the shipping
+  menu-exit path rather than the GYMTEST shortcut.
+- ☠️ **Caught a hook-precedence trap**: AUTOSTART preempted AUTOGYM even though
+  `-DAUTOGYM` was on the compile line. Made the precedence explicit in source so
+  no caller can hit it by flag ordering.
+- ★ The measurements that made shipping it possible, in one place: gym_lskin
+  alias −107,040 B; TEXSCALE=4 + RAMP_PAL + no STATICS = 254,296 B payload;
+  6 of 6 pads at 1,554,268 B.
 
 ---
 

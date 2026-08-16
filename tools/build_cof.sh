@@ -68,7 +68,20 @@ ROWDIET=1 STATICS=1 BANKDIET=1 LOWRES=1 FLIPASM=1 DIVZGUARD=1 MOVESET=1 \
 SPANSHADE=1 SHADEEXCL=1 TIMESTEP=1 ANIMRATE=1 OPDBL=1 LPLANES=1 \
 VCBIG=1 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 ENEMYTEX=1 BLOBCACHE=1 \
 JCENT=1 JOVL=1 SECTLONG=1 INLINEMUL=1 OFFHOIST=1 VPACK=1 NOPCLIP=1 \
-TRAPFLOOR=1 GUNS=1 GYMSD=1 BOOTVID=1 JVFASTKICK=1 PROBE_AHEAD=256}"
+TRAPFLOOR=1 GUNS=1 BOOTVID=1 JVFASTKICK=1 PROBE_AHEAD=256}"
+
+# ☠️☠️ GYMSD IS DELIBERATELY *NOT* IN THAT LIST ANY MORE (2026-08-16).
+# GYMSD left Lara's Home out of the image, and the ring menu then REFUSES the
+# item on purpose (its gym_* pointers are NULL stubs - selecting it would drive
+# the renderer through a null geom pointer). So with GYMSD the mansion is not
+# merely absent, it is UNREACHABLE - which is what "Lara's house is broken"
+# looked like from the title screen.
+# It now fits, measured: aliasing gym_lskin onto mrt_lskin recovered 107,040 B,
+# TEXSCALE=4 + RAMP_PAL + no STATICS puts the mansion at 254,296 B of payload,
+# and the result builds 6 OF 6 PADS at 1,554,268 B - no A10 pad options lost.
+# Verified through the REAL menu-exit path (AUTOGYM=1): title ring -> Lara's
+# Home renders, illegal=0, vector 64 intact.
+# ☠️ If you put GYMSD back, also expect the menu to refuse the item again.
 
 # ☠️ PROBE_AHEAD IS NOT OPTIONAL. The default is WALK_SPEED*2 = 94 units against
 # a 1024-unit sector, and collision holds Lara ~100 units off a wall - so the

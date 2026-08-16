@@ -1042,6 +1042,15 @@ endif
 # caves build and getting ZERO differing pixels out of 25,600. Same class of
 # bug as ENEMIES, which was unplumbed for months: never test "is X wired" by
 # grepping for the flag NAME - check that it reaches the compile line.
+# AUTOGYM=1: auto-select Lara's Home from the ring, the way a real A-press on
+# page 4 does. Unlike GYMTEST this goes through the whole menu exit, so it is
+# the only offline test that covers the path the USER actually reported broken.
+# Needs a build WITHOUT GYMSD (GYMSD makes the menu refuse the item).
+ifdef AUTOGYM
+CFLAGS   += -DAUTOGYM
+CXXFLAGS += -DAUTOGYM
+endif
+
 ifdef GYMTEST
 CFLAGS   += -DGYMTEST
 CXXFLAGS += -DGYMTEST

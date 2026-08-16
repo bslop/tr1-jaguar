@@ -6425,10 +6425,26 @@ bootvid_entry:
                   video_flip();
                   video_wait_vblank();
               }
-#ifdef AUTOSTART
+/* ☠️ AUTOGYM WINS. Both hooks break out of the ring, and this one is FIRST -
+   so with AUTOSTART also defined the mansion arm would silently land in the
+   CAVES and look like the mansion was broken again. Make the precedence
+   explicit rather than depending on which flags a caller happens to pass. */
+#if defined(AUTOSTART) && !defined(AUTOGYM)
               /* headless HW/emulator profiling: auto-select New Game after a
                  short delay so no physical A press is needed to reach the level */
               { static int _as_ctr = 0; if (++_as_ctr > 20) { g_useset = 0; page = 0; break; } }
+#endif
+#ifdef AUTOGYM
+                /* Same hook as AUTOSTART, but selects LARA'S HOME (ring page 4).
+                   ☠️ This is NOT the same test as GYMTEST. GYMTEST jumps to
+                   menu_done from far earlier and skips the whole menu exit -
+                   including gpu_jvdec_done() - so it cannot tell you whether
+                   picking the item from the RING works. This breaks out of the
+                   ring loop exactly where a real A-press on page 4 does, so it
+                   exercises the shipping path: loading screen, level setup and
+                   all. Requires a build WITHOUT GYMSD (under GYMSD the menu
+                   deliberately refuses this item because its blobs are stubs). */
+                { static int _ag_ctr = 0; if (++_ag_ctr > 20) { g_useset = 1; page = 4; break; } }
 #endif
 #ifdef ASVID
               /* Tom campaign self-test (2026-08-07): take the EXACT Start
