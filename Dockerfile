@@ -26,7 +26,11 @@
 # ☠️ rmac CANNOT stand in for jas here - the .gas sources use jas define/.if
 # semantics and rmac rejects them outright. rmac still builds the older kernels.
 FROM rust:1-slim-bookworm AS cobweb
-ARG COBWEB_REV=main
+# ☠️ PIN IT. `main` gets cached by Docker, so the image silently keeps whatever
+# cobweb was current when the layer was first built - this build failed on four
+# hazard errors that had already been fixed upstream. A real revision both busts
+# the cache and makes the image reproducible.
+ARG COBWEB_REV=86413ca
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 RUN git clone https://github.com/bslop/cobweb.git /cobweb \
@@ -54,31 +58,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update && apt-get install -y --no-install-recommends ngdevkit-toolchain \
     && rm -rf /var/lib/apt/lists/*
 
-# rmac - the Jaguar RISC assembler that builds the GPU/DSP kernels, from source
-# pinned to a known-good commit.
-#
-# ☠️ THE GITHUB REPO THIS USED TO CLONE (ggnkua/rmac) IS GONE - it 404s, so
-# every container build broke silently at this step. Upstream moved; the host
-# below is the one RMAC's own download page still points at, and it carries the
-# pinned commit. Mirrors are tried in order so one host dying is not fatal
-# again. If they all fail, put an `rmac` binary on the PATH and build without
-# Docker (tools/build_cof.sh).
-ARG RMAC_REV=1fd77b5db027255ef58e0af7b5a329d8060a82ee
-RUN set -eu; \
-    for url in http://tiddly.mooo.com:5000/rmac/rmac.git \
-               https://gitlab.com/ggnkua/rmac-mirror.git \
-               https://github.com/ggnkua/rmac.git; do \
-        echo "trying $url"; \
-        if GIT_TERMINAL_PROMPT=0 git clone --quiet "$url" /tmp/rmac 2>/dev/null; then break; fi; \
-        rm -rf /tmp/rmac; \
-    done; \
-    test -d /tmp/rmac || { echo "ERROR: could not fetch rmac from any mirror"; exit 1; }; \
-    (git -C /tmp/rmac checkout --quiet $RMAC_REV \
-        || echo "note: pin $RMAC_REV unavailable, using default branch"); \
-    make -C /tmp/rmac; \
-    install -m 755 /tmp/rmac/rmac /usr/local/bin/rmac; \
-    rm -rf /tmp/rmac
-ENV RMAC=/usr/local/bin/rmac
+# ☠️ rmac IS GONE FROM THIS BUILD. It used to assemble three kernels, and its
+# upstream (github.com/ggnkua/rmac) has VANISHED - it 404s - so the image was
+# fetching a critical tool from mirrors of a repo with no home. jas now builds
+# every GPU/DSP kernel and emits BYTE-IDENTICAL output for all three (verified
+# with cmp), so the whole toolchain is cobweb and one supply-chain risk is out.
 
 WORKDIR /src
 COPY . .

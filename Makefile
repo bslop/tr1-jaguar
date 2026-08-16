@@ -14,11 +14,19 @@ RMAC    := $(HOME)/jaguar-tools/bin/rmac
 # Cobweb toolchain (2026-07-20): jas is the DEFAULT assembler for every
 # actively-maintained kernel — it hazard-checks each build (TRM bug 13
 # scoreboard races, indexed-store staleness, delay-slot waste, branch range).
-# rmac is retained for (a) the legacy museum kernels it still owns and
-# (b) `make verify-asm`, which byte-compares jas output against rmac.
-# COBWEB's assembler (github.com/bslop/cobweb, MIT). Overridable so a container
-# or a different checkout can point at its own build: `make JAS=/usr/local/bin/jas`.
-JAS     ?= $(HOME)/Documents/Git/cobweb/sim/target/release/jas
+# rmac is retained ONLY for `make verify-asm`, which byte-compares jas output
+# against a second assembler. It no longer builds anything that ships: jas took
+# over the last three kernels once its false bug-13 errors were fixed upstream,
+# and emits byte-identical output for all of them.
+# ☠️ Do not reintroduce it as a build dependency - github.com/ggnkua/rmac 404s.
+# COBWEB (github.com/bslop/cobweb, MIT) builds every GPU/DSP kernel here.
+# Prefer a copy checked out INSIDE THE PROJECT (jag_openlara/cobweb) so the tree
+# is self-contained and does not depend on where else the machine keeps one;
+# fall back to the old location, and stay overridable for containers:
+#   make JAS=/usr/local/bin/jas
+COBWEB_DIR ?= $(abspath $(CURDIR)/../../../../cobweb)
+COBWEB_BIN  = $(COBWEB_DIR)/sim/target/release
+JAS     ?= $(if $(wildcard $(COBWEB_BIN)/jas),$(COBWEB_BIN)/jas,$(HOME)/Documents/Git/cobweb/sim/target/release/jas)
 # rmac writes defines as -dNAME=V; jas wants -d NAME=V
 jasd     = $(subst -d,-d ,$(1))
 
@@ -801,17 +809,25 @@ $(BUILD)/gpu_geomwalk.bin: gpu_geomwalk.gas | $(BUILD)
 $(BUILD)/gpu_geomxform.bin: gpu_geomxform.gas | $(BUILD)
 	$(JAS) $< -o $@ --gpu
 
+# ☠️ THESE THREE USED TO NEED rmac. jas refused them with four bug-13
+# write-after-write errors each - a FALSE POSITIVE: its hazard pass was
+# straight-line and treated the two arms of a branch as sequential, so
+# r24..r27 loaded in one arm looked like a race with the same registers
+# loaded in the other. Fixed upstream (cobweb 86413ca: an unconditional jump
+# ends the shadow window), and jas now emits BYTE-IDENTICAL output to rmac for
+# all three - verified by cmp, not assumed. That makes the whole kernel side
+# cobweb's, and drops rmac from the build entirely.
+# ★ It matters beyond tidiness: rmac's upstream repo (ggnkua/rmac) has
+# VANISHED - it 404s - so every container build was already reaching for a
+# mirror to fetch an assembler that no longer has a home.
 $(BUILD)/gpu_geomdirect.bin: gpu_geomdirect.gas | $(BUILD)
-	$(RMAC) $(LOWRES_DEF) -fe $< -o $(BUILD)/gpu_geomdirect.elf
-	$(OBJCOPY) -O binary $(BUILD)/gpu_geomdirect.elf $@
+	$(JAS) $< -o $@ --gpu $(call jasd,$(LOWRES_DEF))
 
 $(BUILD)/gpu_textured.bin: gpu_textured.gas | $(BUILD)
-	$(RMAC) -fe $< -o $(BUILD)/gpu_textured.elf
-	$(OBJCOPY) -O binary $(BUILD)/gpu_textured.elf $@
+	$(JAS) $< -o $@ --gpu
 
 $(BUILD)/gpu_bltex.bin: gpu_bltex.gas | $(BUILD)
-	$(RMAC) -fe $< -o $(BUILD)/gpu_bltex.elf
-	$(OBJCOPY) -O binary $(BUILD)/gpu_bltex.elf $@
+	$(JAS) $< -o $@ --gpu
 
 $(BUILD)/dsp_pose.bin: dsp_pose.das | $(BUILD)
 	$(JAS) $< -o $@ --dsp $(call jasd,$(LOWRES_DEF) -d NOSOUND=$(if $(NOSOUND),1,0) -d AUDIOLITE=$(if $(AUDIOLITE),1,0) -d JDRAIN=$(if $(JDRAIN),1,0) -d NEARLOW=$(if $(NEARLOW),1,0) -d JCENT=$(if $(JCENT),1,0) -d JOVL=$(if $(JOVL),1,0))
@@ -1343,7 +1359,7 @@ verify-asm: $(BUILD)/gpu_geotex.bin $(BUILD)/gpu_spanfill.bin $(BUILD)/gpu_geomw
 # adoption needs: GNU-ELF interop or a jln linker-script story, leaf-function
 # prologue elision, a soft-mul/div runtime). A second front-end catches
 # portability/UB the same way a second assembler catches encoding bugs.
-JCC68K ?= $(HOME)/Documents/Git/cobweb/sim/target/release/jcc68k
+JCC68K ?= $(if $(wildcard $(COBWEB_BIN)/jcc68k),$(COBWEB_BIN)/jcc68k,$(HOME)/Documents/Git/cobweb/sim/target/release/jcc68k)
 JCCDEFS := -DMULTIROOM -DFB8 $(if $(JERRYPOSE),-DJERRYPOSE) $(if $(AUTOSTART),-DAUTOSTART) $(if $(PROFILE),-DPROFILE)
 verify-c:
 	@ok=1; for f in video.c blit.c gpu.c jerry.c joypad.c gd_input.c; do \
