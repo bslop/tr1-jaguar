@@ -104,6 +104,11 @@ PSX="$ASSETS/PSXDATA"
 #                  to the shipped mrt_geom.bin
 MRTENV="TEXSCALE=2 MRT_ROOMS=64 SUBDIV_MAX=6144 LARA_MINAREA=0 \
 FACE_PLANES=1 RAMP_PAL=1 STATICS=1 LARA_WINDFIX=0"
+# Same, minus STATICS - Lara's Home only fits without it (see the mansion
+# extraction below). Built by OMITTING the flag, never STATICS=0: the extractor
+# reads these as presence flags and a "=0" would read as set.
+MRTENV_NOSTATICS="TEXSCALE=2 MRT_ROOMS=64 SUBDIV_MAX=6144 LARA_MINAREA=0 \
+FACE_PLANES=1 RAMP_PAL=1 LARA_WINDFIX=0"
 
 say "Extracting levels + Lara (Caves)"
 env $MRTENV TRLEVEL="$PSX/LEVEL1.PSX" TRPREFIX=mrt python3 tools/tr2jag_multiroom.py
@@ -161,16 +166,23 @@ case "$BUILD_FLAGS" in
      # linked under GYMSD, so the shading flags are irrelevant here.
      env TEXSCALE=2 MRT_ROOMS=64 SUBDIV_MAX=6144 LARA_MINAREA=0 LARA_WINDFIX=0 \
          TRLEVEL="$PSX/GYM.PSX" TRPREFIX=gym python3 tools/tr2jag_multiroom.py ;;
-  *) say "Extracting Lara's Home (Mansion) - full recipe, TEXSCALE=4"
-     # ☠️ TEXSCALE=4, NOT 2. At TEXSCALE=2 the mansion atlas is 188,416 B and
-     # the level does not LINK. At 4 it is 134,144 B with the shade ramps and
-     # everything fits (ROM 1,638,252 B, well under the 0x1FC000 guard). The
-     # mansion is a bonus area; quarter-area texels are not visible at 320x80.
-     # ★ RAMP_PAL IS BACK ON. The old note here said it "overflows the
-     # mansion's palette past 256 entries and the extractor dies" - that was
-     # true and is now FIXED (the 8-slot flat band). Without it the mansion
-     # rendered nearly black; with it, it is a proper lit interior.
-     env $MRTENV TEXSCALE=4 TRLEVEL="$PSX/GYM.PSX" TRPREFIX=gym \
+  *) say "Extracting Lara's Home (Mansion) - RAMP_PAL, TEXSCALE=4, no STATICS"
+     # ☠️☠️ THE MANSION ONLY FITS WITH THIS EXACT COMBINATION. Measured:
+     #   TEXSCALE=2                    atlas 188,416 - does not link
+     #   +STATICS                      geom 205,968 + atlas 134,144
+     #                                 => __bss_end 2,091,952 > 0x1FC000 and
+     #                                    gbuild.sh SKIPS ALL SIX PADS
+     #   RAMP_PAL, TEXSCALE=4, no STATICS   geom 153,896 + atlas 78,848
+     #                                 => 6 of 6 pads, ROM 1,554,268 B
+     # ★ RAMP_PAL is REQUIRED, not optional: without it the mansion renders
+     #   nearly black. Its old "the extractor dies on the palette" note is
+     #   STALE - fixed by the 8-slot flat band.
+     # ★ STATICS is what has to go: it bakes the furniture into the rooms and
+     #   costs 107,368 B across geom+atlas. The interior still reads correctly
+     #   without it at 320x80.
+     # ☠️ A plain `make` does NOT enforce the stack-headroom guard - only
+     #   gbuild.sh does. "It linked" from a bare make is not evidence it fits.
+     env $MRTENV_NOSTATICS TEXSCALE=4 TRLEVEL="$PSX/GYM.PSX" TRPREFIX=gym \
          python3 tools/tr2jag_multiroom.py ;;
 esac
 # ☠️ GUARD FOR THE gym_lskin ALIAS. mrt_data.S no longer .incbin's a second

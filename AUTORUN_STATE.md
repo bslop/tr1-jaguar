@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 7
+RUN: 8
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,45 +17,60 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**✅✅ LARA'S HOME WORKS AND LOOKS RIGHT.** Warm stone walls, patterned tiled
-floor, window openings, Lara standing — a proper mansion interior, `illegal=0`,
-stable. Two runs closed it: run 5 stopped the crash, run 6 fixed the shading.
+**✅✅✅ LARA'S HOME IS SHIPPABLE IN-ROM — 6 of 6 pads, 1,554,268 B.**
 
-### Verified this run
-- **Caves did NOT regress** from `gpu_kernel_ensure()` on every kick:
-  `cavesfix_p0` vs the pre-fix `alias1_p0` = **0 of 25,600 pixels differ**,
-  `illegal=0`, all pads boot. ★ Byte-identical is the CORRECT result here (the
-  caves never hit the bug) — not the "arm is unwired" signal from run 3. The
-  code is demonstrably live because the mansion's behaviour changed completely.
-- **Release recipe fixed** (`tools/build_cof.sh`): the mansion now extracts with
-  the **full** `$MRTENV` + `TEXSCALE=4`. `RAMP_PAL` is back on — the old comment
-  saying it overflows the palette and kills the extractor was **stale**, fixed
-  by run 1's 8-slot flat band. Without it the mansion rendered nearly black.
-  TEXSCALE=4 is required to link (atlas 134,144 B vs 188,416 at TEXSCALE=2).
-  ROM with the mansion: **1,638,252 B**, well under the 0x1FC000 guard.
+☠️ **CORRECTION TO RUNS 5 AND 6.** Both said the mansion "links fine". It did
+not. Those builds used a bare `make`, and **only `gbuild.sh` enforces the
+stack-headroom guard**. Under `gbuild.sh` the run-6 configuration
+**SKIPPED ALL SIX PADS**: `__bss_end 2,091,952 > 0x1FC000`, over by 11,573 B.
+★ *"It linked" from a bare `make` is not evidence that it fits.* Always confirm
+with `gbuild.sh` and count the `.cof` files.
 
-### ☠️ NEGATIVE RESULT — the A10 lottery hypothesis is NOT confirmed
-Vector 64 was checked on **all six CAVES pads of the PRE-FIX build**: every one
-read `0x00004158` (`vblank_stub`), **intact**. So the vector-64 clobber never
-happens on the caves path, and this fix does not explain the boot lottery.
-Note also that jagemu boots every pad, so the lottery (a silicon phenomenon) is
-not reproducible offline at all — **this cheap test cannot settle it either
-way**. Do not re-run it expecting a different answer; if the lottery is to be
-linked to vector 64 it needs a human reading the TV on a black pad.
+Fixed by dropping **STATICS** from the mansion extraction only:
+
+    TEXSCALE=2                       atlas 188,416          does not link
+    RAMP_PAL + TEXSCALE=4 + STATICS  geom 205,968 + 134,144  0 of 6 pads
+    RAMP_PAL + TEXSCALE=4, NO STATICS geom 153,896 + 78,848  6 of 6 pads ✅
+
+STATICS bakes the furniture into the rooms and costs **107,368 B** across
+geom+atlas — far more than the 11,573 needed. The interior still reads correctly
+without it at 320x80 (verified by screenshot: lit walls, tiled floor, Lara).
+`RAMP_PAL` stays ON — it is what makes the mansion lit rather than near-black.
+
+Verified: `gymship2` pads 0/272/544 → `illegal=0`, `maxluma=255`,
+`vector64 = 0x00004158` (intact). Recipe encoded in `tools/build_cof.sh` with a
+new `$MRTENV_NOSTATICS` (built by OMITTING the flag — the extractor reads these
+as presence flags, so `STATICS=0` would read as SET).
 
 ### What to do next
-1. **Re-verify the mansion through the real MENU path, not GYMTEST.** Everything
-   so far used `GYMTEST=1`, which jumps past `gpu_jvdec_done()` and the level
-   init. The kick-based fix is path-independent so it *should* hold, but the
-   user's original report was via the menu — confirm it.
-2. **Full-recipe container build** — `tools/build_cof.sh` changed; run it end to
-   end so the release path is proven, and confirm the `gym_lskin == mrt_lskin`
-   guard passes.
-3. Then the queue: #3 title audio (SFX jumps + music skips on menu moves),
-   #12 flat-shaded-floor fps A/B, #2 full run-through (rig, batched).
+1. **Reach the mansion through the real MENU.** ☠️ Note `main.c` ~6565: under
+   **GYMSD the menu deliberately REFUSES** Lara's Home (null stubs, "a silent
+   select here is a hang on the one screen every viewer sees first"). Now that
+   it fits, the release should build **without GYMSD** so the item actually
+   works — decide that, then drive the ring with `jagemu --press` to confirm.
+2. **Run `tools/build_cof.sh` end to end** — it changed twice now (run 6 and
+   run 7). Prove the release path and that the `gym_lskin == mrt_lskin` guard
+   passes.
+3. Then the queue: #3 title audio (SFX jumps + music skips), #12 flat-floor fps
+   A/B, #2 full run-through (rig, batched — capture card still unplugged).
 
-☠️ Rebuild the exact pad before symbolising. p0 command is in run 3's notes.
-☠️ The mansion needs `TEXSCALE=4`; at 2 it does not link.
+☠️ Do not re-test the A10-lottery/vector-64 link offline — run 6 showed all six
+pre-fix CAVES pads had vector 64 intact, and jagemu boots every pad, so the
+lottery is not reproducible here.
+
+---
+
+## WHAT CHANGED IN RUN 7 (2026-08-16)
+
+- ✅ **Mansion now fits: 6 of 6 pads, ROM 1,554,268 B**, by dropping STATICS
+  from its extraction (−107,368 B). Boots clean, vector intact.
+- ☠️ **Corrected a wrong claim I made twice** — runs 5 and 6 both reported the
+  mansion linking, from a bare `make` that skips the stack-headroom guard.
+  Under `gbuild.sh` it built **nothing**.
+- ✅ **`tools/build_cof.sh`** now carries the exact working combination and the
+  measurements behind it, plus `$MRTENV_NOSTATICS`.
+- ★ Found that under **GYMSD the menu refuses Lara's Home on purpose** — so
+  shipping it playable means building without GYMSD.
 
 ---
 
