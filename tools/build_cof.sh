@@ -10,6 +10,18 @@
 #
 set -euo pipefail
 
+# ☠️ RUN LOCK. tools/session_run.sh refuses to commit while this runs, because
+# this script REWRITES TRACKED ASSETS (CORE.JV, EIDOS.JV, sound.h, pass2.h, the
+# mrt_* headers) and a blind `git add -u` mid-run commits a half-built tree.
+# It is an explicit PID file rather than `pgrep -f build_cof.sh`, because that
+# string ALSO matches any shell waiting on this script - and matches the very
+# command doing the check. The first version of the guard blocked a clean commit
+# by detecting its own watcher, then a pkill of those watchers killed the shell
+# issuing it. ★ Never gate anything on a process list you are yourself in.
+BUILD_COF_LOCK=/tmp/.build_cof.lock
+echo $$ > "$BUILD_COF_LOCK"
+trap 'rm -f "$BUILD_COF_LOCK"' EXIT
+
 DISC="${1:?usage: build_cof.sh <disc> <outdir>}"
 OUT="${2:?usage: build_cof.sh <disc> <outdir>}"
 

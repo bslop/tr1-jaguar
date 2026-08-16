@@ -86,6 +86,23 @@ end)
     sed -i "s/^RUN: .*/RUN: $NEXT/" "$STATE"
     sha256sum "$STATE" | cut -d" " -f1 > "$HERE/tools/.lastrun"
 
+    # ☠️ NEVER COMMIT WHILE AN ASSET BUILD IS IN FLIGHT.
+    # `git add -u` stages every tracked file, and tools/build_cof.sh REGENERATES
+    # tracked ones (CORE.JV, EIDOS.JV, sound.h, pass2.h, the mrt_* headers).
+    # Closing a run mid-build captures a half-written asset set that still looks
+    # like a clean commit. Hit for real in run 9, with three of four videos
+    # converted. Wait for it, then close.
+    # ☠️ Check the PID LOCK, not `pgrep -f build_cof.sh`: that string matches
+    # any shell WAITING on the build, and the checking command itself, so the
+    # first version blocked a clean commit by detecting itself.
+    BCLOCK=/tmp/.build_cof.lock
+    if [ -f "$BCLOCK" ] && kill -0 "$(cat "$BCLOCK" 2>/dev/null)" 2>/dev/null; then
+        echo "☠️ REFUSING: tools/build_cof.sh is still running."
+        echo "   It rewrites tracked assets; committing now would capture a"
+        echo "   partially regenerated tree. Wait for it to finish, then re-run."
+        exit 1
+    fi
+
     # Commit BY PATH. Never `git add -A` — this tree carries disc-derived
     # assets that must not be committed (see .gitignore) and generated headers.
     git -C "$HERE" add -u 2>/dev/null

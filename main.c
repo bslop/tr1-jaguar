@@ -5643,10 +5643,22 @@ bootvid_entry:
                      fetches, which read as CHOPPY MUSIC (both user). 2KB
                      per frame keeps every stall short; the queue headroom
                      is 0.74s and the spread fill finishes in ~4 frames. */
-                  volatile uint32_t *ncnt = (volatile uint32_t *)0xF1C378u;
+                    /* ☠️☠️ THIS WAS `*(volatile uint32_t *)0xF1C378u` - JERRY'S
+                       LOCAL SRAM. main.c's own sfx path states the law: "the 68k
+                       cannot read a running JRISC honestly ... a spurious zero
+                       here RE-ARMS the voice", heard as a machine-gun retrigger.
+                       The music refill is ARMED by exactly that ==0 test, so a
+                       spurious zero re-queues the buffer mid-playback - the TITLE
+                       MUSIC SKIPPING the user reported, worst while moving through
+                       the ring because the repaint adds the bus contention that
+                       makes the bad read likely. Jerry publishes the same counter
+                       into the DRAM mailbox; read that. STALE is 0xFFFFFFFF, never
+                       0, so the ==0 test stays correct. */
+                    extern uint32_t jerry_v0_ncnt(void);
+                    extern void jerry_audio_stale(void);
                   static int mfo = -1;               /* fill offset, -1 idle */
                   static int mfdead = 0, mfgoal = 0;
-                  if (mfo < 0 && *ncnt == 0) {
+                    if (mfo < 0 && jerry_v0_ncnt() == 0) {
                       if (mleft <= 0) {              /* EOF: reopen to loop */
                           int mi;
                           gd_fclose((unsigned)mh); mh = -1;
@@ -5678,6 +5690,11 @@ bootvid_entry:
                               extern void jerry_sfx_queue(const void*, uint32_t);
                               mlq[mfdead] = mfgoal; mleft -= mfgoal;
                               jerry_sfx_queue(mbuf[mfdead], (uint32_t)mfgoal);
+                                /* ☠️ STAMP AFTER THE WRITE, or the next
+                                   jerry_v0_ncnt() can return a PRE-WRITE value
+                                   and we re-queue the slot we just armed. The
+                                   sfx path does this; the music path never did. */
+                                jerry_audio_stale();
                               mplay = mfdead; mfo = -1;
                           }
                       } else mfo = -1;               /* read fault: retry swap */

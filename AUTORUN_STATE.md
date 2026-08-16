@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 9
+RUN: 11
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,42 +17,71 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**✅✅✅ LARA'S HOME WORKS THROUGH THE REAL MENU, AND THE RELEASE NOW SHIPS IT.**
+**✅ THE RELEASE RECIPE IS PROVEN END TO END** — first time it has been run since
+runs 6/7/8 changed it.
 
-Run 8 verified the path the user actually reported broken — not the GYMTEST
-shortcut. Filmstrip: black → **TOMB RAIDER title with the ring menu** → the
-mansion interior renders and stays stable. `illegal=0`, `vector64 = 0x00004158`.
+    tools/build_cof.sh "<disc>.7z" /tmp/cofout      # ~20 min, video is the slow part
+    -> OPENLARA.COF 1,538,300 B + CAVES/CORE/EIDOS/INTRO.JV + MUSIC.PCM + GYMLOAD.DAT
+    gym_lskin == mrt_lskin guard FIRED correctly ("alias valid, saves 110016 B")
+    __bss_end 0x1E0A70 - UNDER the 0x1FC000 guard by 112,016 B
+    Booted in jagemu WITH ITS SD CARD: EIDOS clip plays through to the CORE logo,
+    illegal=0.  (`jagemu video <rom> --sd /tmp/cofout ...` - use --sd, it works.)
 
-New test hook **`AUTOGYM=1`** (plumbed in the Makefile, verified on the compile
-line): breaks out of the ring loop exactly where a real A-press on page 4 does,
-so it runs the whole menu exit — loading screen, level setup, `gpu_jvdec_done()`
-— unlike `GYMTEST`, which jumps to `menu_done` from far earlier and skips all
-of it. **Use AUTOGYM, not GYMTEST, for anything about the mansion from now on.**
+### ☠️ THE MUSIC FIX IS CORRECT BUT UNVERIFIED — do not "confirm" it offline
+The title-music refill was armed by reading **Jerry's local SRAM** directly
+(`*(volatile uint32_t *)0xF1C378u`), which `main.c:5077` forbids in terms: *"the
+68k cannot read a running JRISC honestly ... a spurious zero here RE-ARMS the
+voice"*. That is the reported skipping, and it is worst on ring moves because the
+repaint adds the contention that makes the bad read likely. Now fixed to use
+`jerry_v0_ncnt()` (DRAM mailbox) plus a `jerry_audio_stale()` stamp after
+`jerry_sfx_queue()` — the sfx path always did both; the music path did neither.
 
-☠️ **`AUTOSTART` now yields to `AUTOGYM`** (`#if defined(AUTOSTART) &&
-!defined(AUTOGYM)`). Both hooks `break` out of the ring and AUTOSTART is FIRST,
-so an AUTOGYM arm built with AUTOSTART also on silently landed in the CAVES and
-would have read as "the mansion is broken again". The flag reached the compile
-line and was still preempted — *landing is not the same as taking effect*.
+**An A/B of captured audio showed NO DIFFERENCE** (1071 loud windows, same 2
+silence runs, same longest gap, in both). Expected: jagemu serves those reads
+honestly, so it cannot exhibit the race. ★ *Correct by the documented law,
+unverifiable by test.* **This one needs silicon** — add it to the batched rig
+session and have the user listen on the title screen while moving the ring.
+Filed as `jaguar-shared/COBWEB_ISSUES_OPENLARA_SRAM.md` (04d9bd1), asking for an
+opt-in `JAGEMU_WARN_CORE_SRAM=1` counter rather than a behaviour change.
 
-**`tools/build_cof.sh` no longer passes `GYMSD`.** Under GYMSD the ring
-deliberately REFUSES Lara's Home (null stubs), so the item was unreachable, not
-just absent — that is what "Lara's house is broken" looked like from the title
-screen. It now fits: 6 of 6 pads, ROM 1,554,268 B.
+⬜ Two more sites still read `$F1C378`/`$F1C340` directly — `main.c` ~5470-5490
+(end-of-clip flush) and ~4902 / ~6626. The flush is a blocking drain so it is
+less exposed, but they are the same illegal read. Worth converting.
 
 ### What to do next
-1. **Run `tools/build_cof.sh` END TO END.** It has changed in runs 6, 7 and 8
-   and has NOT been executed once since. This is now the highest-risk item: the
-   release recipe is unproven. Confirm the `gym_lskin == mrt_lskin` guard fires
-   correctly, all six pads build, and the four videos still convert.
-2. **Docker container build** — same recipe, from the user's disc.
-3. Then the queue: #3 title audio (SFX jumps + music skips on menu moves — an
-   emulator-answerable item via `jagemu audio`), #12 flat-shaded floor fps A/B,
-   #2 full run-through (rig, batched; capture card still unplugged).
+1. **Docker container build** — the recipe changed; `Dockerfile` pins
+   `COBWEB_REV=b8dd333`. Prove the container reproduces `/tmp/cofout`.
+2. **Convert the remaining direct `$F1C378`/`$F1C340` reads** to the mailbox API.
+3. #12 flat-shaded floor fps A/B (emulator-answerable via `room_cycles.py`).
+4. #2 full run-through + the music check (rig, batched — capture card unplugged,
+   so this needs the user at the TV).
 
-☠️ Only `gbuild.sh` enforces the stack-headroom guard — a bare `make` does not.
-Count the `.cof` files.
-☠️ The mansion needs `TEXSCALE=4` + `RAMP_PAL` + **no** `STATICS`.
+☠️ `session_run.sh end` REFUSES while `build_cof.sh` is running — it rewrites
+tracked assets and a blind `git add -u` would commit a half-built tree. The
+check is a **PID lockfile** (`/tmp/.build_cof.lock`), not `pgrep -f`:
+★ **never gate anything on a process list you are yourself in.** The first
+version matched its own watcher shells and blocked a clean commit; the `pkill`
+issued to clear them then matched and killed the issuing shell.
+☠️ Only `gbuild.sh` enforces the stack-headroom guard; `build_cof.sh` uses a bare
+`make`, so check `__bss_end` by hand after a release build (it was fine: 112KB
+of margin).
+
+---
+
+## WHAT CHANGED IN RUNS 9-11 (2026-08-16)
+
+- ✅✅ **Release recipe proven end to end** with all four videos, both guards, and
+  a real SD-card boot in jagemu.
+- ✅ **Title-music refill fixed** to read the DRAM mailbox and stamp stale —
+  correct per the codebase's own law, but **offline-unverifiable**; needs silicon.
+- ✅ **Filed a real emulator divergence** to jaguar-shared: jagemu lets the 68k
+  read a running core's local SRAM honestly, so this whole bug class is invisible
+  offline. Asked for a counter, not a behaviour change, because other projects
+  read those ranges today.
+- ✅ **`session_run.sh end` guards against mid-build commits** — hit for real with
+  three of four videos converted.
+- ★ Lesson worth keeping: *a fix that produces no measurable change is not
+  automatically wrong* — but it is also not confirmed. Say which one it is.
 
 ---
 
