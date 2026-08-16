@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 4
+RUN: 5
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,72 +17,87 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**Lara's Home: the 68000 crashes FIRST. Run 2's "GPU wedge" was wrong.**
+**Lara's Home: 68k VECTOR 64 IS OVERWRITTEN WITH `MAGIC_DONE`. Half fixed.**
 
-☠️ **CORRECTION TO RUN 2.** Run 2 concluded the GPU wedged and a watchdog halted
-it. Run 3 disproved that with a frame timeline:
+Run 4 found the actual mechanism, proved it, fixed one of two causes, and
+localised the second precisely.
 
-    f 40  gpu pc=0xF03000 instret=0          illegal=0
-    f 80  gpu pc=0xF03D84 (halt) instret=9556 illegal=0   <- normal, clean halt
-    f160  gpu pc=0xF03D84 (halt) instret=9556 illegal=0
-    f170  gpu pc=0xF030E8 instret=438664      illegal=0   <- GPU RUNNING fine
-    f180  gpu pc=0xF0317C instret=908590      illegal=1   <- 68k faults HERE
-    f400  identical to f180
+### What is proven
 
-`illegal` flips to 1 at the same instant the GPU freezes, and
-`startup.S:exc_catch` **itself** does `clr.l 0xF02114` (G_CTRL=0). So the 68k
-crashed and *exc_catch* stopped Tom mid-render — the GPU PC 0xF0317C is
-**incidental**, wherever Tom happened to be. Do not chase it as a wedge site.
+    mansion  $100 (vector 64) = 0A3DD05E  (MAGIC_DONE)
+             $104 (vector 65) = 0A3D0001  (MAGIC_HELLO)
+             $108/$10C        = 00004054  (exc_catch, untouched)
+    caves    $100             = 00004158  (vblank_stub, INTACT)
 
-Also corrected: `gpu_sync`'s `G_CTRL=0; return 1` is the **normal completion**
-path (`cpu_stop_unless` returns 1 when the mailbox reads MAGIC_DONE), not a
-timeout path. Run 2 misread it.
+The GPU kernel signals completion with `alldone: store r0,(r30)` where **r30 is
+the mailbox pointer**, and `mailbox[1] = MAGIC_HELLO` is stored at `r30+4`. Both
+magics landed on **vectors 64 and 65**, so `r30` was `0x100`. Vector 64 is the
+TOM/VBLANK vector, so the next vertical interrupt "returned" to `0x0A3DD05E` and
+the 68000 died **inside the ISR** — the stack carries TWO exception frames, the
+outer one taken at `cpu_stop_unless`'s `stop #$2000`.
 
-**THE ACTUAL FAULT: an `rts` returns to `0x0A3DD05E` (= MAGIC_DONE).**
-Faulting PC `0x0A3DD060` is that value + 2. `cpu_stop_unless` (`cpu68k.S:19`)
-is clean and its args are correct (`addr=0x001D33A0` = mailbox, `val=MAGIC_DONE`).
-The caller pushes exactly those two longs:
+★★★★★ This is why the failure looked like a GPU wedge AND like a rendering bug.
+The stripes on screen were `exc_catch`'s crash beacon; the halted GPU was
+`exc_catch`'s own `clr.l 0xF02114`. **Neither symptom was the bug.**
 
-    move.l #$0A3DD05E,-(a7)      ; MAGIC_DONE   <- ends up 8(sp)
-    move.l #$001D33A0,-(a7)      ; &mailbox[0]
-    jsr    ($0000420C).l         ; cpu_stop_unless
-    adda.l #$00000008,a7
+⬜ **Does this explain the A10 BOOT LOTTERY?** `video_flip_force`'s `VECDIAG`
+probe exists solely to ask "is vector 64 still `vblank_stub`?", and the recorded
+A10 root cause is *"VI never fires"*. A clobbered vector 64 would produce exactly
+that, and would be codegen/layout dependent — i.e. a lottery. **Worth checking on
+a failing caves pad**: peek `$100` on each `PADTEXT` roll. If a black pad shows
+`0A3DD05E`, this bug and the boot lottery are the same bug.
 
-⇒ **a stack imbalance of exactly 8 bytes** — the size of those two args — makes
-`rts` pop MAGIC_DONE as a return address. Find who returns with `sp` 8 high.
+### FIXED this run (keep — correct regardless)
 
-NEXT PROBES, cheapest first:
-1. **Catch it live.** `jagemu serve --rom build/openlara.cof` + `jagemu ctl <inst>
-   run 175`, then `step`/`disasm`/`peek` across the fault. This is the precise
-   tool and it was not used yet — `break <rom> --at 0xADDR` also exists.
-2. **Suspect the interrupt path, not `cpu_stop_unless`.** `stop #$2000` inside it
-   sleeps with interrupts unmasked; an ISR that returns with `rts` instead of
-   `rte`, or that mismatches its own pushes, lands exactly here. Check
-   `vblank_stub` / the INT1 handler's stack discipline.
-3. **Why only the mansion?** Likely it is slower per frame, so `gpu_sync` spins
-   past `i >= 200 && (i & 63) == 63` and calls `video_rearm_irq()`
-   (`video.c:692`) — a path the Caves rarely reaches. It writes `VMODE` and
-   `cpu_irq_on()` mid-loop. Build with that call disabled and see if the mansion
-   survives; that is a one-line A/B and would localise it immediately.
+`params[1]` is the kernel's `r30` source (`load (r1),r30 ; [1] mailbox`), and
+**`gpu_jvdec_kick` reuses `params[1]` as `prevLen`**. Six kick paths set
+`params[0,8,12,...]` but never restored `params[1]`:
+`gpu_geomxform_kick`, `gpu_textured_kick`, `gpu_geotex_kick`,
+`gpu_geotex_dispatch`, `gpu_geomdirect` — all now set
+`*(G_PARAMS + 4) = (uint32_t)mailbox`. Verified: `params[1]` at the world kick
+went from a stale `0x001D33A0` to `0x001D33F0`, which **is** the C `mailbox`
+symbol (`nm`: `001d33f0 b mailbox`).
 
-RULED OUT: `gym.bin` vs the TEXSCALE=4 atlas (256x352 = 90,112 exactly); the
-room list (structurally identical to the Caves'); the loading-screen SD read
-(shared path, falls through); `cpu_stop_unless` itself.
+### NOT fixed — the remaining cause
 
-★ **Technique that worked** — the block had no labels, so mapping a PC to an
-instruction was guesswork. Inserting `_wpNN:` labels on every instruction and
-re-assembling gave an exact map, and `cmp` proved the binary **byte-identical**
-(labels emit nothing). `gpu_probe.gas` is left in the tree for reuse.
+The vector is **still** clobbered with `params[1]` correct, so **`r30` is being
+destroyed INSIDE the kernel**. Evidence: at halt `r30 = 0x0015A050`, which is
+`params[5]` (the atlas pointer) — not a mailbox at all. The clobber happens
+between **f166 and f172**, on the first world kick.
 
-☠️ Do **not** A/B against `ARCHIVE_PRERELEASE_2026-08-15/gym_before` — its
-`gym_lskin.bin` differs from `mrt_lskin.bin`, so with the run-1 alias the
-mansion would silently get the Caves skeleton. Re-extract at TEXSCALE=2 instead.
+NEXT PROBES:
+1. **Find who clobbers r30 in `gpu_geotex.gas`.** It is documented as callee-
+   saved: line 1496 *"r30 = mailbox"* as an input, line 3729 *"Preserves
+   r10-r21, r4-r6, r30"*. Grep every write to r30 and check each routine on the
+   list-mode path honours that. `grep -n "r30" gpu_geotex.gas`.
+2. **Use the probe-label trick** (run 3) to catch it live: `jagemu serve` +
+   `ctl run 166` then step, watching r30 in `ctl state`.
+3. **Cheap containment while hunting**: have the kernel reload r30 from
+   `params[1]` immediately before `alldone`'s store. That is a 2-instruction
+   guard; if the vector then stays intact it confirms the diagnosis exactly and
+   makes the mansion testable while the real culprit is found.
+4. **Then check the A10 link** (see above) — potentially the bigger prize.
 
-☠️ Rebuild the exact pad you run before symbolising (`PADTEXT` shifts every
-address; `build/` keeps only the last pad linked). Working p0 build = gbuild's
-BASE flags + `ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 ENEMYTEX=1 BLOBCACHE=1
-JCENT=1 JOVL=1 SECTLONG=1 NOPCLIP=1 VRESN=80 TRAPFLOOR=1 GUNS=1 PROBE_AHEAD=256
-GYMTEST=1 PADMUTE=1 PADTEXT=0`.
+☠️ Do not chase GPU PC `0xF0317C` or "the GPU wedged" — run 3 disproved both.
+☠️ Do not A/B against `ARCHIVE_PRERELEASE_2026-08-15/gym_before` (its
+`gym_lskin` differs from `mrt_lskin`; the run-1 alias would feed the mansion the
+Caves skeleton).
+☠️ Rebuild the exact pad before symbolising. p0 command is in run 3's notes.
+
+---
+
+## WHAT CHANGED IN RUN 4 (2026-08-16)
+
+- ✅ **Root cause found and proven**: 68k vector 64 overwritten with
+  `MAGIC_DONE` by the GPU's completion store through a bad `r30`. Caves vector
+  verified intact as the control.
+- ✅ **Fixed a real latent bug in 5 kick functions** — `params[1]` (the kernel's
+  mailbox pointer) was never restored after `gpu_jvdec_kick` reused it as
+  `prevLen`. Verified corrected at the world kick.
+- ✅ **Localised the remaining cause** to `r30` being clobbered inside the
+  kernel (holds the atlas pointer at halt), between f166 and f172.
+- ⬜ Raised the possibility that this **is** the A10 boot lottery ("VI never
+  fires") — a concrete, cheap test is written above.
 
 ---
 

@@ -283,6 +283,19 @@ void gpu_geomxform_kick(const uint32_t *list, uint32_t count, uint16_t *fb,
     *(volatile uint32_t *)(G_PARAMS + 8) = count;
     *(volatile uint32_t *)(G_PARAMS + 12) = (uint32_t)fb;
     *(volatile uint32_t *)(G_PARAMS + 16) = (uint32_t)camblock;   /* params[4] */
+    /* ☠️☠️☠️ RESTORE THE MAILBOX POINTER. params[1] is where gpu_geotex.gas
+       reads r30 ("load (r1),r30 ; [1] mailbox") and r30 is what `alldone`
+       stores MAGIC_DONE through. gpu_jvdec_kick REUSES params[1] as prevLen,
+       and no world kick put it back - so after any video decode the kernel
+       took a LENGTH as its mailbox address and wrote MAGIC_HELLO/MAGIC_DONE
+       through it. Measured in Lara's Home: prevLen was 0x100, so the two
+       magics landed on 68k VECTOR 64 and 65 - the TOM/VBLANK vector. The
+       next vertical interrupt then "returned" to 0x0A3DD05E (= MAGIC_DONE)
+       and the 68000 died in the ISR. Verified: mansion $100 = 0A3DD05E,
+       $104 = 0A3D0001; Caves $100 = vblank_stub, intact.
+       ★ This is why the failure looked like "the GPU wedged" and like a
+       RENDERING bug: the stripes on screen were exc_catch's crash beacon. */
+    *(volatile uint32_t *)(G_PARAMS + 4)  = (uint32_t)mailbox;
     mailbox[0] = 0;
     mailbox[1] = 0;
     G_PC = G_SRAM;
@@ -395,6 +408,19 @@ void gpu_textured_kick(const uint32_t *list, uint32_t count, void *fb,
     *(volatile uint32_t *)(G_PARAMS + 16) = (uint32_t)atlas;
     *(volatile uint32_t *)(G_PARAMS + 20) = atlas_width;
     *(volatile uint32_t *)(G_PARAMS + 24) = (uint32_t)pal;
+    /* ☠️☠️☠️ RESTORE THE MAILBOX POINTER. params[1] is where gpu_geotex.gas
+       reads r30 ("load (r1),r30 ; [1] mailbox") and r30 is what `alldone`
+       stores MAGIC_DONE through. gpu_jvdec_kick REUSES params[1] as prevLen,
+       and no world kick put it back - so after any video decode the kernel
+       took a LENGTH as its mailbox address and wrote MAGIC_HELLO/MAGIC_DONE
+       through it. Measured in Lara's Home: prevLen was 0x100, so the two
+       magics landed on 68k VECTOR 64 and 65 - the TOM/VBLANK vector. The
+       next vertical interrupt then "returned" to 0x0A3DD05E (= MAGIC_DONE)
+       and the 68000 died in the ISR. Verified: mansion $100 = 0A3DD05E,
+       $104 = 0A3D0001; Caves $100 = vblank_stub, intact.
+       ★ This is why the failure looked like "the GPU wedged" and like a
+       RENDERING bug: the stripes on screen were exc_catch's crash beacon. */
+    *(volatile uint32_t *)(G_PARAMS + 4)  = (uint32_t)mailbox;
     mailbox[0] = 0;
     mailbox[1] = 0;
     G_PC = G_SRAM;
@@ -521,6 +547,19 @@ void gpu_geotex_kick(const void *room, void *fb, const void *camblk,
     *(volatile uint32_t *)(G_PARAMS + 16) = (uint32_t)camblk;
     *(volatile uint32_t *)(G_PARAMS + 20) = (uint32_t)atlas;
     *(volatile uint32_t *)(G_PARAMS + 24) = atlas_width;
+    /* ☠️☠️☠️ RESTORE THE MAILBOX POINTER. params[1] is where gpu_geotex.gas
+       reads r30 ("load (r1),r30 ; [1] mailbox") and r30 is what `alldone`
+       stores MAGIC_DONE through. gpu_jvdec_kick REUSES params[1] as prevLen,
+       and no world kick put it back - so after any video decode the kernel
+       took a LENGTH as its mailbox address and wrote MAGIC_HELLO/MAGIC_DONE
+       through it. Measured in Lara's Home: prevLen was 0x100, so the two
+       magics landed on 68k VECTOR 64 and 65 - the TOM/VBLANK vector. The
+       next vertical interrupt then "returned" to 0x0A3DD05E (= MAGIC_DONE)
+       and the 68000 died in the ISR. Verified: mansion $100 = 0A3DD05E,
+       $104 = 0A3D0001; Caves $100 = vblank_stub, intact.
+       ★ This is why the failure looked like "the GPU wedged" and like a
+       RENDERING bug: the stripes on screen were exc_catch's crash beacon. */
+    *(volatile uint32_t *)(G_PARAMS + 4)  = (uint32_t)mailbox;
     *(volatile uint32_t *)(G_PARAMS + 28) = 0;   /* legacy: no dispatch list */
     mailbox[0] = 0;
     mailbox[1] = 0;
@@ -558,6 +597,11 @@ void gpu_geotex_dispatch(const uint32_t *list, void *fb, const void *camblk,
     *(volatile uint32_t *)(G_PARAMS + 16) = (uint32_t)camblk;
     *(volatile uint32_t *)(G_PARAMS + 20) = (uint32_t)atlas;
     *(volatile uint32_t *)(G_PARAMS + 24) = atlas_width;
+    /* ☠️☠️☠️ THE MAILBOX POINTER. See the note in gpu_geotex_kick: params[1]
+       is r30 in the kernel, gpu_jvdec_kick reuses it as prevLen, and THIS is
+       the kick the world actually uses (GEOMDIRECT list mode). Without this
+       line the kernel signalled MAGIC_HELLO/MAGIC_DONE through a LENGTH. */
+    *(volatile uint32_t *)(G_PARAMS + 4)  = (uint32_t)mailbox;
     *(volatile uint32_t *)(G_PARAMS + 28) = 0xF03F74u;       /* SRAM list */
     mailbox[0] = 0;
     mailbox[1] = 0;
@@ -598,6 +642,8 @@ int gpu_geomdirect(const uint32_t *roomlist, uint32_t roomcount, uint16_t *fb,
                    uint32_t laracount)
 {
     G_CTRL = 0;
+    /* ☠️ mailbox pointer — same reason as the other kicks (params[1] = r30). */
+    *(volatile uint32_t *)(G_PARAMS + 4)  = (uint32_t)mailbox;
     *(volatile uint32_t *)(G_PARAMS + 0)  = (uint32_t)roomlist;
     *(volatile uint32_t *)(G_PARAMS + 8)  = roomcount;
     *(volatile uint32_t *)(G_PARAMS + 12) = (uint32_t)fb;
