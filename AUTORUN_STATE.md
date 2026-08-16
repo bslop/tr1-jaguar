@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 12
+RUN: 13
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,45 +17,69 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**cobweb at `d930e58`** (renderer byte-identical, `COBWEB_REV` bumped).
+**★★★★★ THE BLITTER PROFILE IS OPEN — and the biggest single shape is the CLEAR.**
 
-### ⬜ OPEN: `--blit-histogram` reports nothing on our ROM
-The new per-shape Blitter breakdown is exactly the instrument the standing fps
-lever needs (Blitter ~34.6% of frame; `NOFILL=1` = 6.67 → 9.32 fps), but:
+`--blit-histogram` works, with two gates (found by `jag_rr`, reproduced here):
 
-    jagemu run build_cavesfix/cavesfix_p0.cof --frames 900 --blit-histogram
-    state.blitter = {"bcmd_busy_reads": 14920356, "bcmd_poll_in_settle": 0}
-    gpu.timing.blit / blit_count / blit_launch / blit_transfer / blit_wait = 0
-    dsp.timing.* = 0 ; no histogram section on stdout or stderr
+    jagemu run <rom>.cof --frames 1500 --blit-histogram --pc-histogram \
+        --core gpu --fidelity silicon        # output goes to STDERR, not JSON
 
-Internally inconsistent: **14.9M B_CMD busy-reads with ZERO counted launches**.
-Binary is current (`strings` finds the flag). Hypothesis: `blit_count` misses
-blits issued from **Tom** (our kernel writes B_CMD from GPU code in phrase mode),
-so a Tom-side renderer lands in no bucket. Reported to `jag_rr` with the numbers;
-**wait for their reply before building anything on these counters.**
+* `--fidelity silicon` is required — the default `functional` runs no timing
+  model, so EVERY `timing.*` field reads 0. ★ **All timing fields zero (dsp too,
+  not just blit) = no timing model, not a Blitter problem.**
+* `--blit-histogram` alone is **inert**: the reader lives in `boot_profiled`,
+  which only runs when `--pc-histogram`/`--profile68k` is also passed.
 
-★ `bcmd_poll_in_settle = 0` — our SPANSHADE dummy-settle-reads do not hit the
-window jag_rr's model reproduces.
+### ☠️ MEASURE IN THE LEVEL. 300 frames is the TITLE SCREEN.
+This ROM does not reach gameplay until ~f1200 (AUTOSTART exits the ring, then
+boot video + loading screen). The wall-clock block is the tell:
+
+    f300 :  Tom 8.1%  (Blitter 0.2%)   Jerry 80.5%   48 shapes   <- MENU
+    f1500:  Tom 62.6% (Blitter 13.9%)  Jerry 96.0%  438 shapes   <- LEVEL
+
+A conclusion drawn at f300 ("a few big full-screen copies dominate") is exactly
+inverted in the level. ★ **Always read the wall-clock accounting next to the
+shares — it is what catches the wrong window.**
+
+### The gameplay profile (f1500, top of 438 shapes)
+
+     inner outer srcen  count  ticks/frame  % xfer
+       320    80    no    177        16916   21.2%   <- VRESN=80 FULL-SCREEN CLEAR
+       320   240   yes      4         2294    2.9%   (menu leftovers)
+       320   240    no      6         1720    2.2%
+       320    28   yes     18         1204    1.5%
+        17     1   yes   8272         1048    1.3%
+        73     1   yes   1378          751    0.9%
+         5     1   yes  19306          721    0.9%
+        55     1   yes   1632          670    0.8%
+
+⇒ **one full-width clear (21.2%) plus a very long tail of single-scanline
+spans** — 19,306 blits of 5x1, 8,272 of 17x1, and 400+ more shapes below the
+printed rows.
+
+☠️ **The table is TOP-20 of 438 and the printed rows total only ~32% of
+transfer. Do NOT aggregate from it** — I tried and got a bogus 64.5%/31.8%
+split. Asked jag_rr for a `--top N` or full rows in JSON; the tail is where the
+rest of the answer is.
 
 ### What to do next
-1. **Docker container build** — recipe changed in runs 6/7/8 and `Dockerfile`
-   now pins `COBWEB_REV=d930e58`. Prove the container reproduces `/tmp/cofout`.
-   (The host recipe itself is proven: run 10 built it end to end and booted it
-   in jagemu off its own SD card.)
-2. **#12 flat-shaded floor fps A/B** — emulator-answerable via
-   `tools/room_cycles.py`; gives a real number without the rig.
-3. If jag_rr fixes the histogram, use it to decide the fill strategy: a few big
-   copies vs ten thousand short spans is the fork in the road.
-4. Rig-batched (needs the user at the TV, capture card unplugged): #2 run-through,
-   the title-music check, enemy skins and the mansion on silicon.
+1. **Attack the 320x80 clear — 21.2% of transfer in ONE shape.** Options: skip
+   clearing where the world provably covers the band; clear only the dirty
+   region; or fold the clear into the first draw. ☠️ Prior art says `NOCLEAR=1`
+   ships a visible SMEAR, so a naive removal is not it — the target is a
+   *narrower* clear, not no clear.
+2. **Get the full 438-row tail** (needs the jagemu change, or parse repeated
+   runs) before optimising spans — 5x1 x19,306 is a lot of blits for 0.9%, so
+   the per-span cost may be launch overhead rather than transfer.
+3. Docker container build was started in run 12 (`jag-openlara:run12`,
+   `/tmp/dockout`) — check it finished and diff against the host baseline:
+   `OPENLARA.COF md5 0861a1f9db23cca31155eb451595ebb5`.
 
-### ☠️ Deliberately NOT done: converting the rest of the `$F1C340`/`$F1C378` reads
-Sites at `main.c` ~4901 (writes, not reads — fine), ~5470/5483 (end-of-clip
-flush), ~6642, ~7433 (debug bar). Only the music one had a reported symptom, and
-this bug class is **unverifiable offline** (jagemu serves those reads honestly —
-see `jaguar-shared/COBWEB_ISSUES_OPENLARA_SRAM.md`). Changing working code that
-cannot be tested is a bad trade; do these when the rig can confirm, or if a
-symptom appears.
+### ✅ CLOSED: task #12, flat-shaded floors
+**Already answered on silicon and I nearly re-ran it**: `FLATFLOOR` measured
+7.50 fps on BOTH arms (jagemu agreed at −0.0%), arm B verified to really render
+flat floors. Do not re-open. Its lesson stands and is now confirmed by the
+histogram: per-pixel cost is not the lever.
 
 ---
 
