@@ -1684,6 +1684,13 @@ endif
 
 # TRAVDIAG=1: print what the ledge in front of Lara allows (rise, verdict,
 # grab reach, state) so a screencast says WHICH traversal rule refuses.
+# WORLDCOUNT=1: paint the WORLD face counters (staged vs rastered) as bars, so
+# the black-geometry split can be read off a capture instead of a console.
+# Needs the kernel counters: pass CULLCOUNT=1 too.
+ifdef WORLDCOUNT
+CFLAGS   += -DWORLDCOUNT
+CXXFLAGS += -DWORLDCOUNT
+endif
 ifdef TRAVDIAG
 CFLAGS   += -DTRAVDIAG
 CXXFLAGS += -DTRAVDIAG

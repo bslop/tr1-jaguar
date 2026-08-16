@@ -68,7 +68,16 @@ ROWDIET=1 STATICS=1 BANKDIET=1 LOWRES=1 FLIPASM=1 DIVZGUARD=1 MOVESET=1 \
 SPANSHADE=1 SHADEEXCL=1 TIMESTEP=1 ANIMRATE=1 OPDBL=1 LPLANES=1 \
 VCBIG=1 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 ENEMYTEX=1 BLOBCACHE=1 \
 JCENT=1 JOVL=1 SECTLONG=1 INLINEMUL=1 OFFHOIST=1 VPACK=1 NOPCLIP=1 \
-TRAPFLOOR=1 GUNS=1 GYMSD=1 BOOTVID=1 JVFASTKICK=1}"
+TRAPFLOOR=1 GUNS=1 GYMSD=1 BOOTVID=1 JVFASTKICK=1 PROBE_AHEAD=256}"
+
+# ☠️ PROBE_AHEAD IS NOT OPTIONAL. The default is WALK_SPEED*2 = 94 units against
+# a 1024-unit sector, and collision holds Lara ~100 units off a wall - so the
+# forward probe never leaves the cell she stands in, finds her own floor, and
+# EVERY climb refuses (standing climb, running vault and the airborne grab all
+# feed off that one probe). Verified on silicon 2026-08-16: at 94 the on-screen
+# verdict reads "flat ground ahead" while she faces an obvious ledge; at 256 a
+# 512 and a 768 ledge both read VAULT and she climbs. Leaving this out of the
+# container would have shipped a demo where nothing can be climbed.
 
 say() { printf '\n\033[1;36m==>\033[0m %s\n' "$*"; }
 

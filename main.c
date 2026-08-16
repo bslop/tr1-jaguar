@@ -9027,6 +9027,34 @@ bootvid_entry:
                  Its two ends ARE the picture box, whatever the scene is doing. */
               { int _x; uint8_t *_fb = (uint8_t *)video_backbuffer();
                 for (_x = 0; _x < RENDER_W; _x++) _fb[(RENDER_H-20)*RENDER_W+_x] = 255; }
+#ifdef WORLDCOUNT
+              /* ☠️ THE SPLIT FOR THE BLACK-GEOMETRY BUG, ON SCREEN. The world
+                 face counters live at $1C0000 but are read out with dbg_kv,
+                 which needs a Skunkboard console this rig does not have - so
+                 the one measurement that separates the two candidate causes
+                 was unreachable. Paint them instead, right under the
+                 calibration rule so they can be read off any capture:
+                    row -28  STAGED    faces the 68k handed Tom
+                    row -24  RASTERED  faces Tom actually drew
+                 STAGED ~ 0            -> the room never reached Tom at all
+                                          (visibility / dispatch / hop cap)
+                 STAGED high, RASTERED low -> submitted and thrown away inside
+                                          the kernel (near plane, guards, cull)
+                 Those two have completely different fixes, which is why this
+                 must be measured before anything is written. Scale /8 so a
+                 full 320px bar is 2560 faces. */
+              { volatile uint32_t *wc = (volatile uint32_t *)0x1C0000u;
+                uint8_t *_fb = (uint8_t *)video_backbuffer();
+                int bs = (int)(wc[0] >> 3), br = (int)(wc[1] >> 3), _x;
+                if (bs > RENDER_W-1) bs = RENDER_W-1;
+                if (br > RENDER_W-1) br = RENDER_W-1;
+                for (_x = 0; _x < RENDER_W; _x++) {
+                    _fb[(RENDER_H-28)*RENDER_W+_x] = 0;
+                    _fb[(RENDER_H-24)*RENDER_W+_x] = 0; }
+                for (_x = 0; _x < bs; _x++) _fb[(RENDER_H-28)*RENDER_W+_x] = 255;
+                for (_x = 0; _x < br; _x++) _fb[(RENDER_H-24)*RENDER_W+_x] = 255;
+                wc[0] = 0; wc[1] = 0; }
+#endif
               blit_fill_rect(dfb3, 168, RENDER_H-18, 152, 15, 254);   /* bottom, not top */
               blit_fill_rect(dfb3, 170, RENDER_H-16, 5, 5, 255);      /* calibration */
               for (c6 = 0; c6 < 10; c6++)
