@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # PERFHUNT scene profiler: serve/ctl driver.
+import os
 # Per scene: boot to steady state, then a 600-frame window collecting
 #  - cumulative GPU timing at window start/end (steady-state decomposition)
 #  - displist[0] write timestamps via watch (render cadence -> frame-time variance)
 #  - GPU PC samples every 2 frames (sampling profiler; separates halt-idle from render)
 import json, subprocess, sys, time
 
-JAGEMU = "/home/jvilla/Documents/Git/cobweb/sim/target/release/jagemu"
+JAGEMU = os.environ.get("JAGEMU", "jagemu")
 DISPLIST = None  # set per build below
 
 def ctl(inst, *args):

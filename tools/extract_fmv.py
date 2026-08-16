@@ -40,22 +40,34 @@ def iso_dir_entries(f, lba, size):
         left -= 2048
 
 def main():
-    disc, outdir = sys.argv[1], sys.argv[2]
-    want = [w.upper() for w in sys.argv[3:]]
+    dump(sys.argv[1], sys.argv[2], sys.argv[3:])
+
+
+def dump(disc, outdir, want=()):
+    """Dump the named movies (default: all) as RAW 2352-byte sectors.
+    Importable so the disc extractor can call it while it still holds the
+    normalized data track - that track lives in a temp dir it deletes."""
+    want = [w.upper() for w in want]
     os.makedirs(outdir, exist_ok=True)
     f = open(disc, "rb")
     pvd = rd_sector(f, 16)[U0:U0+2048]
     assert pvd[1:6] == b"CD001", "no ISO9660 PVD at sector 16 (+24)"
     root_lba = struct.unpack_from("<I", pvd, 156+2)[0]
     root_sz = struct.unpack_from("<I", pvd, 156+10)[0]
-    fmv = None
+    # FMV/ holds the cutscenes; MOVIES/ holds INTRO.STR, which OPENS WITH THE
+    # EIDOS LOGO - so the whole front end comes off the user's own disc and
+    # nothing has to ship with the repo. SRCDIR picks one (default: both).
+    wantdirs = [d.upper() for d in os.environ.get("SRCDIR", "FMV,MOVIES").split(",")]
+    dirs = []
     for name, lba, sz, isdir in iso_dir_entries(f, root_lba, root_sz):
-        if isdir and name.upper() == "FMV":
-            fmv = (lba, sz)
-    assert fmv, "no FMV directory on this disc"
+        if isdir and name.upper() in wantdirs:
+            dirs.append((name.upper(), lba, sz))
+    assert dirs, "no FMV/ or MOVIES/ directory on this disc"
     n = 0
-    for name, lba, sz, isdir in iso_dir_entries(f, *fmv):
+    for _dn, _dl, _ds in dirs:
+     for name, lba, sz, isdir in iso_dir_entries(f, _dl, _ds):
         if isdir: continue
+        if name in ("\x00", "\x01"): continue
         if want and name.upper() not in want: continue
         nsec = (sz + 2047) // 2048
         out = os.path.join(outdir, name.upper())

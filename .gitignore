@@ -57,3 +57,9 @@ probes/**/*.png
 
 # per-tag ROM sets from tools/gbuild.sh (one .cof per A10 pad)
 build_*/
+
+# ring item: the Jaguar controller is an ORIGINAL model (no disc content),
+# so unlike every other *_geom/_atlas blob it ships with the repo.
+!ctrl_geom.bin
+!ctrl_atlas.bin
+mrt_gunanim.h

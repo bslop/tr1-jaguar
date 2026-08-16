@@ -11,6 +11,7 @@ OPENLARA.COF
 mrt.h
 mrt_lara.h
 mrt_spawn.h
+mrt_gunanim.h
 gym.h
 gym_lara.h
 gym_spawn.h
@@ -37,3 +38,9 @@ __pycache__/
 *_surgeries.gas
 *_halfA.gas
 .git
+
+# EXCEPTION: the Jaguar controller ring item is an ORIGINAL model (authored in
+# Blender, no disc content), and nothing in the container can regenerate it -
+# so unlike every other *.bin it has to reach the image.
+!ctrl_geom.bin
+!ctrl_atlas.bin

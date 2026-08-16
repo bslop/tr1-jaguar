@@ -1,9 +1,18 @@
 # Tomb Raider 1 for the Atari Jaguar
 
-A native Atari Jaguar port of Tomb Raider 1, running real TR1 levels on real
-hardware: full Caves and Lara's Home, textured + lit, runtime-skinned Lara with
-her complete animation set, the authentic title screen with the 3D passport
-ring menu, sound effects, and the title theme streamed from SD.
+A native Atari Jaguar port of Tomb Raider 1, running the real first level on
+real hardware: the full Caves, textured and lit, with a runtime-skinned Lara
+carrying her complete animation set. Wolves and bats hunt her, she draws and
+fires the pistols, collapsing floors give way, switches open doors rooms
+away, and medikits are the game's own sprites.
+
+The whole front end is here too, converted off the same disc: the Eidos and
+Core logos, the attract cinematic, the 3D passport ring menu with the title
+theme streamed from SD, and the trek that plays before the Caves begin.
+
+**This is a development release.** It is a demo of a first level, not a
+finished game - expect rough edges and a frame rate that is the point of the
+exercise rather than a boast.
 
 Every Jaguar processor earns its keep:
 
@@ -29,11 +38,16 @@ All you need is [Docker](https://docs.docker.com/get-docker/) and your own
 ./convert.sh "Tomb Raider (USA) (v1.6).cue"
 ```
 
-A couple of minutes later `./TombRaider-Jaguar/` holds **`OPENLARA.COF`**,
-**`MUSIC.PCM`**, and a short copy-instructions note. Copy **both** files onto the
-**root** of your GameDrive SD card — the game *streams* `MUSIC.PCM` from the card,
-so skipping it makes the title screen hiss — then boot `OPENLARA.COF`. (Level loads
-take 10–15 seconds — that's the 68000 earning its keep.)
+When it finishes, `./TombRaider-Jaguar/` holds **`OPENLARA.COF`**, the four
+front-end clips (**`EIDOS.JV`**, **`CORE.JV`**, **`INTRO.JV`**, **`CAVES.JV`**),
+**`MUSIC.PCM`**, **`GYMLOAD.DAT`** and a copy-instructions note. Copy **every**
+file onto the **root** of your GameDrive SD card — the game *streams* the music
+and the video from the card, so a missing file means a hiss or a skipped clip —
+then boot `OPENLARA.COF`. (Level loads take 10–15 seconds — that's the 68000
+earning its keep.)
+
+Converting the video is most of the build time. `-e VIDEO=0` (or
+`VIDEO=0 ./convert.sh …`) skips it and boots straight to the title screen.
 
 The container extracts the disc, converts every asset, and compiles the ROM with
 a pinned toolchain, so the same disc always produces the same build. Nothing is
@@ -55,8 +69,8 @@ everything the container does:
 tools/build_cof.sh "Tomb Raider (USA) (v1.6).cue" ./out
 ```
 
-It extracts the disc, runs every converter, and builds `./out/OPENLARA.COF` +
-`MUSIC.PCM`. After editing engine code you can rebuild just the ROM with
+It extracts the disc, runs every converter, converts the front-end video, and
+builds the whole `./out/` payload. After editing engine code you can rebuild just the ROM with
 `make MULTIROOM=1 CFLAGS_EXTRA="-DJERRYPOSE"`.
 
 Rendering is **native 320×240** (no `HALFRES`). The frame is DSP/transform-bound,
@@ -83,12 +97,19 @@ The pipeline (all in `tools/`, driven by `build_cof.sh`):
 
 ## Controls
 
-- D-pad: move/turn · B: grab/action · C: walk · A: jump
+- D-pad: move/turn · A: jump · B: grab/action · C: walk
+- **OPTION: draw / holster the pistols** — then B fires, exactly as TR1 does it
+  (there is no separate fire button). X/Y/Z and the keypad are also mapped:
+  1 action · 2 jump · 3 walk · 4 draw · 5 roll · 6 look
 - Title screen: LEFT/RIGHT flips the passport/photograph, any fire button selects
 
 ## Credits
 
-- Engine + Jaguar port: beautifulslop <beautifulslop@gmail.com>, built with Claude (Anthropic)
+- **Code: written by Claude (Anthropic)** — the engine, the Jaguar port, the
+  GPU/DSP kernels, the asset pipeline and the tooling in this repository.
+- **Direction, hardware bring-up and testing: beautifulslop** — what to build,
+  what to fix, and every judgement call about how it should look and feel, made
+  against real silicon.
 - TR1 data formats: [OpenLara](https://github.com/XProger/OpenLara) by
   Timur "XProger" Gagiev (BSD-2-Clause — see LICENSE)
 - Title/loading art is RNC ProPack-compressed on the disc; `tools/rnc.py`

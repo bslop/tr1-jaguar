@@ -6,7 +6,7 @@
 import struct, math, os
 from collections import deque
 
-LEVEL = "/home/jvilla/Documents/Git/jag_openlara/tr1_psx/extracted/PSXDATA/LEVEL1.PSX"
+LEVEL = os.environ.get("TRLEVEL", "tr1_psx/extracted/PSXDATA/LEVEL1.PSX")
 TILE_PAGE_BYTES = 256*256//2
 CLUT_BYTES = 16*2
 NUM_TILES = 13

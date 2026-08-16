@@ -21,8 +21,8 @@
 # cart will race its own gd_freads and lock the console.
 set -uo pipefail
 OUT="${1:?usage: drive.sh <outdir> <script>}"; SCRIPT="${2:?}"
-JAGHW=/home/jvilla/Documents/Git/jaguar-shared/hw/jaghw
-JAGGD=/home/jvilla/Documents/Git/open_jaggd/jaggd
+JAGHW="${JAGHW:-$HOME/jaguar-shared/hw/jaghw}"
+JAGGD="${JAGGD:-$HOME/open_jaggd/jaggd}"
 export JAGHW_PROJECT=jag_openlara
 mkdir -p "$OUT"; TMP=$(mktemp -d)
 SECS=$(awk 'BEGIN{s=0} !/^#/ && NF==2 {s+=$2} END{printf "%d", s+3}' "$SCRIPT")
@@ -30,7 +30,7 @@ echo "== driving for ${SECS}s"
 # ☠️ USE jag_gd.sh's OWN bus detection. A hand-rolled `lsusb -d 04b4:`
 # matched NOTHING, so JAGGD_BUS was empty and every press silently failed
 # while the capture looked fine - the run read as "Lara never moves".
-GD_USB_ID=$(grep -m1 "^GD_USB_ID=" /home/jvilla/Documents/Git/jag_openlara/jag_gd.sh | cut -d= -f2- | tr -d "\"'")
+GD_USB_ID="${GD_USB_ID:-03eb:800e}"   # RetroHQ GameDrive
 B=$(lsusb 2>/dev/null | grep -i "$GD_USB_ID" | head -1 | sed -E 's/^Bus 0*([0-9]+).*/\1/')
 [ -n "$B" ] || { echo "GameDrive not enumerated"; exit 1; }
 echo "== GameDrive on bus $B"

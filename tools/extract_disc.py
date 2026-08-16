@@ -18,7 +18,10 @@ with a plain-English message if not.  No game data is kept anywhere else.
 import os, sys, struct, subprocess, tempfile, shutil, glob
 
 NEED_PSXDATA = ["LEVEL1.PSX", "GYM.PSX", "TITLE.PSX"]
-NEED_DELDATA = ["AMERTIT.RAW", "GYMLOAD.RAW"]
+# ☠️ AZTECLOA.RAW is the CAVES loading screen. It was missing from this list,
+# so every container build printed "cavesload MISSING -> blank 320x240" and
+# shipped a black loading screen - the one screen every player sees first.
+NEED_DELDATA = ["AMERTIT.RAW", "GYMLOAD.RAW", "AZTECLOA.RAW"]
 ISO_BLOCK    = 2048
 SYNC12       = b"\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x00"
 
@@ -219,6 +222,25 @@ def extract(disc, outdir):
                 _place_audio(audio, outdir)
             else:
                 print("  note: no CD-audio track (title theme will be silent).")
+        # ☠️ The movies must come out HERE. `work` (holding the normalized
+        # data track) is deleted in the finally below, and the front-end clips
+        # need RAW 2352-byte sectors, which the ISO reader above does not give.
+        want = os.environ.get("WANT_FMV", "")
+        if want:
+            names = [w for w in want.split(",") if w]
+            fmvdir = os.path.join(outdir, "FMV")
+            if data.startswith("DIR:"):
+                os.makedirs(fmvdir, exist_ok=True)
+                for n in names:
+                    p = _first([n], data[4:])
+                    if p: shutil.copy(p, os.path.join(fmvdir, n.upper()))
+            else:
+                try:
+                    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                    import extract_fmv
+                    extract_fmv.dump(data, fmvdir, names)
+                except Exception as e:
+                    print("  note: front-end movies not extracted (%s)" % e)
         print("disc extraction OK -> %s" % outdir)
     finally:
         shutil.rmtree(work, ignore_errors=True)

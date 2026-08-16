@@ -17,8 +17,8 @@
 #      unless its calibration word decodes.
 set -uo pipefail
 cd "$(dirname "$0")/.."
-GD=/home/jvilla/Documents/Git/jag_openlara/jag_gd.sh
-JAGHW=/home/jvilla/Documents/Git/jaguar-shared/hw/jaghw
+GD="${GD:-./jag_gd.sh}"
+JAGHW="${JAGHW:-$HOME/jaguar-shared/hw/jaghw}"
 export JAGHW_PROJECT=jag_openlara
 
 ROM=$(readlink -f "${1:?usage: vroll_game.sh <rom.cof> <outdir> [secs]}")

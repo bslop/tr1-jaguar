@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """OCCLUSION step-0: simulate (a) tile-coverage face-skip and (b) span-merge
+import os
 freerider against real JAGEMU_BLIT_TRACE span streams.
 
 Faces are delimited by the v4b per-face rect-shade blits (cmd=01C00E08 at
@@ -224,7 +225,7 @@ def report_scene(name, path, fps, dispatched, lastn=15):
     return sample
 
 if __name__ == "__main__":
-    base = "/tmp/claude-1000/-home-jvilla-Documents-Git-jag-openlara/65f61037-d2a5-46c3-bbba-d55b0e3d270c/scratchpad"
+    base = os.environ.get("SCRATCH", "scratch")
     report_scene("SPAWN (trace_spawn_raw, TRAP_base=PLAY_PS cfg)", f"{base}/trace_spawn_raw.log",
                  19.5, 914)
     report_scene("JUNCTION r12 (trace_psr12, PLAY_PS_r12)", f"{base}/trace_psr12.log",

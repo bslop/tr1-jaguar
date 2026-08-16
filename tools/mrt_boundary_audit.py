@@ -20,7 +20,7 @@ import os, struct, sys
 
 D = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LEVEL = os.environ.get("TRLEVEL",
-    "/home/jvilla/Documents/Git/jag_openlara/tr1_psx/extracted/PSXDATA/LEVEL1.PSX")
+    "tr1_psx/extracted/PSXDATA/LEVEL1.PSX")
 TILE_PAGE_BYTES = 256*256//2
 CLUT_BYTES = 16*2
 NUM_TILES = 13

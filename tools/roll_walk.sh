@@ -3,8 +3,8 @@
 # Capture health is checked per roll: a 3840x2160 negotiation is the Cam Link's
 # no-signal fallback, NOT a black boot, so it aborts instead of blaming the ROM.
 set -uo pipefail
-cd /home/jvilla/Documents/Git/jag_openlara/OpenLara-master/src/platform/jaguar
-SP=/tmp/claude-1000/-home-jvilla-Documents-Git-jag-openlara/4ac6b7a2-22f8-49fd-9507-f1000322b659/scratchpad
+cd "$(dirname "$0")/.."
+SP="${SCRATCH:-./scratch}"
 ARM="$1"; shift
 for pt in "$@"; do
     OUT=$SP/roll_${ARM}_p$pt

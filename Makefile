@@ -16,7 +16,9 @@ RMAC    := $(HOME)/jaguar-tools/bin/rmac
 # scoreboard races, indexed-store staleness, delay-slot waste, branch range).
 # rmac is retained for (a) the legacy museum kernels it still owns and
 # (b) `make verify-asm`, which byte-compares jas output against rmac.
-JAS     := $(HOME)/Documents/Git/cobweb/sim/target/release/jas
+# COBWEB's assembler (github.com/bslop/cobweb, MIT). Overridable so a container
+# or a different checkout can point at its own build: `make JAS=/usr/local/bin/jas`.
+JAS     ?= $(HOME)/Documents/Git/cobweb/sim/target/release/jas
 # rmac writes defines as -dNAME=V; jas wants -d NAME=V
 jasd     = $(subst -d,-d ,$(1))
 
@@ -1341,7 +1343,7 @@ verify-asm: $(BUILD)/gpu_geotex.bin $(BUILD)/gpu_spanfill.bin $(BUILD)/gpu_geomw
 # adoption needs: GNU-ELF interop or a jln linker-script story, leaf-function
 # prologue elision, a soft-mul/div runtime). A second front-end catches
 # portability/UB the same way a second assembler catches encoding bugs.
-JCC68K := $(HOME)/Documents/Git/cobweb/sim/target/release/jcc68k
+JCC68K ?= $(HOME)/Documents/Git/cobweb/sim/target/release/jcc68k
 JCCDEFS := -DMULTIROOM -DFB8 $(if $(JERRYPOSE),-DJERRYPOSE) $(if $(AUTOSTART),-DAUTOSTART) $(if $(PROFILE),-DPROFILE)
 verify-c:
 	@ok=1; for f in video.c blit.c gpu.c jerry.c joypad.c gd_input.c; do \

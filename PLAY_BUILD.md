@@ -1,6 +1,30 @@
 # The shipping build recipe (verified 2026-07-29)
 
-## ★★★★★ 2026-08-12 — SHE AIMS THEM: `demo30_p0`
+## ★★★★★ 2026-08-15 — THE CONTAINER BUILDS IT ALL: `PADTEXT=136`
+```
+docker build -t tr-jaguar .
+docker run --rm -v "$PWD/disc:/disc:ro" -v "$PWD/out:/out" \
+  -e DISC_NAME="Tomb Raider (USA) (v1.6).cue" -e QUALITY=playable -e PADTEXT=136 tr-jaguar
+```
+Emits the whole SD payload from the disc: **OPENLARA.COF + EIDOS/CORE/INTRO/
+CAVES.JV + MUSIC.PCM + GYMLOAD.DAT**. Boots on silicon (confirmed on the TV).
+
+☠️☠️ **PADTEXT IS NOT A SETTING YOU CARRY** — it is the A10 lottery and ANY
+change to code or assets re-rolls it. ★ the .JV clips are not linked into the
+ROM, so **`VIDEO=0` builds a BYTE-IDENTICAL ROM in a fraction of the time**:
+roll the lottery with VIDEO=0, then do one full run with the pad that booted.
+
+☠️☠️☠️ **THE STREAKING WAS FOUR MISSING EXTRACTOR FLAGS.** `build_cof.sh` passed
+only TEXSCALE/MRT_ROOMS/SUBDIV_MAX/LARA_MINAREA; `ASSET_BUILD.md` says FACE_PLANES
+/ RAMP_PAL / STATICS are also required and SUBDIV_MAX must be 6144. Without
+`RAMP_PAL` the atlas carries four shade levels per tile where the runtime shade
+pass expects one full-bright copy, and the kernel samples a layout that is not
+there. **When a doc says the script is incomplete, believe the doc.**
+
+★ The front end is all on YOUR disc — `MOVIES/INTRO.STR` opens with the Eidos
+logo, `FMV/CORELOGO.FMV`, `FMV/CAFE.FMV`, `FMV/SNOW.FMV`. No third-party footage.
+
+## (previous) 2026-08-12 — SHE AIMS THEM: `demo30_p0`
 Same flags as demo29, plus the ARM ANIMATION, the combat camera and the right
 sounds. **Lit pad: 0.**
 

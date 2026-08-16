@@ -20,7 +20,8 @@ fi
 
 # QUALITY rides through from `docker run -e QUALITY=playable`; build_cof.sh
 # validates it and defaults to pretty.
-QUALITY="${QUALITY:-pretty}" bash tools/build_cof.sh "$D" /out
+QUALITY="${QUALITY:-pretty}" VIDEO="${VIDEO:-1}" PADTEXT="${PADTEXT:-}" \
+    bash tools/build_cof.sh "$D" /out
 status=$?
 
 # Docker writes /out as root; hand the finished files back to the user who

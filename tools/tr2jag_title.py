@@ -90,7 +90,7 @@ def main():
                     r5,g5,b5,a=clut_rgb555(o['clut'],tile_nibble(o['tile'],min(us)+xx,min(vs)+yy))
                     img[yy,xx]=(r5*255//31,g5*255//31,b5*255//31)
             Image.fromarray(img).resize((w*3,h*3),Image.NEAREST).save(
-                "/tmp/claude-1000/-home-jvilla-Documents-Git-jag-openlara/12fd0329-f0f1-4f53-8c9c-19950aeaafeb/scratchpad/ot_%d.png"%ti_)
+                os.path.join(os.environ.get("SCRATCH","scratch"),"ot_%d.png"%ti_))
     # ---- find the passport ----
     pm=-1
     for i in range(mc):

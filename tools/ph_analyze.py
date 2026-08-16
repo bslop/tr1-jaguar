@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 import json, sys, statistics
+import os
 from collections import Counter
-S='/tmp/claude-1000/-home-jvilla-Documents-Git-jag-openlara/65f61037-d2a5-46c3-bbba-d55b0e3d270c/scratchpad'
+S=os.environ.get('SCRATCH','scratch')
 SY=json.load(open(S+'/ph_kernel_syms.json'))
 code=sorted((v,n) for n,v in SY.items() if 0xf03000<=v<0xf03e60)
 def kreg(pc):
