@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 3
+RUN: 4
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,57 +17,89 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**Lara's Home: the GPU WEDGES. The "garbage" was never a rendering bug.**
+**Lara's Home: the 68000 crashes FIRST. Run 2's "GPU wedge" was wrong.**
 
-Run 2 identified the mechanism. The striped blocks on screen are the **crash
-beacon** `startup.S:exc_catch` paints (row 0 = `A5A5A5A5` calibration, row 1 =
-`EEEE0000`). Sequence: black → `LOADING...` panel (fine, the SD read falls back
-correctly) → **GPU wedge** → `gpu_sync`'s watchdog times out → `G_CTRL = 0`
-halts Tom → beacon painted → frozen (frames 300-1800 byte-identical).
+☠️ **CORRECTION TO RUN 2.** Run 2 concluded the GPU wedged and a watchdog halted
+it. Run 3 disproved that with a frame timeline:
 
-Evidence, all reproducible offline with `build/openlara.cof` (PADTEXT=0 build):
+    f 40  gpu pc=0xF03000 instret=0          illegal=0
+    f 80  gpu pc=0xF03D84 (halt) instret=9556 illegal=0   <- normal, clean halt
+    f160  gpu pc=0xF03D84 (halt) instret=9556 illegal=0
+    f170  gpu pc=0xF030E8 instret=438664      illegal=0   <- GPU RUNNING fine
+    f180  gpu pc=0xF0317C instret=908590      illegal=1   <- 68k faults HERE
+    f400  identical to f180
 
-    jagemu peek build/openlara.cof --at 0x820 --len 32 --frames 600
-      -> EEEE0000  SSP=0x001FF2C8  SR=0x2200  PC=0x0A3DD060
-    jagemu video build/openlara.cof --count 12 --every 150 --cols 3 -o film.png
+`illegal` flips to 1 at the same instant the GPU freezes, and
+`startup.S:exc_catch` **itself** does `clr.l 0xF02114` (G_CTRL=0). So the 68k
+crashed and *exc_catch* stopped Tom mid-render — the GPU PC 0xF0317C is
+**incidental**, wherever Tom happened to be. Do not chase it as a wedge site.
 
-☠️ `0x0A3DD05E` is **not** a corrupt pointer — it is `MAGIC_DONE` (`gpu.c:24`),
-pushed as an argument to `cpu_stop_unless(&mailbox[0], MAGIC_DONE)`. Do not
-chase it again.
+Also corrected: `gpu_sync`'s `G_CTRL=0; return 1` is the **normal completion**
+path (`cpu_stop_unless` returns 1 when the mailbox reads MAGIC_DONE), not a
+timeout path. Run 2 misread it.
 
-**GPU PC at halt = `0xF0317C` = `wid_m_done + 0x78`, ~14 bytes before
-`room_next`** — i.e. inside the SINGLE-DISPATCH room-list init
-(`gpu_geotex.gas` ~line 549-578). ★ That block already carries a recorded
-bus-wedge hazard: *"storing 1 into VCDEF bus-wedged every list-mode kick --
-reload the address!"*
+**THE ACTUAL FAULT: an `rts` returns to `0x0A3DD05E` (= MAGIC_DONE).**
+Faulting PC `0x0A3DD060` is that value + 2. `cpu_stop_unless` (`cpu68k.S:19`)
+is clean and its args are correct (`addr=0x001D33A0` = mailbox, `val=MAGIC_DONE`).
+The caller pushes exactly those two longs:
 
-RULED OUT so far:
-- `gym.bin` vs the TEXSCALE=4 atlas — consistent (256 x 352 = 90,112 exactly).
-- The room list itself — structurally identical to the working Caves list:
-  mansion `count=3` + 3 geom ptrs (0x13FB90/0x13B790/0x13C770), caves `count=2`.
-- The loading-screen SD read — shared code path with the Caves, falls through.
+    move.l #$0A3DD05E,-(a7)      ; MAGIC_DONE   <- ends up 8(sp)
+    move.l #$001D33A0,-(a7)      ; &mailbox[0]
+    jsr    ($0000420C).l         ; cpu_stop_unless
+    adda.l #$00000008,a7
+
+⇒ **a stack imbalance of exactly 8 bytes** — the size of those two args — makes
+`rts` pop MAGIC_DONE as a return address. Find who returns with `sp` 8 high.
 
 NEXT PROBES, cheapest first:
-1. **Get the exact wedging instruction.** Offsets were inferred by hand; emit a
-   real listing/map and locate `0xF0317C` precisely within lines 549-578.
-   `jas <kernel>.gas --map k.map` gives labels; the wedge is between
-   `load (r0),r2` (list count) and the `DISPCUR`/`DISPCNT` stores.
-2. **Compare GPU params.** mansion `params[]` @ `0xF03F00` =
-   13FB90/1D33A0/1D33C0/1ACAE0/17297C/15A050/0100/F03F74; caves =
-   023BB0/1A4740/1A4760/17DE80/14390C/07E780/0100/F03F74. The mansion's
-   buffers sit MUCH higher (0x1D33A0 vs 0x1A4740) and SSP is 0x1FF2C8 — check
-   whether a mansion buffer runs into the stack or past the 0x1FC000 guard.
-3. Confirm pre-existing vs regression by re-extracting gym at **TEXSCALE=2 with
-   the CURRENT extractor** (not the archive) and rebuilding.
+1. **Catch it live.** `jagemu serve --rom build/openlara.cof` + `jagemu ctl <inst>
+   run 175`, then `step`/`disasm`/`peek` across the fault. This is the precise
+   tool and it was not used yet — `break <rom> --at 0xADDR` also exists.
+2. **Suspect the interrupt path, not `cpu_stop_unless`.** `stop #$2000` inside it
+   sleeps with interrupts unmasked; an ISR that returns with `rts` instead of
+   `rte`, or that mismatches its own pushes, lands exactly here. Check
+   `vblank_stub` / the INT1 handler's stack discipline.
+3. **Why only the mansion?** Likely it is slower per frame, so `gpu_sync` spins
+   past `i >= 200 && (i & 63) == 63` and calls `video_rearm_irq()`
+   (`video.c:692`) — a path the Caves rarely reaches. It writes `VMODE` and
+   `cpu_irq_on()` mid-loop. Build with that call disabled and see if the mansion
+   survives; that is a one-line A/B and would localise it immediately.
+
+RULED OUT: `gym.bin` vs the TEXSCALE=4 atlas (256x352 = 90,112 exactly); the
+room list (structurally identical to the Caves'); the loading-screen SD read
+(shared path, falls through); `cpu_stop_unless` itself.
+
+★ **Technique that worked** — the block had no labels, so mapping a PC to an
+instruction was guesswork. Inserting `_wpNN:` labels on every instruction and
+re-assembling gave an exact map, and `cmp` proved the binary **byte-identical**
+(labels emit nothing). `gpu_probe.gas` is left in the tree for reuse.
 
 ☠️ Do **not** A/B against `ARCHIVE_PRERELEASE_2026-08-15/gym_before` — its
-`gym_lskin.bin` DIFFERS from `mrt_lskin.bin`, so with the new alias the mansion
-would silently get the Caves skeleton. Re-extract instead.
+`gym_lskin.bin` differs from `mrt_lskin.bin`, so with the run-1 alias the
+mansion would silently get the Caves skeleton. Re-extract at TEXSCALE=2 instead.
 
-☠️ Rebuild the exact pad you are running before symbolising: `PADTEXT` shifts
-every address and `build/` keeps only the last pad linked. Full p0 command is
-in run 2's shell history — `gbuild.sh`'s BASE flags + the feature flags +
-`PADTEXT=0`.
+☠️ Rebuild the exact pad you run before symbolising (`PADTEXT` shifts every
+address; `build/` keeps only the last pad linked). Working p0 build = gbuild's
+BASE flags + `ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 ENEMYTEX=1 BLOBCACHE=1
+JCENT=1 JOVL=1 SECTLONG=1 NOPCLIP=1 VRESN=80 TRAPFLOOR=1 GUNS=1 PROBE_AHEAD=256
+GYMTEST=1 PADMUTE=1 PADTEXT=0`.
+
+---
+
+## WHAT CHANGED IN RUN 3 (2026-08-16)
+
+- ✅ **Disproved run 2's root cause** with a frame-by-frame timeline. The 68k
+  faults first; the halted GPU is `exc_catch`'s own doing. Recorded above so the
+  next run does not re-derive it.
+- ✅ **Localised the real fault** to an `rts` returning to `MAGIC_DONE`, i.e. a
+  stack imbalance of exactly 8 bytes, and cleared `cpu_stop_unless` of blame by
+  reading it.
+- ✅ **New technique: probe labels.** Label every instruction in a block,
+  re-assemble, `cmp` to prove byte-identical, and read the exact PC→instruction
+  mapping off the map. Left as `gpu_probe.gas`.
+- ★ Named the wedge candidate precisely (`movei #DISPCUR,r1`, one after
+  `load (r0),r2`) before the timeline showed it was a red herring — worth
+  keeping as the shape of "precise but wrong".
 
 ---
 
