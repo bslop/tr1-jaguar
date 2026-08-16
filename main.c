@@ -412,8 +412,42 @@ static int room_wall_at(const uint8_t *sp, int wx, int wz)
     e = sp + 12 + (mul16(lx>>10, zS) + (lz>>10))*6;
     return (int16_t)(((uint16_t)e[0]<<8)|e[1]) == 0x7FFF;
 }
+/* ---- SOFT REBOOT: * and # together ---------------------------------------
+   The Jaguar convention (user 2026-08-16: "a lot of Jaguar games use * + # as
+   a soft reboot"). _start is a REAL reboot - it masks interrupts, restores the
+   stack, suppresses VI, reinstalls the exception vectors and CLEARS .bss - so
+   every global returns to its power-on value and the game comes back at the
+   logos.
+   ☠️ Tom and Jerry must be STOPPED FIRST. They run from their own SRAM and do
+   not care that the 68000 has restarted: leave them running and they keep
+   writing the framebuffer and the audio mailbox while .bss is being cleared
+   and re-initialised underneath them.
+   ☠️ Requires BOTH keys held for ~half a second, so a stray press cannot wipe
+   a run. * and # are otherwise unbound outside ABLADDER builds. */
+static void soft_reboot(void)
+{
+    extern void _start(void);
+    __asm__ __volatile__("move.w #0x2700,%sr");     /* no interrupts from here */
+    *(volatile uint32_t *)0xF02114u = 0;            /* G_CTRL: halt Tom  */
+    *(volatile uint32_t *)0xF1A114u = 0;            /* D_CTRL: halt Jerry */
+    *(volatile uint16_t *)0xF0004Eu = 0xFFFF;       /* VI off */
+    ((void (*)(void))_start)();
+}
 static int g_flr_grab;    /* 1 = ledge-search mode: plain closest-floor (the
                              vault/grab checks look for floors ABOVE Lara) */
+/* ☠️☠️☠️ HOW HIGH A CANDIDATE FLOOR MAY SIT ABOVE THE CALLER AND STILL BE SEEN.
+   Y grows DOWNWARD, so "above" means a SMALLER fy and the test below is
+   `fy >= g_flr_wy - WINDOW`. Ground mode wants a tight window (384) so a
+   phantom floor from an overlapping room above cannot win over real ground.
+   ☠️ But LEDGE mode inherited that same 384 while the moves it feeds need far
+   more reach: LARA_CLIMB is 768 and LARA_GRABREACH is 720. So every ledge more
+   than 384 up was DISCARDED BEFORE IT WAS EVER SCORED - the probe fell back to
+   a lower floor, `rise` came out ~0, and the vault/climb/grab all refused with
+   the diagnostic reading "flat ground ahead". That is one window silently
+   disabling three separate moves (user 2026-08-16: "she won't pull up onto a
+   ledge she should climb"). 848 = GRABREACH 720 + a 128 slack. */
+#define FLR_UPWIN_GROUND 384
+#define FLR_UPWIN_LEDGE  848
 static int g_flr_wy;      /* caller's current Y for Y-AWARE floor selection:
    with vertically STACKED rooms (10-room sets), "lowest floor wins" grabbed
    floors in rooms BELOW; instead prefer the nearest floor at/below wy that's
@@ -567,7 +601,7 @@ static int room_floor_mr(const uint8_t **rsect, int n, int wx, int wz, int *floo
          * from an adjoining room (that caused her to float near walls). */
         if (!found || fy > best) { best = fy; best_w = w; found = 1; g_floorroom = r;
                                    g_flr_slx = sxs; g_flr_slz = szs; }
-        if (fy >= g_flr_wy - 384) {
+        if (fy >= g_flr_wy - (g_flr_grab ? FLR_UPWIN_LEDGE : FLR_UPWIN_GROUND)) {
             /* prefer the floor CLOSEST to the caller's feet: picking the
                HIGHEST reachable floor made phantom stacked floors ~300 up
                win over the real ground ("floating above the ground").
@@ -7376,6 +7410,13 @@ bootvid_entry:
             }
 #endif
             pad = joypad_read();  /* no per-frame SD poll (see menu note) */
+            /* SOFT REBOOT (* + # held): checked HERE, on the raw word, before
+               any dial or menu can consume the bits. */
+            { static int rbhold;
+              if ((pad & PAD_KSTAR) && (pad & PAD_KHASH)) {
+                  rbhold += g_ticks;            /* g_ticks is 60Hz FIELDS */
+                  if (rbhold >= 30) soft_reboot();   /* ~0.5s */
+              } else rbhold = 0; }
 
 #ifdef PADMUTE
             /* ☠️ MEASUREMENT ARM ONLY.  An fps A/B is only valid if BOTH arms
@@ -7490,10 +7531,21 @@ bootvid_entry:
                stayed K00 while she was being mauled - the exact "pad consumers
                must run LAST" trap, from the other side.
                OPTION alone = draw/holster; OPTION+direction stays the dial. */
+            /* ☠️ OPTION IS BOTH A BUTTON AND A MODIFIER, so the draw cannot
+               fire on the PRESS. Using the HOPDIAL dial means holding OPTION
+               and THEN tapping a direction - and at the moment OPTION goes
+               down no direction is held yet, so a press-edge test draws the
+               pistols every single time and the dial is unreachable (user,
+               2026-08-16: "Tried it. Didn't work. Option pulls the pistols.").
+               Decide on RELEASE instead: if no direction was touched during
+               the whole hold, it was a draw; if one was, it was the dial. */
+            /* OPTION is a PLAIN BUTTON again now that the dials live on the
+               keypad - the draw fires on the PRESS, no modifier ambiguity and
+               no waiting for a release. Keypad 8 is its 3-button-pad twin,
+               beside 4 (the other draw key). */
             { static uint32_t opprev;
               uint32_t opedge = pad & ~opprev; opprev = pad;
-              if ((opedge & PAD_OPTION)
-                  && !(pad & (PAD_UP|PAD_DOWN|PAD_LEFT|PAD_RIGHT))) {
+              if (opedge & (PAD_OPTION | PAD_K8)) {
                   /* ☠️ NOT SFX_PISTOL. Drawing fired the GUNSHOT sample as a
                      stand-in and it sounded like she shot on every draw (user,
                      2026-08-12). TR1 has its own pair: events 6/7. */
@@ -7536,23 +7588,31 @@ bootvid_entry:
                 if (g_combat < 0) g_combat = 0; else if (g_combat > 256) g_combat = 256; } }
 #endif
 #ifdef HOPDIAL
+            /* ☠️ THE DIAL USED TO RIDE OPTION+LEFT/RIGHT, AND THAT FIGHTS THE
+               PISTOL DRAW: a modifier means pressing OPTION FIRST, so a
+               press-edge draw fires before you can reach a direction, and a
+               release-edge draw makes the button feel late (user 2026-08-16:
+               "Tried it. Didn't work. Option pulls the pistols."). Keypad 7/9
+               were bound to NOTHING, so the dial gets its own keys and OPTION
+               goes back to one button with one meaning. 7 = shorter draw
+               distance, 9 = longer. */
             { static uint32_t hdprev;
-              if (pad & PAD_OPTION) {
+              {
 #ifdef GOVERNOR
                   /* the dial edits the RESTORE TARGET; it lands immediately
                      unless the governor is clamping right now */
-                  if ((pad & PAD_RIGHT) && !(hdprev & PAD_RIGHT) && g_gov_user < 4)
+                  if ((pad & PAD_K9) && !(hdprev & PAD_K9) && g_gov_user < 4)
                       { g_gov_user++;
                         if (!g_gov_on) { g_hopcap = g_gov_user; g_hop_cached_a = -1; }
                         dbg_kv("hopcap", g_gov_user); }
-                  if ((pad & PAD_LEFT) && !(hdprev & PAD_LEFT) && g_gov_user > 1)
+                  if ((pad & PAD_K7) && !(hdprev & PAD_K7) && g_gov_user > 1)
                       { g_gov_user--;
                         if (!g_gov_on) { g_hopcap = g_gov_user; g_hop_cached_a = -1; }
                         dbg_kv("hopcap", g_gov_user); }
 #else
-                  if ((pad & PAD_RIGHT) && !(hdprev & PAD_RIGHT) && g_hopcap < 4)
+                  if ((pad & PAD_K9) && !(hdprev & PAD_K9) && g_hopcap < 4)
                       { g_hopcap++; g_hop_cached_a = -1; dbg_kv("hopcap", g_hopcap); }
-                  if ((pad & PAD_LEFT) && !(hdprev & PAD_LEFT) && g_hopcap > 1)
+                  if ((pad & PAD_K7) && !(hdprev & PAD_K7) && g_hopcap > 1)
                       { g_hopcap--; g_hop_cached_a = -1; dbg_kv("hopcap", g_hopcap); }
 #endif
 #ifdef FARDIAL
@@ -7563,8 +7623,8 @@ bootvid_entry:
                   pad &= ~(PAD_UP|PAD_DOWN);
 #endif
                   hdprev = pad;
-                  pad &= ~(PAD_LEFT|PAD_RIGHT|PAD_OPTION);
-              } else hdprev = pad; }
+                  pad &= ~(PAD_K7|PAD_K9);   /* only the dial keys are ours */
+              } }
 #endif
 #ifdef ABLADDER
             /* content ladder: OPTION+UP/DOWN steps the admitted-room count
@@ -7573,16 +7633,16 @@ bootvid_entry:
                abrooms= to the console next to the rolling fps100=. */
             { static uint32_t abprev;   /* dbg_kv comes from skunkdbg.h
                                            (macro no-op when console off) */
-              if (pad & PAD_OPTION) {
-                  if ((pad & PAD_UP) && !(abprev & PAD_UP) && g_abrooms < 99)
+              {
+                  if ((pad & PAD_KHASH) && !(abprev & PAD_KHASH) && g_abrooms < 99)
                       { g_abrooms++; dbg_kv("abrooms", g_abrooms); }
-                  if ((pad & PAD_DOWN) && !(abprev & PAD_DOWN) && g_abrooms > -1)
+                  if ((pad & PAD_KSTAR) && !(abprev & PAD_KSTAR) && g_abrooms > -1)
                       { g_abrooms--; dbg_kv("abrooms", g_abrooms); }
                   /* rung -1: Lara's dispatch is skipped too (pose still
                      runs) — rung0-minus-rung-1 = her pure GPU render cost */
                   abprev = pad;
-                  pad &= ~(PAD_UP|PAD_DOWN|PAD_OPTION);
-              } else abprev = pad; }
+                  pad &= ~(PAD_KSTAR|PAD_KHASH);
+              } }
 #endif
 #ifdef HEADSPIN
             g_layaw = (uint8_t)(g_layaw + 3);   /* diagnostic: spin Lara */
@@ -7738,7 +7798,7 @@ bootvid_entry:
               if (g_hang) {
                   g_lay = g_vaulty + LARA_GRABREACH;
                   g_lavy = 0; g_airfr = 0;
-                  if (!(pad & PAD_B) && !g_autograb) { /* released: let go, fall */
+                  if (!(pad & ACT_ACTION) && !g_autograb) { /* released: let go, fall */
                       g_hang = 0; g_jumped = 0; g_lajf = 0;
                   } else if (pad & PAD_UP) {      /* pull up */
                       g_hang = 0; g_vault = 1; g_autograb = 0;
@@ -7754,17 +7814,28 @@ bootvid_entry:
                   }
               }
               if (g_vault) {
+                  int cnt_pre = rd16(g_sk_anims + g_climbanim*6 + 2);
                   /* PULL-UP: controls locked. Play the chosen climb anim
                      (g_climbanim) across CLIMB_TICKS ticks (fps is low, so run
                      the anim fast) while interpolating feet Y from the grab
                      height up to the ledge. On the last tick she pops forward
                      onto the foothold. The HANDSTAND is a long showpiece anim:
                      give it double the ticks so it reads. */
-                  int ticks = (g_climbanim == LANIM_HANDSTAND) ? CLIMB_TICKS*2
-                                                               : CLIMB_TICKS;
+                  /* ☠️ THIS USED TO BE A FLAT 6 TICKS - 0.2s - "run the anim
+                     fast because fps is low". At ~7 fps that is TWO RENDERED
+                     FRAMES: you see two poses of a 15-frame climb while her
+                     position lerps straight up, and it reads as FLOATING
+                     rather than climbing (user 2026-08-16: "she automatically
+                     grabs then floats up, I don't think that's the animation
+                     we want"). Run the animation at its OWN length instead, so
+                     the climb takes the time TR1 gives it and the poses land.
+                     cnt is the anim's frame count at 30 Hz; ticks are 30 Hz. */
+                  int ticks = cnt_pre > 0 ? cnt_pre : CLIMB_TICKS;
+                  if (g_climbanim == LANIM_HANDSTAND) ticks *= 2;
+                  if (ticks < CLIMB_TICKS) ticks = CLIMB_TICKS;
                   int t = (g_climbf < ticks) ? g_climbf : ticks;
                   int st  = rd16(g_sk_anims + g_climbanim*6);
-                  int cnt = rd16(g_sk_anims + g_climbanim*6 + 2);
+                  int cnt = cnt_pre;
                   int af  = (g_climbf * (cnt - 1)) / ticks;
                   g_climbf++;
                   g_lay = g_climby0 + (int)((int32_t)(g_vaulty - g_climby0) * t / ticks);
@@ -7964,7 +8035,7 @@ bootvid_entry:
                  room she actually ended up in. */
               if (!g_useset)
                   ent_update(rsect, g_curroom, g_lax, g_laz,
-                             (pad & PAD_B) != 0);
+                             (pad & ACT_ACTION) != 0);
 #ifdef BUSPROBE
             { uint32_t _k = vp_tick(); if (bp_s0) bp_sB += _k - bp_s0; bp_s0 = _k; }
 #endif
@@ -8175,8 +8246,13 @@ bootvid_entry:
 #endif
               /* STANDING CLIMB (TR: hold FORWARD + ACTION facing a wall). Lara
                  squares up to the wall (alignToWall) and pulls up onto a ledge
-                 that's too tall to step but within climb reach. PAD_B = ACTION. */
-              if ((pad & PAD_UP) && (pad & PAD_B) && g_lay >= g_lafloor - 4 && !g_vault) {
+                 that's too tall to step but within climb reach.
+                 ☠️ These tested RAW PAD_B, not ACT_ACTION, in all five movement
+                 sites - so KEYPAD-1 could not climb, grab, or hold a hang even
+                 though it is the mapped Action button. Same class as the gun
+                 draw riding an unmeasured X/keypad-4 bit: a raw bit where the
+                 action alias belongs. */
+              if ((pad & PAD_UP) && (pad & ACT_ACTION) && g_lay >= g_lafloor - 4 && !g_vault) {
                   int px = g_lax + (int)(((int32_t)SIN(g_layaw)*PROBE_AHEAD)>>16);
                   int pz = g_laz + (int)(((int32_t)COS(g_layaw)*PROBE_AHEAD)>>16);
                   int lf, rise, lfok;
@@ -8210,7 +8286,15 @@ bootvid_entry:
                  whose ledge sits above vault reach but within an up-jump's
                  hands = she jumps in place reaching for it; the airborne
                  grab catches with ACTION implied and held UP pulls her up. */
+              /* ☠️ TR1 NEVER CLIMBS WITHOUT ACTION. OpenLara's checkClimb wants
+                 (FORTH|ACTION) held, a standing pose AND emptyHands(). This
+                 auto-reach on UP alone was a 2026-08-07 convenience, and it is
+                 what makes her "automatically grab" at a wall. Keep the
+                 convenience while her hands are EMPTY - that is TR1's own
+                 condition - but once the pistols are out, ACTION is required,
+                 so she can no longer climb by walking into things mid-fight. */
               if ((pad & PAD_UP) && g_fwdblk && g_lay >= g_lafloor - 4 &&
+                  (g_gunst == GST_OFF || (pad & ACT_ACTION)) &&
                   !g_vault && !g_jumped && !g_hang && !g_autoj) {
                   /* probe a QUARTER CELL ahead, not WALK_SPEED*2 (94): the
                      move gate halts her up to a full frame-step (~140 units)
@@ -8363,7 +8447,7 @@ bootvid_entry:
                 /* JUMP GRAB (TR: hold ACTION in mid-air). If her hands (feet -
                    reach) come level with a ledge ahead, she catches it and pulls
                    up, squaring to the wall. PAD_B = ACTION. */
-                if (!grounded && ((pad & PAD_B) || g_autograb)) {
+                if (!grounded && ((pad & ACT_ACTION) || g_autograb)) {
                     int px = g_lax + (int)(((int32_t)SIN(g_layaw)*PROBE_AHEAD)>>16);
                     int pz = g_laz + (int)(((int32_t)COS(g_layaw)*PROBE_AHEAD)>>16);
                     int lf, handY = g_lay - LARA_GRABREACH, lfok;
@@ -8450,7 +8534,7 @@ bootvid_entry:
                     int fallish = !g_jumped || (!g_lajf && g_lavy > 0);
                     /* TR1 REACH (anim 94): ACTION held while descending is the
                        arms-out grab pose, not a plain fall. */
-                    lanim_set(((pad & PAD_B) || g_autograb) && g_lavy > 0
+                    lanim_set(((pad & ACT_ACTION) || g_autograb) && g_lavy > 0
                                                  ? LANIM_REACH :
                               /* a BACK jump past its apex becomes FALL_BACK
                                  (anim 93), not the launch pose */
@@ -8869,11 +8953,18 @@ bootvid_entry:
               if (bs > RENDER_W-1) bs = RENDER_W-1;
               if (br > RENDER_W-1) br = RENDER_W-1;
               if (bc > RENDER_W-1) bc = RENDER_W-1;
+              /* ☠️ ROWS 12/16/20 WERE WRITTEN FOR A 120-LINE RENDER. At VRESN=80
+                 they sit in the TOP QUARTER of everything you can see - which
+                 is exactly where a ledge ABOVE Lara appears, so the readout
+                 hid the thing it was brought in to diagnose (user 2026-08-16:
+                 "note how I cannot see a ledge in front of me"). Pin them to
+                 the BOTTOM instead, where the floor already fills the frame. */
+              { int r0 = RENDER_H-16, r1 = RENDER_H-11, r2 = RENDER_H-6;
               for (xx = 0; xx < RENDER_W; xx++) {
-                  cfb[12*RENDER_W+xx]=0; cfb[16*RENDER_W+xx]=0; cfb[20*RENDER_W+xx]=0; }
-              for (xx = 0; xx < bs; xx++) cfb[12*RENDER_W+xx] = 255;
-              for (xx = 0; xx < br; xx++) cfb[16*RENDER_W+xx] = 255;
-              for (xx = 0; xx < bc; xx++) cfb[20*RENDER_W+xx] = 255;
+                  cfb[r0*RENDER_W+xx]=0; cfb[r1*RENDER_W+xx]=0; cfb[r2*RENDER_W+xx]=0; }
+              for (xx = 0; xx < bs; xx++) cfb[r0*RENDER_W+xx] = 255;
+              for (xx = 0; xx < br; xx++) cfb[r1*RENDER_W+xx] = 255;
+              for (xx = 0; xx < bc; xx++) cfb[r2*RENDER_W+xx] = 255; }
               lc[0] = 0; lc[1] = 0; }     /* per-FRAME counts, not cumulative */
 #endif
 #ifdef TRAVDIAG
@@ -8926,18 +9017,18 @@ bootvid_entry:
                  "verdict 7", which this code cannot even produce.  Black band
                  behind everything, and a CALIBRATION cell that is always lit
                  so the reader locks the grid instead of guessing it. */
-              blit_fill_rect(dfb3, 168, 1, 152, 15, 254);
-              blit_fill_rect(dfb3, 170, 3, 5, 5, 255);          /* calibration */
+              blit_fill_rect(dfb3, 168, RENDER_H-18, 152, 15, 254);   /* bottom, not top */
+              blit_fill_rect(dfb3, 170, RENDER_H-16, 5, 5, 255);      /* calibration */
               for (c6 = 0; c6 < 10; c6++)
-                  blit_fill_rect(dfb3, 180 + c6*7, 3, 5, 5,
+                  blit_fill_rect(dfb3, 180 + c6*7, RENDER_H-16, 5, 5,
                                  (c6 == verdict) ? 255 : 254);
               w6 = rise6 > 0 ? rise6 / 8 : 0;
               if (w6 > 120) w6 = 120;
-              blit_fill_rect(dfb3, 180, 11, 120, 3, 254);
-              if (w6) blit_fill_rect(dfb3, 180, 11, w6, 3, 255);
-              blit_fill_rect(dfb3, 304, 3, 5, 5,
+              blit_fill_rect(dfb3, 180, RENDER_H-8, 120, 3, 254);
+              if (w6) blit_fill_rect(dfb3, 180, RENDER_H-8, w6, 3, 255);
+              blit_fill_rect(dfb3, 304, RENDER_H-16, 5, 5,
                              (rise6 > 0 && rise6 <= LARA_GRABREACH + 64) ? 255 : 254);
-              blit_fill_rect(dfb3, 311, 3, 5, 5,
+              blit_fill_rect(dfb3, 311, RENDER_H-16, 5, 5,
                              (g_vault || g_lavy != 0 || g_autograb) ? 255 : 254); }
 #endif
 #ifdef PADPROBE

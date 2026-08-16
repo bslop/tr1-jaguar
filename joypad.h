@@ -58,7 +58,19 @@ uint32_t joypad_probe(void);
  *
  *   JUMP    A   / 2      ROLL    Y   / 5
  *   ACTION  B   / 1      LOOK    Z   / 6
- *   WALK    C   / 3      DRAW    X   / 4
+ *   WALK    C   / 3      DRAW    X / 4, and OPTION / 8
+ *
+ * DEV DIALS live on the keys nothing else uses, so they can never fight a
+ * game button (they used to ride OPTION+direction, which made OPTION
+ * unusable as the draw):
+ *   7 / 9   draw distance (portal-hop cap) down / up
+ *   * / #   content ladder (ABLADDER builds only)
+ *
+ * SOFT REBOOT: hold * AND # together for ~half a second - the Jaguar
+ * convention. Returns to the logos with every global reset (it re-enters
+ * _start, which clears .bss). ☠️ In an ABLADDER build the same two keys also
+ * step the ladder singly; holding BOTH is what reboots.
+ * ☠️ Anything added here must take a FREE key. 0 is the only one left.
  *
  * ★ TR1 HAS NO SEPARATE FIRE BUTTON: ACTION fires when the pistols are out
  * and grabs/uses when they are not. Keeping that means one less binding and

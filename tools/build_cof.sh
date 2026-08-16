@@ -99,6 +99,19 @@ FACE_PLANES=1 RAMP_PAL=1 STATICS=1 LARA_WINDFIX=0"
 say "Extracting levels + Lara (Caves)"
 env $MRTENV TRLEVEL="$PSX/LEVEL1.PSX" TRPREFIX=mrt python3 tools/tr2jag_multiroom.py
 
+# ☠️☠️☠️ COLLISION PATCH. mrt_sect.bin is baked by the extractor and is WRONG
+# until this runs: TR1's GetHeight DESCENDS into the room below at a seam and
+# uses its floor, while the bake stores the seam height as solid ground - so
+# Lara runs off a ledge and keeps running on air - and some floor==-127
+# doorcells come out classified as WALL, which SEALS OFF parts of the level.
+# 403 such sectors in the Caves. The file is gitignored, so it must be
+# re-patched after EVERY regeneration; the container regenerates it every run
+# and never did this (user 2026-08-15: "an issue with both wall boundaries as
+# well as being able to access the area up above for the rest of the level").
+say "Patching collision boundaries (phantom seam floors + doorcells)"
+TRLEVEL="$PSX/LEVEL1.PSX" python3 tools/mrt_boundary_audit.py --patch 2>&1 \
+    | tail -4 || echo "   note: boundary patch failed"
+
 # Atlas PATCH passes. Each re-reads the shipping palette+atlas, APPENDS its rows
 # and exits, touching nothing else - so they must run after the base extraction
 # and before the build. Without them the doors, medikits, pistols and wolf fur
