@@ -161,8 +161,17 @@ case "$BUILD_FLAGS" in
      # linked under GYMSD, so the shading flags are irrelevant here.
      env TEXSCALE=2 MRT_ROOMS=64 SUBDIV_MAX=6144 LARA_MINAREA=0 LARA_WINDFIX=0 \
          TRLEVEL="$PSX/GYM.PSX" TRPREFIX=gym python3 tools/tr2jag_multiroom.py ;;
-  *) say "Extracting Lara's Home (Mansion)"
-     env $MRTENV TRLEVEL="$PSX/GYM.PSX" TRPREFIX=gym python3 tools/tr2jag_multiroom.py ;;
+  *) say "Extracting Lara's Home (Mansion) - full recipe, TEXSCALE=4"
+     # ☠️ TEXSCALE=4, NOT 2. At TEXSCALE=2 the mansion atlas is 188,416 B and
+     # the level does not LINK. At 4 it is 134,144 B with the shade ramps and
+     # everything fits (ROM 1,638,252 B, well under the 0x1FC000 guard). The
+     # mansion is a bonus area; quarter-area texels are not visible at 320x80.
+     # ★ RAMP_PAL IS BACK ON. The old note here said it "overflows the
+     # mansion's palette past 256 entries and the extractor dies" - that was
+     # true and is now FIXED (the 8-slot flat band). Without it the mansion
+     # rendered nearly black; with it, it is a proper lit interior.
+     env $MRTENV TEXSCALE=4 TRLEVEL="$PSX/GYM.PSX" TRPREFIX=gym \
+         python3 tools/tr2jag_multiroom.py ;;
 esac
 # ☠️ GUARD FOR THE gym_lskin ALIAS. mrt_data.S no longer .incbin's a second
 # copy of Lara's skeleton for the mansion - gym_lskin is a .set alias onto

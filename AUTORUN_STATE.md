@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 6
+RUN: 7
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,53 +17,57 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**✅ LARA'S HOME NO LONGER CRASHES — she renders. Now make it look right.**
+**✅✅ LARA'S HOME WORKS AND LOOKS RIGHT.** Warm stone walls, patterned tiled
+floor, window openings, Lara standing — a proper mansion interior, `illegal=0`,
+stable. Two runs closed it: run 5 stopped the crash, run 6 fixed the shading.
 
-Run 5 fixed it. Verified on the GYMTEST p0 build:
+### Verified this run
+- **Caves did NOT regress** from `gpu_kernel_ensure()` on every kick:
+  `cavesfix_p0` vs the pre-fix `alias1_p0` = **0 of 25,600 pixels differ**,
+  `illegal=0`, all pads boot. ★ Byte-identical is the CORRECT result here (the
+  caves never hit the bug) — not the "arm is unwired" signal from run 3. The
+  code is demonstrably live because the mansion's behaviour changed completely.
+- **Release recipe fixed** (`tools/build_cof.sh`): the mansion now extracts with
+  the **full** `$MRTENV` + `TEXSCALE=4`. `RAMP_PAL` is back on — the old comment
+  saying it overflows the palette and kills the extractor was **stale**, fixed
+  by run 1's 8-slot flat band. Without it the mansion rendered nearly black.
+  TEXSCALE=4 is required to link (atlas 134,144 B vs 188,416 at TEXSCALE=2).
+  ROM with the mansion: **1,638,252 B**, well under the 0x1FC000 guard.
 
-    vector 64 = 0x00004158 (vblank_stub, INTACT)   was 0x0A3DD05E
-    illegal   = 0                                   was 1
-    gpu instret at f900 = 249,067,610               was frozen at 908,590
-    filmstrip: Lara stands in the mansion, stable across 900 frames
-
-**ROOT CAUSE (closed):** a kick launches **whatever is resident in GPU SRAM**.
-`g_kernel_cur` cached which kernel that was, but `gpu_jvdec_load()` replaced
-SRAM without invalidating it — so `gpu_kernel_select()` skipped the copy and the
-world kick **ran the VIDEO kernel**. The param blocks overlap with different
-meanings: `params[6]` is `atlas_width` (256 = **0x100**) to the world kernel and
-the **mailbox address** to jvdec. So jvdec wrote its magics to `$100`/`$104` =
-68k **vectors 64 and 65**; vector 64 is TOM/VBLANK, the next vertical interrupt
-jumped to `0x0A3DD05E`, and the 68000 died inside the ISR.
-
-Fix: `gpu_kernel_ensure()` called after `G_CTRL = 0` in all six kicks
-(`gpu.c`), plus `gpu_jvdec_load()` now invalidates and `gpu_jvdec_done()`
-restores. Also fixed on the way: **every** kick now sets `params[1]` (the
-mailbox pointer) — `gpu_jvdec_kick` reuses that slot as `prevLen` and six kicks
-never restored it. Published as
-`jaguar-shared/techniques/gpu-kernel-residency.md` (d958f35).
+### ☠️ NEGATIVE RESULT — the A10 lottery hypothesis is NOT confirmed
+Vector 64 was checked on **all six CAVES pads of the PRE-FIX build**: every one
+read `0x00004158` (`vblank_stub`), **intact**. So the vector-64 clobber never
+happens on the caves path, and this fix does not explain the boot lottery.
+Note also that jagemu boots every pad, so the lottery (a silicon phenomenon) is
+not reproducible offline at all — **this cheap test cannot settle it either
+way**. Do not re-run it expecting a different answer; if the lottery is to be
+linked to vector 64 it needs a human reading the TV on a black pad.
 
 ### What to do next
+1. **Re-verify the mansion through the real MENU path, not GYMTEST.** Everything
+   so far used `GYMTEST=1`, which jumps past `gpu_jvdec_done()` and the level
+   init. The kick-based fix is path-independent so it *should* hold, but the
+   user's original report was via the menu — confirm it.
+2. **Full-recipe container build** — `tools/build_cof.sh` changed; run it end to
+   end so the release path is proven, and confirm the `gym_lskin == mrt_lskin`
+   guard passes.
+3. Then the queue: #3 title audio (SFX jumps + music skips on menu moves),
+   #12 flat-shaded-floor fps A/B, #2 full run-through (rig, batched).
 
-1. **⬜ THE BIG ONE — is this the A10 BOOT LOTTERY?** The recorded A10 root
-   cause is *"VI never fires"*, and `video_flip_force`'s `VECDIAG` probe exists
-   purely to ask "is vector 64 still `vblank_stub`?". A clobbered vector 64
-   produces exactly that, and residency depends on layout/timing — i.e. a
-   lottery. **Test: `jagemu peek <rom> --at 0x100 --len 4` on each `PADTEXT`
-   roll of a CAVES build, before and after this fix.** If black pads showed
-   `0A3DD05E` and now do not, this fix just closed the boot lottery too. Cheap,
-   entirely offline, and by far the highest-value item open.
-2. **Make the mansion look right.** It renders but is dark and sparse. Check
-   the `TEXSCALE=4` atlas (90,112 B, 256x352) is being sampled correctly and
-   whether the mansion needs its own lighting/shade band.
-3. **Re-verify the Caves did not regress** — `gpu_kernel_ensure()` is on every
-   kick now. Rebuild an alias1-equivalent caves ROM and compare fps/screens.
-4. Then return to the queue: #3 title audio, #12 flat-floor fps A/B.
-
-☠️ Note the GYMTEST caveat: `GYMTEST` jumps past `gpu_jvdec_done()`, which is
-why the restore-based fix alone did not work and the kick-based one was needed.
-The kick-based fix is the correct one regardless — some path will always skip a
-restore.
 ☠️ Rebuild the exact pad before symbolising. p0 command is in run 3's notes.
+☠️ The mansion needs `TEXSCALE=4`; at 2 it does not link.
+
+---
+
+## WHAT CHANGED IN RUN 6 (2026-08-16)
+
+- ✅✅ **The mansion looks right** — re-extracted with the full recipe including
+  `RAMP_PAL` (whose "extractor dies" note was stale), atlas 90,112 → 134,144 B.
+  Went from nearly black to a properly lit interior.
+- ✅ **Proved no caves regression** — pixel-identical render, all pads boot.
+- ✅ **`tools/build_cof.sh` updated** so the release build reproduces it.
+- ☠️ **Recorded a clean negative**: the A10-boot-lottery link is unproven, and
+  the offline test cannot decide it. Better than leaving the hypothesis dangling.
 
 ---
 
