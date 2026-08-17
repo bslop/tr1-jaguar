@@ -206,7 +206,7 @@ def main():
             if "g_layprev" in syms:
                 poke("g_layprev", fy)
             yv = yaw & 0xFFFF                          # ☠️ yaw is 16-bit
-            ctl("poke", hex(syms["g_layaw"]), "%d,%d" % ((yv >> 8) & 255, yv & 255))
+            ctl("poke", hex(syms["g_layaw"]), "%d" % ((yv >> 8) & 255))  # 8-bit yaw
             ctl("run", SETTLE)
             seated = peek("g_curroom")
             # ☠️ A BAD SEAT IS NOT A DOOR FAILURE. Rooms overlap, so a stand-off
@@ -240,7 +240,7 @@ def main():
             yv = yaw & 0xFFFF
             ctl("input", "up")
             for _ in range(5):
-                ctl("poke", hex(syms["g_layaw"]), "%d,%d" % ((yv >> 8) & 255, yv & 255))
+                ctl("poke", hex(syms["g_layaw"]), "%d" % ((yv >> 8) & 255))  # 8-bit yaw
                 ctl("run", 60, timeout=600)
                 cur = peek("g_curroom")
                 if cur is not None:
@@ -266,11 +266,28 @@ def main():
                          5: "nothing refused - check the FACING/axis"}
                 vx = peek("g_mvveto") if "g_mvveto" in syms else None
                 vz = peek("g_mvvetoz") if "g_mvvetoz" in syms else None
+                # ☠️ "nothing refused" means the STEP COMPUTED TO ZERO, which is a
+                # FACING result, not a geometry one (run 82: spd=164 with yaw=0 -
+                # she had speed and no direction because SIN(0)=0). So report the
+                # yaw she actually had against the yaw the test aimed her at.
+                ya = peek("g_mvyaw") if "g_mvyaw" in syms else None
                 why = ""
+                # ☠️☠️ DO NOT COMPARE THESE TWO YAWS. `g_mvyaw` came back as 192,
+                # 64 and 128 while the test aims with -16384, 16384 and -32768 -
+                # those are the SAME ANGLES in different scales (256 units per turn
+                # vs 65536). Comparing them fires on every case, and the "FACING"
+                # verdict it produced overrode 11->12's CORRECT "DOOR shut" - a
+                # result runs 79 and 82 had already proven. Caught only because it
+                # contradicted something known.
+                # The yaw is REPORTED for information; establish which scale
+                # g_layaw actually holds before any comparison is drawn from it.
+                if ya is not None:
+                    why = "  (yaw aimed %d/65536, g_mvyaw reads %d - DIFFERENT SCALES, "\
+                          "do not infer)" % (yaw, ya)
                 if vx or vz:
                     # the axis she was walking is the one whose veto is meaningful
                     v = vz if (yaw in (0, -32768) and vz) else (vx or vz)
-                    why = "  WHY: %s" % names.get(v, "veto=%s" % v)
+                    why = "  WHY: %s%s" % (names.get(v, "veto=%s" % v), why)
                 elif "g_mvveto" not in syms:
                     why = "  (build without MVDIAG=1 - no reason available)"
                 print("  ☠️ FAIL %2d -> %-2d  saw %s, moved %d%s"

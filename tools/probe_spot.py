@@ -58,6 +58,17 @@ def poke(addr, val):
                                                    (v >> 8) & 255, v & 255))
 
 
+def poke8(addr, val):
+    """☠️ g_layaw is `static uint8_t` (0..255), NOT 16-bit. The long-standing
+    comment saying otherwise was wrong: poke16 wrote the angle into g_layaw AND a
+    stray zero into the following byte. It survived only because the linker left
+    padding there - g_layaw 0x154dce, g_curroom 0x154dd0 - which is luck, not
+    correctness, and the layout differs per build.
+    ★ The 16-bit yaws the tests use convert exactly: 0xC000 -> 0xC0 = 192 = 270
+    degrees = -X, which is why everything worked by accident."""
+    return ctl("poke", hex(addr), "%d" % (val & 255))
+
+
 def poke16(addr, val):   # ☠️ yaw is 16-bit; a 32-bit write stomps g_curroom
     v = val & 0xFFFF
     return ctl("poke", hex(addr), "%d,%d" % ((v >> 8) & 255, v & 255))
@@ -111,7 +122,7 @@ def main():
         if "g_layprev" in sy:
             poke(sy["g_layprev"], y)
         if "g_layaw" in sy:
-            poke16(sy["g_layaw"], yaw)
+            poke8(sy["g_layaw"], yaw >> 8)   # 8-bit yaw
         ctl("run", SETTLE)
         # --set SYM=VAL: force a variable AFTER seating. Added to test whether a
         # value the game computes for itself is causing what you are looking at
@@ -158,7 +169,7 @@ def main():
                         # unreadable is still a bug in an instrument.
                         val = int(v, 0)
                         if k == "g_layaw":              # 16-bit! see the seat note
-                            poke16(sy[k], val)
+                            poke8(sy[k], val >> 8)
                         else:
                             poke(sy[k], val)
                         print("   set %s = %s" % (k, v), flush=True)
