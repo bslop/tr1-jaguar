@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 28
+RUN: 29
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,47 +17,38 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**✅ TASK #8 (IVY-ROOM BLACKNESS) LOOKS FIXED — a SECOND collision class found
-by driving, not by reading.**
+**✅ WHOLE-LEVEL RENDER SWEEP: no black rooms. Baseline recorded below.**
 
-Room 11 *is* the ivy room (its foliage is visible in the frame). Driving it
-before the fix:
+`ROOMTOUR=1 ROOMTOUR_HOLD=60` teleports Lara to every room's centre; sampled
+`black%` at each stop via `jagemu ctl <inst> frame`. All 38 rooms:
 
-    walk1..3  Z 56832 -> 59348   black 0.1 - 3.1%    fine
-    walk4..6  STUCK at Z 59348   black 53.5%         <- walked into a void
+    most rooms      0.1 - 4.3%      healthy
+    room 12         11.1%
+    room 19          6.3%
+    room 21          9.7%
+    room 17          7.0%
+    room 23         17.4%   <- highest; inspected by eye, a genuinely DARK
+                               ivy/foliage area, not a hole
 
-Z 59348 is cell (2,4), which reads **floor 6400 / ceiling 6400 — ZERO
-HEADROOM**. Collision let her walk into a cell with no vertical space and no
-geometry. Same visible symptom as the border-ring floors, different cause.
+**Use this as a regression baseline**: re-run the sweep after any renderer or
+collision change and compare. A room that jumps well above its number here has
+broken; anything at or below is fine.
 
-Level-wide: **38 zero-headroom + 2 inverted (ceiling below floor) = 40 cells**
-of 2074 walkable. `floor_coverage.py` now scans for those too and the patch
-walls them. After:
-
-    walk1..6  stops cleanly at Z 58356 (the real wall)   black 1.7%
-
-★ **Conservative on purpose**: only headroom <= 0 is walled. Lara needs ~762
-units to stand, so small-positive-headroom cells are also unstandable — but TR1
-has legitimate crawlspaces and walling those would change level topology on a
-guess. Zero-or-inverted is certain; anything tighter needs evidence first.
-
-★ **This was found by DRIVING, after two static scans had both come back
-clean.** The bbox scan said 0 remaining and the level still had a black hole.
-Static analysis found the first class; only walking into it found the second.
-
-`tools/build_cof.sh` already calls `floor_coverage.py --patch`, so the new pass
-is in the release chain automatically — **no extra wiring, but the run-26
-release ROM predates it.**
+☠️ **The sweep is COMPLEMENTARY, not a replacement for driving.** It samples
+room CENTRES with one fixed view. Both collision classes found so far
+(border-ring floors, zero-headroom cells) live at room EDGES and only appear
+when Lara walks into them — this sweep would have missed both. Static scans
+missed them too. **Three instruments, three blind spots:** static geometry scan,
+centre sweep, driven walk. Use the driven walk for collision.
 
 ### What to do next
-1. **Re-run `tools/build_cof.sh`** — the run-26 output (`/tmp/cofout2`) does NOT
-   contain the headroom fix. ~18 min. Assets will be bit-identical again
-   (proven in run 26); only the ROM should move.
-2. **Drive more rooms.** Two collision classes have now been found by walking
-   and neither by static scan alone. The cheap sweep: spawn at a valid cell in
-   each of the 38 rooms, hold UP, and log `black%` per step — anything that
-   spikes above ~10% while she is stuck is another one.
-3. ⬜ Per-face coverage pass — only if a symptom survives (2).
+1. **Re-run `tools/build_cof.sh`** — `/tmp/cofout2` (run 26) predates the
+   zero-headroom patch from run 27. ~18 min; assets will be bit-identical again
+   (proven), only the ROM should move.
+2. **Driven edge sweep** if more blackness is suspected: spawn at a valid cell,
+   hold UP toward each wall, watch for `black%` spiking while she is STUCK.
+   That is the signature both collision bugs produced (53% and 81%).
+3. ⬜ Per-face coverage pass — only if a symptom survives.
 4. **RIG, batched** — `PHRASEDST=1` yes/no, title-music, enemy skins, mansion,
    PHRASECLEAR, RCLIPFIX, both collision passes.
 
@@ -65,13 +56,15 @@ release ROM predates it.**
   1. Capture card replugged? 2. Ship Lara's Home? 3. Release or keep polishing?
 Nothing pushed to `origin` (public `tr1-jaguar`). Keep it that way.
 
-### Reference — offline movement telemetry (no rig needed)
-    jagemu serve --rom <rom> --instance N ; ctl N run 1250
-    ctl N input up | up,b | release ; ctl N run 15..40 between samples
-    ctl N frame out.png  -> measure black% ; symbols are PER-BUILD (`nm`).
-☠️ Room blob header 16 B (`>HHHHH` then `>hhh`), verts +16 as `>hhhH`;
-sector cell `floor:h, ceiling:h, slantX:b, slantZ:b`; Y grows DOWN so
-headroom = floor - ceiling.
+### Reference — offline instruments (no rig needed)
+    ROOMTOUR=1 ROOMTOUR_HOLD=60      whole-level render sweep (this run)
+    SPAWNAT_* + ctl input/frame      driven collision + movement telemetry
+    tools/floor_coverage.py          static: no-mesh + zero-headroom cells
+    tools/ledge_census.py --tsv      climb spots (trustworthy post-patch)
+☠️ Do NOT pair ROOMTOUR with DBGROOM for timing work — its label is `menu_text`,
+68000 pixels, measured at +60% of the frame by itself.
+☠️ symbols are PER-BUILD; sector cell is `floor:h, ceiling:h, slantX:b,
+slantZ:b`; Y grows DOWN so headroom = floor - ceiling.
 
 ---
 
