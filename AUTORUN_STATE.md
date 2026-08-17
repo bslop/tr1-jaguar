@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 14
+RUN: 15
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,53 +17,56 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**★★★★★ TRANSFER TICKS ARE NOT TIME. Do not optimise on the histogram's
-`transfer_ticks` column.**
+**☠️ RETRACTION — run 13's headline was WRONG.** It said "8x fewer transfer
+ticks moved the wall clock zero, therefore transfer ticks are not time." The
+experiment could not support that: **jagemu's timing counters are PER-CORE but
+the histogram is machine-wide**, and the 320x80 clear books to the **DSP**
+bucket, while the line I watched (`Tom GPU busy ... of which Blitter`) is
+GPU-only. Corrected measurement, same two ROMs:
 
-Run 13 converted the per-frame clear to phrase addressing (`PHRASECLEAR=1`,
-`blit.c` — drop `BLIT_XPIX`, `XADDCTRL 0 = XADDPHR`, the path
-`blit_copy_phrase` already proved on silicon):
+    arm       gpu blit_count  gpu transfer   dsp blit_count   dsp transfer
+    cavesfix        490,029     84,979,645             384     34,583,955
+    phrclr          492,016     85,113,091             385     10,336,495
 
-    clear byte mode : phrase=no  25,374,720 ticks  16,916/frame  21.2%
-    clear phrase    : phrase=yes  3,189,760 ticks   2,127/frame   3.3%
-    output PIXEL-IDENTICAL (0/25,600 differ), illegal=0, all pads build
+⇒ `dsp.timing.blit_transfer` **−24,247,460**; GPU bucket unchanged. The phrase
+clear works exactly as intended. **Whether it changes frames-rendered is still
+UNMEASURED** — that is "not measured", not "no effect". (Caught by `jag_rr`;
+attribution is `bus.tom.last_blit_ticks` consumed by `mem::take` in RISC
+execution, so a blit books to whichever core runs NEXT — with Jerry at 96% that
+is nearly always Jerry. The "dsp" label does NOT mean Jerry issued it.)
 
-**8x fewer ticks, 22.2 MILLION removed — and the wall clock did not move:**
+### ☠️ I walked into my own run-3 trap while trying to measure throughput
+Peeked `g_synccalls` / `frame_count` and got 0 from both arms, because
+`build/openlara.elf` is a **different PADTEXT pad** than the p0 `.cof`s being
+run, and PADTEXT shifts every address. **To measure throughput: build the arm
+with `PADTEXT=0` via plain `make` so `build/openlara.elf` matches the ROM you
+run**, then peek `g_synccalls` (one increment per rendered frame).
 
-    baseline: Tom 15.665 s 62.6%  (Blitter 3.491 s, 13.9%)
-    phrase  : Tom 15.714 s 62.8%  (Blitter 3.497 s, 14.0%)
+    THE MEASUREMENT TO RUN NEXT (this is the whole next increment):
+      for each arm: rm -rf build; make <BASE flags> PADTEXT=0 [PHRASECLEAR=1]
+      nm build/openlara.elf | grep g_synccalls    # per-arm address!
+      jagemu peek build/openlara.cof --at <addr> --len 4 --frames 1500 --fidelity silicon
+    More rendered frames = faster. This is the fps number, offline.
 
-⇒ Blitter "busy" time is launch/arbitration/wait, **not bytes moved**. This is
-the third independent time transfer-bytes has failed to predict time here:
-`FLATFLOOR` was 7.50 fps on both arms, and the fill work already concluded
-"spans are ~9 px, PER-SPAN OVERHEAD dominates, no per-pixel optimisation can
-pay". ★ **The histogram's useful column is `count`, not `transfer_ticks`.**
-
-`jag_rr` ran all 438 rows: spans (outer==1) = 490,029 blits / 71.1% of transfer;
-area blits = 384 blits / 28.9%. Real, but by the above that share does not
-predict frame time either. They have `--blit-top N` + an always-printing
-coverage footer built (uncommitted in their tree); I said yes please.
-
-☠️ In this window **Jerry is 96.0% busy in both arms** vs Tom 62.6%. The
-critical path may be JERRY, not Tom — which would explain an invisible 8x
-Blitter win. **Check that before any further Blitter work.**
+### ★★★ Jerry's 96% is a SPIN LOOP, not work
+`--pc-histogram --core dsp --fidelity silicon` + a `jas --map` of `dsp_pose.das`:
+the hot PCs are all `main_loop`, which bumps a heartbeat, inlines `AUDIO_PUMP`
+and polls `CMD_D` — **8,570,495 iterations in 1500 frames (~51k/frame)**, with
+111M load-stall cycles at `main_loop+0x12` and 135.5M external-memory cycles.
+`CMD_D`/`LOOP_COUNT` are DSP-local, so the external traffic is the audio pump.
+The source already says it: *"the pump is inlined at 5 sites and pays its poll
+on EVERY pass even when no tick elapsed - a standing tax on Jerry's
+throughput."* ~275k samples are actually needed in that window; it polls 8.57M
+times. **`NOSOUND=1` compiles the pump out — that is the ready-made ablation to
+size the ceiling**, on a machine whose recorded shape is "Tom is
+bandwidth-bound".
 
 ### What to do next
-1. **Find out what Jerry is doing at 96%.** `--pc-histogram --core dsp
-   --fidelity silicon --dsp-map` on a gameplay window. If Jerry is the critical
-   path, every Blitter lever is mis-aimed. This is the highest-value open item.
-2. Keep `PHRASECLEAR=1` (strictly cheaper, identical output) but **do NOT claim
-   an fps win** — it goes on the silicon list, not into the notes as a lever.
-3. Rig-batched when the user is at the TV: #2 run-through, title-music check
-   (run 10's fix is offline-unverifiable), enemy skins, the mansion, PHRASECLEAR.
-
-### ✅ Container build VERIFIED (run 13)
-`docker build -t jag-openlara:run12 .` then a run against the disc reproduces
-the asset pipeline **bit-for-bit**: CAVES/CORE/EIDOS/INTRO.JV and MUSIC.PCM all
-md5-match the host. `OPENLARA.COF` differs only because the host copy predates
-run 10's music fix. Container ROM boots in jagemu with its SD card, illegal=0.
-
-### ✅ CLOSED: task #12 flat floors (silicon null, do not re-open)
+1. **Run the throughput measurement above** on cavesfix vs phrclr. It settles
+   run 13's retracted claim with a real number.
+2. **Then `NOSOUND=1` as a third arm** — if Jerry's idle DRAM traffic is costing
+   Tom bandwidth, that is where it shows. Not shippable, but it sizes the prize.
+3. Keep `PHRASECLEAR=1` (strictly cheaper, pixel-identical) — silicon list.
 
 ---
 
