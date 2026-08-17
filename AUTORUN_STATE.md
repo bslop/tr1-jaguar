@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 29
+RUN: 30
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,54 +17,64 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**✅ WHOLE-LEVEL RENDER SWEEP: no black rooms. Baseline recorded below.**
+**USER REQUEST (2026-08-16): "test the entire level and home. Try out every
+ledge/jump/obstacle/room/etc. Notate what works and doesn't work in comparison
+to the PSX version. Then fix the Jaguar version."** He then said: continue for
+another 25 cycles. This is the standing task now.
 
-`ROOMTOUR=1 ROOMTOUR_HOLD=60` teleports Lara to every room's centre; sampled
-`black%` at each stop via `jagemu ctl <inst> frame`. All 38 rooms:
+### ★★★★★ THE UNLOCK: RUNTIME TELEPORT. 100 builds -> 1.
+`SPAWNAT_*` is compile-time, so a spot-by-spot sweep would be ~100 fifteen-minute
+builds. **`jagemu ctl <inst> poke` moves Lara live.** Verified exactly:
 
-    most rooms      0.1 - 4.3%      healthy
-    room 12         11.1%
-    room 19          6.3%
-    room 21          9.7%
-    room 17          7.0%
-    room 23         17.4%   <- highest; inspected by eye, a genuinely DARK
-                               ivy/foliage area, not a hole
+    poke g_curroom=11, g_lax=50688, g_lay=7168, g_laz=56832 ; run 30
+    -> room 11, X 50688, Z 56832, floor 7424, black 4.3%
+       (matches run 27's independent measurement of that spot to the digit)
 
-**Use this as a regression baseline**: re-run the sweep after any renderer or
-collision change and compare. A room that jumps well above its number here has
-broken; anything at or below is fine.
+`tools/conformance.py <rom.cof> <elf> [--limit N] [--out DIR]` is written and
+RUNS end to end: teleport -> settle -> walk in -> hold UP+B -> read
+Y/floor/black% -> verdict CLIMBED / PARTIAL / NO-CLIMB, plus a JSON dump.
 
-☠️ **The sweep is COMPLEMENTARY, not a replacement for driving.** It samples
-room CENTRES with one fixed view. Both collision classes found so far
-(border-ring floors, zero-headroom cells) live at room EDGES and only appear
-when Lara walks into them — this sweep would have missed both. Static scans
-missed them too. **Three instruments, three blind spots:** static geometry scan,
-centre sweep, driven walk. Use the driven walk for collision.
+### ☠️ IT IS NOT TRUSTWORTHY YET — ONE KNOWN BUG, DIAGNOSED
+Batch runs report room-11 spots at **97% black, floor -256**. That is NOT real:
+teleporting to the *same* spot standalone gives **0.6% black, floor 7680**, and
+36 fields of UP leaves it at 0.3%. So the spot, the teleport and the drive are
+all fine in isolation.
 
-### What to do next
-1. **Re-run `tools/build_cof.sh`** — `/tmp/cofout2` (run 26) predates the
-   zero-headroom patch from run 27. ~18 min; assets will be bit-identical again
-   (proven), only the ROM should move.
-2. **Driven edge sweep** if more blackness is suspected: spawn at a valid cell,
-   hold UP toward each wall, watch for `black%` spiking while she is STUCK.
-   That is the signature both collision bugs produced (53% and 81%).
-3. ⬜ Per-face coverage pass — only if a symptom survives.
-4. **RIG, batched** — `PHRASEDST=1` yes/no, title-music, enemy skins, mansion,
-   PHRASECLEAR, RCLIPFIX, both collision passes.
+⇒ **The harness carries motion state between spots.** It teleports while Lara is
+still falling / mid-animation from the previous test, and poking position does
+not clear her vertical velocity — so she resumes falling from the new place and
+ends up out of the world (floor -256 is the tell).
+
+**THE FIX FOR THE NEXT RUN** (do this first, it gates everything else):
+  * poke `g_lavy = 0` before/with the position (it exists; find it via `nm`)
+  * `ctl release` and run ~30 fields BEFORE the teleport so she settles first
+  * assert after settle: `floor == g_lay` and `black% < 20`; if not, re-seat and
+    retry once, and mark the spot UNTESTABLE rather than reporting a fake verdict
+  ★ A harness that reports a confident wrong verdict is worse than one that
+    refuses — the 97% readings looked exactly like a rendering bug.
+
+### Then: the actual sweep the user asked for
+1. All ~26 census spots (WALKUP / CLIMB2 / CLIMB3 / JUMPGRAB) in the Caves.
+2. **Lara's Home too** — build without `GYMSD` (the harness ROM already is) and
+   drive the mansion; it has its own sector grid and has never been walked.
+3. Compare against the PSX footage in `res/` — **Part 2 = Caves, 3m20 -> 23m24**
+   is the authority. Note per spot: works / fails / differs-from-PSX.
+4. Then fix what fails.
+
+### Reference — offline instruments (no rig needed)
+    tools/conformance.py             driven per-spot sweep (THIS, once fixed)
+    ROOMTOUR=1 ROOMTOUR_HOLD=60      whole-level render sweep; baseline max 17.4%
+    tools/floor_coverage.py          static: no-mesh + zero-headroom cells
+    tools/ledge_census.py --tsv      climb spots (trustworthy post-patch)
+☠️ Harness ROM: `/tmp/conf.cof` + `/tmp/conf.elf` (no GYMSD, RCLIPFIX=1).
+☠️ Symbols are PER-BUILD; read them from that ROM's own `.elf`.
+☠️ **Never gate a wait on `pgrep` of a pattern your own command contains** — I
+did it again this run waiting on `make MULTIROOM` and hung the shell. Use a PID
+lockfile, as `build_cof.sh` now does.
 
 ### ⬜ AWAITING THE USER (run-25 checkpoint, still unanswered)
   1. Capture card replugged? 2. Ship Lara's Home? 3. Release or keep polishing?
 Nothing pushed to `origin` (public `tr1-jaguar`). Keep it that way.
-
-### Reference — offline instruments (no rig needed)
-    ROOMTOUR=1 ROOMTOUR_HOLD=60      whole-level render sweep (this run)
-    SPAWNAT_* + ctl input/frame      driven collision + movement telemetry
-    tools/floor_coverage.py          static: no-mesh + zero-headroom cells
-    tools/ledge_census.py --tsv      climb spots (trustworthy post-patch)
-☠️ Do NOT pair ROOMTOUR with DBGROOM for timing work — its label is `menu_text`,
-68000 pixels, measured at +60% of the frame by itself.
-☠️ symbols are PER-BUILD; sector cell is `floor:h, ceiling:h, slantX:b,
-slantZ:b`; Y grows DOWN so headroom = floor - ceiling.
 
 ---
 
