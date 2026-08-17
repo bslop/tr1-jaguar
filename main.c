@@ -917,6 +917,10 @@ static volatile uint32_t g_roomseen[2];
    about what room_floor_mr returns while swimming - the standing suspicion is
    that it hands back room 18's pool BOTTOM instead of room 14's deck. */
 static volatile int g_wfy2, g_wfw, g_wlay, g_wwatery;
+/* run 92: the SECOND clamp - `g_lay > fy2-160 -> g_lay = fy2-160` using the
+   floor UNDER her, not ahead. Suspected to be what pins her float height.
+   Record its inputs rather than trusting the reading of the source. */
+static volatile int g_wunder, g_wlaypre, g_wlaypost;
 #endif
 static int g_fwdblk;                  /* forward held but BLOCKED this frame
                                          (gates the auto-reach probe)      */
@@ -8097,7 +8101,16 @@ bootvid_entry:
                       int nx = g_lax + (int)(((int32_t)SIN(g_layaw)*28)>>16);
                       int nz = g_laz + (int)(((int32_t)COS(g_layaw)*28)>>16);
                       int fy2;
+                      /* ☠️ THE CLIMB-OUT MUST LOOK FOR A FLOOR **ABOVE** HER, and the default
+                         search prefers one at or below her feet. Measured (run 92): swimming at
+                         the pool edge with a VALID water entry, this query returned **5632** -
+                         room 18's POOL BOTTOM - while the deck she needs is 3328 above her. The
+                         condition `fy2 < g_lay` then cannot hold and she can never get out.
+                         g_flr_grab is the existing ledge mode (run 47): it widens the up-window
+                         and prefers the floor ABOVE, which is exactly this question. */
+                      g_flr_grab = 1;
                       if (room_floor_mr(rsect, roomCount, nx, nz, &fy2)) {
+                          g_flr_grab = 0;
 #ifdef MVDIAG
                           g_wfy2 = fy2; g_wfw = g_floorwater;
                           g_wlay = g_lay; g_wwatery = g_watery;
@@ -8117,9 +8130,25 @@ bootvid_entry:
                       }
                   }
                   if (g_lay < g_watery) g_lay = g_watery;
+                  #ifdef MVDIAG
+                  g_wlaypre = g_lay;
+#endif
+                  /* ⬜ THIS CLAMP IS WHAT PINS HER FLOAT HEIGHT AT A POOL EDGE. It holds her
+                     160 above the floor UNDER her, and near the edge that floor IS the deck
+                     (3328), so she rides at 3168 - ABOVE the ledge - and the climb-out test
+                     `fy2 < g_lay` can never hold. Measured run 92, exactly and every step.
+                     ☠️ An attempt to skip the guard when the floor is ABOVE the water line
+                     (`fy2 > g_watery &&`) changed NOTHING - she stayed at 3168 - so either
+                     g_watery is not what I think at that moment or this is not the only
+                     thing setting her height. REVERTED rather than left in shipping code
+                     with an unexplained effect. Instrument g_watery HERE before trying again. */
                   { int fy2;
                     if (room_floor_mr(rsect, roomCount, g_lax, g_laz, &fy2)
                         && g_lay > fy2 - 160) g_lay = fy2 - 160; }
+                  #ifdef MVDIAG
+                  { int fyd; g_wunder = room_floor_mr(rsect, roomCount, g_lax, g_laz, &fyd) ? fyd : -1;
+                    g_wlaypost = g_lay; }
+                  #endif
                   /* anims: 114 = to-surface (hold last = tread),
                      116 = surface crawl, 108 = underwater glide */
                   if (g_lay <= g_watery + 32) {
