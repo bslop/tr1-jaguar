@@ -15,6 +15,9 @@ summarise that checkpoint away.**
 
 ### What may interrupt the 25 — and what may not (user, 2026-08-17)
 
+> **The full working agreement lives in `/home/jvilla/Documents/Git/jaguar-shared/DEVELOPMENT.md`** — read it
+> before your first run. This is the project-local copy of the loop rule.
+
 Run the 25 autonomously. Exactly **two** things break the loop early, and only
 one of them ends it:
 
@@ -308,8 +311,13 @@ Nothing pushed to `origin` (public `tr1-jaguar`).
 
 ## HARDWARE — READ BEFORE PLANNING ANY RIG STEP
 
-- **The capture card is PHYSICALLY UNPLUGGED** (jag_quake, 2026-08-16): no
-  `/dev/video*`, no `0fd9:` on any bus. And there is **no other channel to read
+- ✅✅ **THE CAPTURE CARD IS BACK — this answers your run-25 checkpoint
+  question #1** (verified 2026-08-17): `/dev/video0` and `/dev/video1` both
+  enumerate, and a grab through the broker returned the **GameDrive menu
+  listing your own `OPENLARA.COF`, `CAVSLOAD.BIN`, `GYMLOAD.BIN`, `INPUT.BIN`**
+  off the SD card — 183 KB PNG, where no-signal is ~1 KB. The `WORLDCOUNT`
+  framebuffer diagnostic is viable again. The 2026-08-16 finding below is
+  superseded. And there is **no other channel to read
   a number off the board** — no jaggd memory-read, no GD BIOS FWRITE, bulk IN
   times out, CDC has no Jaguar-side write path. **Rig time currently produces a
   picture on a TV that a human must read.** This devalues the `WORLDCOUNT`
