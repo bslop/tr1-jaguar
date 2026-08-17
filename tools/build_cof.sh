@@ -164,6 +164,24 @@ TRLEVEL="$PSX/LEVEL1.PSX" python3 tools/mrt_boundary_audit.py --patch 2>&1 \
 # and exits, touching nothing else - so they must run after the base extraction
 # and before the build. Without them the doors, medikits, pistols and wolf fur
 # sample rows that do not exist.
+# ☠️☠️ SECOND COLLISION PASS - MUST RUN AFTER THE BOUNDARY PATCH, NEVER BEFORE.
+# The boundary patch fixes SEAM floors. This one fixes BORDER-RING floors: every
+# room's mesh spans local 1024..(n-1)*1024, because in TR1 the outer ring of the
+# sector grid is the wall border - but 350 of those cells carried a real floor
+# height, so collision let Lara stand and CLIMB onto squares the renderer has no
+# geometry for. That is the "I fall into some blackness then the area" report:
+# driven repro showed her standing on room 11 cell (11,4) with the screen 81%
+# black and only Lara lit. 350 of 2424 walkable cells, 14.4%.
+# Order matters: this pass skips 0x7FFE OPENING cells, which the boundary patch
+# creates - a doorway on the border ring IS legitimately walkable because the
+# neighbouring room supplies its floor. Running this first would wall real
+# doorways and seal the level.
+# Verified: size unchanged (24720), scan drops 350 -> 0, Lara still walks freely
+# from the level start, rendered frames 232/398 identical to baseline.
+say "Patching collision coverage (standable cells with no mesh)"
+python3 tools/floor_coverage.py --patch 2>&1 | tail -2 \
+    || echo "   note: floor_coverage patch failed"
+
 say "Atlas patches (doors, pickups, pistols, enemy skins)"
 for patch in MRT_DOORPATCH MRT_PICKPATCH MRT_GUNPATCH; do
     env $MRTENV $patch=1 TRLEVEL="$PSX/LEVEL1.PSX" TRPREFIX=mrt \

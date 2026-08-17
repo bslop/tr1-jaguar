@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 24
+RUN: 25
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,61 +17,52 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**★★★★★ 350 STANDABLE CELLS HAVE NO GEOMETRY AT ALL — new tool
-`tools/floor_coverage.py` finds them. This is very likely the user's blackness.**
+**✅ THE 350 PHANTOM FLOORS ARE WALLED, VERIFIED, AND IN THE RELEASE CHAIN.**
 
-    350 of 2424 walkable cells (14.4%) across 38 rooms
+    tools/floor_coverage.py            report
+    tools/floor_coverage.py --patch    wall them (floorY -> 0x7FFF, in place)
 
-The pattern is systematic and unmistakable: **every** room's mesh spans exactly
-local `1024 .. (n-1)*1024`, i.e. the OUTER RING of each sector grid has no
-geometry — because in TR1 that ring is the wall border. Those cells should read
-`0x7FFF` WALL. Instead they carry a real floor height, so collision lets Lara
-stand and climb onto them and the renderer has nothing to draw.
+    before  OPENING 418  WALL 1184  floor 2424     scan: 350 of 2424 (14.4%)
+    after   OPENING 418  WALL 1534  floor 2074     scan: 0 of 2074 (0.0%)
+    mrt_sect.bin 24720 B, unchanged                backup: mrt_sect.bin.precov
 
-Verified against the run-22 repro exactly: room 11 lists cells (11,1) (11,2)
-(11,3) (11,4) and (0,3). Lara **stood** on (11,4) [world Z 58880, floor 6656 -
-the 81%-black frame] and **spawned** on (11,2) [Z 56832, floor 7168].
+Verified after patching, all four:
+* **Level not sealed** — driven from the level start, Lara walks Z 3584 -> 8282
+  (4.6 sectors) in room 0 with no blocking. This was the real risk: the earlier
+  boundary work notes that mis-walling doorcells "SEALS OFF parts of the level".
+* **Renders normally** — 2.0% black, maxluma 255.
+* **Free** — rendered frames 232 / 398, identical to baseline.
+* **OPENING count untouched** (418 before and after), so no doorway was walled.
 
-☠️ **`ledge_census.py` reads the same sector data, so it generates test spots ON
-these phantom floors.** That is why run 21's climb test ended in a black room.
-**Filter census output through `floor_coverage.py --tsv` before using a spot.**
+Wired into `tools/build_cof.sh` immediately AFTER the boundary patch.
+☠️ **Order is load-bearing**: this pass skips `0x7FFE` OPENING cells, which the
+boundary patch creates. Running it first would wall real doorways and seal the
+level.
 
-★ This is a SECOND CLASS of the bug the boundary patch already fixed 403 of
-(`project_boundary_campaign`: TOMB1 GetHeight descends pitRoom unconditionally).
-That pass fixed seam floors; these are border-ring floors, and it missed them.
+### What to do next
+1. **Re-run `tools/build_cof.sh` end to end.** It has now gained RCLIPFIX (run
+   20) and the coverage patch (this run) since its last full run. ~20 min,
+   video is the slow part; then diff `/tmp/cofout` against the container.
+2. **Re-check task #8 (ivy drop)** — it is plausibly the same cause and may now
+   be fixed for free. Use the driven telemetry method; if the blackness is gone,
+   close it.
+3. ⬜ **The 350 is still a LOWER BOUND.** `floor_coverage.py` only flags cells
+   OUTSIDE the mesh bbox (certain, cheap). Holes INSIDE the bbox need per-face
+   coverage — a second pass, and the natural follow-up if any blackness remains.
+4. **RIG, batched** — `PHRASEDST=1` yes/no, title-music, enemy skins, mansion,
+   PHRASECLEAR, RCLIPFIX, and now the collision fix.
 
-### THE NEXT INCREMENT — patch them to WALL
-Extend `tools/mrt_boundary_audit.py --patch` with a second pass converting these
-350 cells to `0x7FFF`. Safety argument for doing it bluntly: a cell whose centre
-lies OUTSIDE the room mesh's vertex bbox cannot be covered by any face (faces
-are bounded by their vertices), so there is nothing to lose by walling it.
-☠️ Do NOT touch cells reading `0x7FFE` OPENING — those are doorways where the
-neighbouring room supplies the floor, and they are legitimately walkable.
-Then: re-run the run-21 climb drive and confirm Lara can no longer climb into
-the void, and that `mrt_sect.bin` stays the same SIZE (mrt.bin offsets depend
-on it — the 403-cell patch had the same constraint).
+☠️ `ledge_census.py` reads raw sector data, so before this patch it generated
+test spots on phantom floors (that is how run 21 ended up in a black room).
+Re-run it now that they are walls — its output should be trustworthy.
 
-⬜ **The 350 is a LOWER BOUND.** `floor_coverage.py` only flags cells outside
-the mesh bbox, which is certain but coarse; holes INSIDE the bbox need per-face
-coverage and are a second pass. Reporting a certain lower bound beats a fuzzy
-full answer.
-
-### Also queued
-1. Task #8 (ivy drop) — now suspect the same cause; check it against the scan.
-2. Re-run `tools/build_cof.sh` (recipe gained RCLIPFIX in run 20).
-3. **RIG, batched** — `PHRASEDST=1` yes/no, title-music, enemy skins, mansion,
-   PHRASECLEAR, RCLIPFIX.
-
-### Reference — offline movement telemetry (works, no rig)
+### Reference — offline movement telemetry (no rig needed)
     jagemu serve --rom <rom> --instance N ; ctl N run 1250
-    ctl N input up | up,b | release ; ctl N run 12..15 between samples
-    g_lax 0x001549f0  g_lay 0x001549e4  g_laz 0x001549ec
-    g_lafloor 0x001549e8  g_curroom 0x00154970
-    g_camx 0x001548ea  g_camy 0x001548e6  g_camz 0x001548e2
-☠️ Addresses are per-build — re-read from that arm's own `nm`.
-☠️ Room blob header is **16 bytes** (`>HHHHH` vcount,qcount,tcount,atlasW,
-atlasH then `>hhh` offX,0,offZ), NOT the 6 the kernel comment implies; verts
-follow at +16 as `>hhhH`. Parsing at +6 makes vertices look like garbage.
+    ctl N input up | up,b | release ; ctl N run 12..40 between samples
+    symbols are PER-BUILD - read g_lax/g_lay/g_laz/g_lafloor/g_curroom/
+    g_cam[xyz]/g_synccalls from that arm's own `nm`.
+☠️ Room blob header is **16 bytes** (`>HHHHH` then `>hhh`), verts at +16 as
+`>hhhH`; the sector cell is `floor:h, ceiling:h, slantX:b, slantZ:b`.
 
 ---
 
