@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 76
+RUN: 77
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,76 +17,90 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ⏳ THE RELEASE IS RUNNING ON THE REAL JAGUAR. AWAITING THE USER'S EYES.
+# ☠️☠️ THE CAPTURE CARD IS BACK AND STILL CAPTURES BLACK. THE TV IS THE ONLY EYE.
 
-★ USER RULED (run 75): **"Use the hardware"** - the batched/no-rig standing order
-is lifted when he says so. He also ruled earlier that **Lara's Home IS in the
-release**.
+★★★★★ **READ `jaguar-shared/hw/RESOURCES.md` - it changed under us.** jag_bubsy3d
+recorded 2026-08-17: an **Elgato Cam Link 4K** now enumerates, `jaghw own claim`
+says `capture=present`, ffmpeg lists its formats - **and two ROMs uploaded `OK!`
+still captured pure black.** They then built `-DHW_TESTCARD`, a ROM where the
+68000 writes colour bars straight into the backbuffer with no GPU and no Blitter:
+**that ROM cannot be black if the video path works, and it captured black too.**
+So the fault is upstream of the card - Jaguar -> upscaler -> Cam Link cabling, or
+the wrong Cam Link input.
+⇒ **A capture CANNOT verify a hardware boot right now.** Do not spend a run
+reading black frames as renderer bugs; that trap already cost this project nine
+phantom "black boots". Ask what the TV shows.
+⬜ **openlara should keep its own test-card ROM** for this fork - bubsy3d's advice
+and it is right. `HW_TESTCARD` does not exist in this tree.
 
-Uploaded `/tmp/cofout7/OPENLARA.COF` (1,538,700 B - the first hardware boot of a
-ROM containing the portal fix, the TR1 jump-reach solve, the ledge-probe window
-fix, `climb_fits` and `FITSTEP`):
+### ⏳ STILL AWAITING: WHAT DOES THE TV SHOW?
+`/tmp/cofout7/OPENLARA.COF` was uploaded to the real Jaguar in run 75 (`OK!`,
+lease clean). It is the first hardware boot carrying the portal fix, the TR1
+jump-reach solve, the ledge-probe window fix, `climb_fits` and `FITSTEP`.
+    title ring  -> the front-end works on silicon; press A twice and walk
+    black       -> A10 boot lottery; `tools/roll_walk.sh <arm> 0 136 272 408 544 816`
+                   (☠️ a power cycle fixes a LAYOUT miss, never a broken build)
+    error screen-> a real fault; roll_walk scores a solid error screen as "LIT"
 
-    ./jag_gd.sh upload /tmp/cofout7/OPENLARA.COF
-    -> UPLOADING ... EXECUTE... **OK!**   lease held 12s, released clean
+### ★ ROSTER: jag_bubsy3d IS SCRAPPED (user, run 76)
+Recorded in `jaguar-shared/hw/RESOURCES.md` and pushed. Roster is FOUR:
+openlara, quake, rr, resident. **The first slot is vacant and openlara is no
+longer batched behind bubsy3d** - the rig is free to claim. Its capture findings
+were deliberately kept in that file.
 
-☠️ **`OK!` MEANS THE UPLOAD LANDED, NOT THAT IT RENDERS.** The capture card is
-still unplugged (and `jag_gd.sh capture` is blocked by the permission classifier
-here), so there is NO channel to see the screen. `OK!` + a black TV means the
-VIDEO chain is dead and the console is fine - that distinction can only come from
-the user. **ASK WHAT THE TV SHOWS.**
+### ✅ MANSION DOORS: 10 OF 22 PROVEN TO CROSS - and that is a LOWER BOUND
+    22 of 32 wall-portals are walkable at floor level; 10 crossed, 5 unproven,
+    7 UNTESTABLE (seat resolves to an overlapping room)
+☠️ **"FAIL" here means UNPROVEN, not broken.** `door_walk.py` walks in a straight
+line from a stand-off, which only tests a door that is directly ahead and
+unobstructed. The 5:
+    2->5, 2->6   moved 164/188 - wedged ON the stand-off cell, never left room 2
+    2->7         moved 7157, still room 2 (room 2 is large) - never lined up
+    10->8, 11->8 moved ~6700 and saw room 12 - went somewhere else entirely
+### ☠️ THREE HARNESS ITERATIONS THIS RUN, ONE OF WHICH WAS MY OWN REGRESSION
+  1. Sweeping the span and taking the FIRST exclusively-owned cell sent her to
+     stand-offs 1800 out at the span edges; she walked 10,000+ units into a third
+     room and the score went **10/12 -> 7/14**. Fixed by RANKING candidates
+     (doorway centre first, exclusivity and distance as tie-breakers) - back to
+     10 crossed while testing 22 doors instead of 16.
+  2. Walking 12,700 units at a door 1,300 away carried her through and out the
+     far side, so an "ended in dst" test scored working doors dead. Now walks 5
+     steps and asserts on the set of rooms REACHED.
+  3. (run 74) A portal has a HEIGHT; ignoring it failed 7 balconies.
+★ The lesson each time: **the tool was wrong, not the game.** A new instrument
+that disagrees with something already seen working is measuring itself.
 
-### ⬜ WHAT TO ASK / WHAT IT MEANS
-    title ring -> the whole front-end works on silicon; then Start Game and walk
-    black screen -> A10 boot lottery. `PADTEXT=N` is POSITIONAL and any layout
-        change re-rolls it: `tools/roll_walk.sh <arm> 0 136 272 408 544 816`.
-        ☠️ A cycle fixes a LAYOUT miss, never a broken build.
-    error screen -> a real fault; roll_walk calls a solid error screen "LIT", so
-        do not trust an automated verdict here even if capture comes back.
-
-### ☠️ RIG RULES THAT APPLIED THIS RUN - keep them
-  * `jag_bubsy3d` held the board (373s left) when I started; `jag_gd.sh` queues
-    through `jaguar-shared/hw/jaghw` for free, so I let it queue rather than
-    barge. The agreement gives openlara the slot AFTER bubsy3d.
-  * **I did NOT write the SD card.** The shared namespace contract
-    (`hw/SD_LAYOUT.md`) requires project-prefixed basenames (`OL*`) because
-    `jaggd -wf` can only write the card ROOT - but this ROM reads UNPREFIXED
-    names (`CAVES.JV`, `MUSIC.PCM`). Writing them would clobber another
-    project's files. The bulk assets are Tier 2, placed by mounting the card.
-    ⬜ If the videos/music turn out stale on the card, that needs the user to
-    mount it - do not `-wf` unprefixed names.
-  * ☠️ Never `-wf` while a ROM is streaming; power-cycle first.
-
-### ⬜ NEXT (offline, ready to go)
-  1. **`door_walk.py` on the CAVES** - `--prefix mrt`, 62 wall-portals, never
-     tested door by door. The stand-point selection was improved THIS RUN
-     (sweeps along the portal span and prefers a cell no other room owns) to fix
-     the two "wedged at 164/188 units" failures and the four UNTESTABLE seats
-     from run 74; **that improvement is UNVERIFIED - run gym first and confirm
-     10/12 has not regressed before trusting a Caves number.**
-  2. The pool: swim down through the room 14 water surface, confirm `g_curroom`
-     becomes 18.
+### ⬜ NEXT
+  1. **`door_walk.py --prefix mrt`** - the Caves' 62 wall-portals, never tested
+     door by door. The harness is now three fixes better; this is ready.
+  2. The 7 UNTESTABLE seats need a stand point from a cell the source room owns
+     exclusively *and* that the runtime agrees with - poke, settle, and CHECK
+     `g_curroom` before walking (the tool already does; it just has no fallback).
+  3. The pool: swim down through the room 14 water surface, expect room 18.
+  4. A test-card ROM (`HW_TESTCARD`) so a black TV can be split into
+     "renderer" vs "video chain" without borrowing another project's ROM.
 
 ### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (50-59) · pickups (65) · mid-walk LOADING (67) ·
     caves black wedges (69, OPEN SKY) · caves room crossing (72, FIXED) ·
-    gym room 18 "sealed" (73, it is the POOL) ·
-    7 mansion "dead doors" (74 - a PORTAL HAS A HEIGHT; they are balconies)
+    gym room 18 (73, it is the POOL) · 7 "dead doors" (74, they are balconies)
 
 ### ★ INSTRUMENTS
-    jag_gd.sh upload|status|power|capture   the rig, via the shared jaghw lease
-    door_walk.py · portal_open.py --patch/--audit · release_play.py --tour
-    probe_spot.py --raw= / --set= · sightline.py · entity_check.py
-    room_cycles.py · HOLEVIS=1 / DREWVIS=1 / HOPDEPTH=N
+    jag_gd.sh upload|status|power           the rig, via the shared jaghw lease
+    door_walk.py <rom> <elf> --prefix P     walk every doorway, assert the flip
+    portal_open.py --prefix P [--patch|--audit]
+    release_play.py --tour [--gym] · probe_spot.py --raw= / --set=
+    sightline.py · entity_check.py · room_cycles.py
+    HOLEVIS=1 / DREWVIS=1 / HOPDEPTH=N / CULLCOUNT=1 BEXCNT=1 WCCNT=1
 ☠️ SYMBOLS ARE PER-BUILD.  ☠️ REBUILD THE ROM AFTER AN ASSET PATCH.
-☠️ FPS still cannot be measured offline; on hardware it needs the capture card.
+☠️ FPS cannot be measured offline, and on hardware it needs a working capture.
 
 ### ✅ WHAT IS DONE
     climbing   CAVES 24/24 ledges, 6/6 walls · MANSION 24/24, 6/6
-    walking    CAVES crosses 0->1->2 · MANSION 10/12 testable doors cross
+    walking    CAVES crosses 0->1->2 · MANSION 10/22 doors PROVEN
     enemies    BEAR and WOLVES render on shipping flags
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
-    release    **/tmp/cofout7** - uploaded to the REAL JAGUAR, running now
+    release    /tmp/cofout7 - on the real Jaguar since run 75, verdict pending
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,

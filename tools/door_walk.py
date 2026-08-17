@@ -107,7 +107,7 @@ def main():
                     n += 1
             return n
 
-        best = None
+        cands = []
         for sgn in (-1, 1):
           for frac in (0.5, 0.3, 0.7, 0.15, 0.85):
             for dist in (1300, 768, 1800):
@@ -145,19 +145,17 @@ def main():
                 by = struct.unpack(">h", struct.pack(">H", beyond))[0]
                 if fy - by > 256:                      # LARA_STEPUP
                   continue
-              score = owners(sx, sz)                   # 1 = the source room alone
-              if best is None or score < best[0]:
-                best = (score, sx, sz, yaw, fy)
-              if score == 1:
-                break
-            else:
-              continue
-            break
-          else:
-            continue
-          break
-        if best:
-            cand = best[1:]
+              # ☠️ RANK, DO NOT FIRST-MATCH. Taking the first exclusively-owned
+              # cell sent her to stand-offs far along the span and 1800 out; she
+              # then walked 10,000+ units and ended up in a THIRD room, and the
+              # gym score went 10/12 -> 7/14. The centre of the doorway at the
+              # standard stand-off is the right place to start from; exclusivity
+              # and distance are tie-breakers, not the objective.
+              cands.append((owners(sx, sz) > 1, abs(frac - 0.5),
+                            abs(dist - 1300), sx, sz, yaw, fy))
+        if cands:
+            cands.sort()
+            cand = cands[0][3:]
         if cand:
             tests.append((r, dst) + cand)
     if limit:
@@ -203,12 +201,21 @@ def main():
             # and without distance the tool cannot tell them apart. Run 73's tour
             # crossed gym 1->0 for real, so a tool that calls that door dead is
             # measuring itself.
+            # ☠️ DO NOT WALK 12,000 UNITS AT A DOOR 1,300 AWAY, AND ASSERT ON
+            # "REACHED", NOT "ENDED IN". Three doors failed while she walked
+            # 9-11k units and finished in a THIRD room - she had gone through the
+            # doorway and out the far side, so an end-state test scored a working
+            # door as dead. Collect every room seen and pass if dst appears.
             got = None
+            seen = set()
             x0p, z0p = peek("g_lax"), peek("g_laz")
             ctl("input", "up")
-            for _ in range(9):
+            for _ in range(5):
                 ctl("run", 60, timeout=600)
-                if peek("g_curroom") == dst:
+                cur = peek("g_curroom")
+                if cur is not None:
+                    seen.add(cur)
+                if cur == dst:
                     got = dst
                     break
             ctl("release")
@@ -218,8 +225,8 @@ def main():
                 print("  ok   %2d -> %-2d" % (r, dst), flush=True)
             else:
                 fail += 1
-                print("  ☠️ FAIL %2d -> %-2d  ended in %s, moved %d  (stand %d,%d,%d yaw %d)"
-                      % (r, dst, peek("g_curroom"), moved, sx, fy, sz, yaw), flush=True)
+                print("  ☠️ FAIL %2d -> %-2d  saw %s, moved %d  (stand %d,%d,%d yaw %d)"
+                      % (r, dst, sorted(seen), moved, sx, fy, sz, yaw), flush=True)
     finally:
         ctl("release")
         srv.terminate()
