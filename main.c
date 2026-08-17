@@ -8932,32 +8932,33 @@ bootvid_entry:
                by centre distance. Doorways still show through (portal holes
                have no faces). */
             { int a, b, c2, d2;
-              for (i=0;i<roomCount;i++) { rdepth[i]=4; prv[i]=0; } /* 4 = off */
-#ifdef DREWVIS
-                /* ☠️ DO NOT CLEAR PER FRAME. The first version cleared here and
-                   both masks read 0 forever - including the bit for the room
-                   Lara is standing in, which is certainly drawn. The clear sits
-                   in the camera/visibility block and the draw loop runs in a
-                   LATER PIPELINE STAGE (PIPESTAGE=2), so a peek between frames
-                   lands after the clear and before the sets. Accumulate instead:
-                   for "was this room ever drawn from here" that is the more
-                   useful question anyway, and it cannot be defeated by phase. */
-#endif
+              /* ☠️ THE PORTAL DEPTH WAS A HARD 3, WRITTEN AS THREE NESTED LOOPS.
+                 Lara's Home room 0 looks across into rooms 13 and 17 - which carry the
+                 geometry for 77.8% of that screen - and they sit FOUR portal hops away, so
+                 they were never candidates and no HOPBOOT setting could reach them (that
+                 dial only tightens an already-capped set). The Caves never showed it:
+                 short enclosed sight lines never need a 4th hop.
+                 Rewritten as a bounded BFS so the depth is one number. HOPDEPTH=N to
+                 raise it; default 3 keeps the shipping behaviour byte-identical. */
+              #ifndef HOPDEPTH
+              #define HOPDEPTH 3
+              #endif
+              for (i=0;i<roomCount;i++) { rdepth[i]=HOPDEPTH+1; prv[i]=0; }
+              #ifdef DREWVIS
+              /* masks accumulate; probe_spot zeroes them at the seat */
+              #endif
               rdepth[g_curroom]=0; prv[g_curroom]=2;            /* full rect */
-              for (a=0;a<MRT_ADJ_MAX && S_adj[g_curroom][a]!=255;a++) {
-                  int n1=S_adj[g_curroom][a];
-                  if (rdepth[n1]>1) rdepth[n1]=1;
-                  for (b=0;b<MRT_ADJ_MAX && S_adj[n1][b]!=255;b++) {
-                      int n2=S_adj[n1][b];
-                      if (rdepth[n2]>2) rdepth[n2]=2;
-                      for (c2=0;c2<MRT_ADJ_MAX && S_adj[n2][c2]!=255;c2++)
-                          if (rdepth[S_adj[n2][c2]]>3) rdepth[S_adj[n2][c2]]=3;
-                  }
+              { int dcur;
+                for (dcur=0; dcur<HOPDEPTH; dcur++)
+                  for (a=0;a<roomCount;a++)
+                    if (rdepth[a]==dcur)
+                      for (b=0;b<MRT_ADJ_MAX && S_adj[a][b]!=255;b++)
+                        if (rdepth[S_adj[a][b]] > dcur+1) rdepth[S_adj[a][b]] = dcur+1;
               }
               /* RECT CHAIN in depth order: a room's window = union over its
                  shallower neighbours of intersect(neighbour window, doorway
                  rect neighbour->room). Empty window = not drawn AT ALL. */
-              for (d2=1; d2<=3; d2++)
+              for (d2=1; d2<=HOPDEPTH; d2++)
                 for (i=0;i<roomCount;i++) {
                   int got=0, ux0=0,ux1=0,uy0=0,uy1=0;
                   if (rdepth[i]!=d2) continue;
@@ -8994,7 +8995,7 @@ bootvid_entry:
                  window computation fails, DRAW THE ROOM rather than trust an
                  empty rect. Costs at most some overdraw; a hole is certain. */
               for (i=0;i<roomCount;i++)
-                  if (rdepth[i]<=3 && !prv[i]) {
+                  if (rdepth[i]<=HOPDEPTH && !prv[i]) {
                       prv[i]=1; prx0[i]=0; prx1[i]=319;
                       pry0[i]=0; pry1[i]=VIEW_H-1; }
 #endif
@@ -9688,7 +9689,7 @@ bootvid_entry:
                        Lara's room (rdepth computed with the paint order above;
                        1 hop left black holes through neighbours' doorways).
                        Build with NOVISCULL=1 to disable. */
-                    if (rdepth[ri] > 3) continue;
+                    if (rdepth[ri] > HOPDEPTH) continue;
                     if (prv[ri] == 0) continue;    /* no visible window */
 #endif
 #ifdef DREWVIS

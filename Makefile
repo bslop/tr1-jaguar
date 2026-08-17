@@ -1055,6 +1055,12 @@ CFLAGS   += -DDREWVIS
 CXXFLAGS += -DDREWVIS
 endif
 
+# HOPDEPTH=N: portal-visibility depth in hops (default 3). Value-carrying.
+ifdef HOPDEPTH
+CFLAGS   += -DHOPDEPTH=$(HOPDEPTH)
+CXXFLAGS += -DHOPDEPTH=$(HOPDEPTH)
+endif
+
 # GYMTEST=1 / CAVETEST=1: boot straight into Lara's Home / the Caves, skipping
 # the title ring. ☠️☠️ BOTH #ifdefs HAVE EXISTED IN main.c FOR AGES AND NEITHER
 # WAS EVER PLUMBED HERE - so -DGYMTEST never reached the compiler and a GYMTEST

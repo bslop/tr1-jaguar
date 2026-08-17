@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 56
+RUN: 57
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,61 +17,58 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ THE HOLE IS MISSING GEOMETRY, NOT A RENDERER BUG. FIVE RUNS TO GET HERE.
+# ✅ ROOM 0's HOLE IS FIXABLE AND HALF OF IT IS ALREADY GONE: 77.8% -> 39.5%
 
-Along Lara's line of sight at the probe spot there are **19 faces in the whole
-level**, and every one of them spans y -1024..2560 - entirely ABOVE her feet at
-y=3072. Nothing exists between room 13's lowest faces and the floor she stands
-on. **The vertical riser between the two floor levels is absent from the mesh**,
-so no cull, window or clip was ever going to fill those pixels.
+The two mansion holes have **different causes**, which is why one set of flags
+never explained both:
 
-    # the query, reusable - walk every room's quads, keep centroids in the
-    # +X corridor at her z, print each room's y span
-    35400 <= centroid_x <= 41000 and 38900 <= centroid_z <= 39950
-      -> room 13: 19 faces, y span -1024 .. 2560     (she is at y=3072)
+    room 15  MISSING GEOMETRY  - nothing exists to draw (run 55, closed)
+    room 0   NOT DRAWN         - the geometry exists and was never a candidate
 
-### ✅ THE WORLD PLANE CULL IS EXONERATED - it was the last suspect
-Built an offline model of it and **validated it against the hardware**: 21% of
-room 13's faces culled offline vs the ~19% `worldcull` the ROM counts. With that
-model:
-  * planes are internally consistent - all 471 quads in room 13 and all 117 in
-    room 15 share one winding convention (a uniform "disagreement" with my cross
-    product is MY sign convention, not a defect - a 100% result is a convention,
-    a 5% result is a bug);
-  * the SLACK is a constant **6144** subtracted from d, and since the test is
-    `cull iff N.C < d`, lowering d culls FEWER faces. The margin errs toward
-    keeping geometry, so it cannot be over-culling.
-  * ☠️ `nz` is stored as 65472 in a 32-bit field and that is NOT a sign bug -
-    `imult` takes the low 16 bits as signed, so it reads as -64. Checked because
-    it looked exactly like one.
+### ★★★★★ `tools/sightline.py` — ASK WHAT EXISTS BEFORE BLAMING A CULL
+    tools/sightline.py --prefix gym --at X,Y,Z,ROOM,YAW [--reach N] [--half N]
+Walks every room's faces, keeps centroids in a corridor along the spot's yaw, and
+prints each room's face count and vertical span against the floor she stands on.
+No build required. It reproduces run 55's room-15 verdict in one command, and it
+separated the two holes immediately:
 
-### ⬜ NEXT: WHY DOES THE EXTRACTOR DROP THE RISER?
-The question is now about level conversion, not rendering:
-  1. Does the ORIGINAL TR1 room data carry that face? Read Lara's Home room 13/15
-     out of the source level with the extractor's own reader and look for quads
-     spanning y 2560..3072 in that corridor.
-  2. If TR1 has it and we do not, find where the converter drops it -
-     the likely candidates are portal-boundary handling (a face coincident with a
-     portal may be discarded) or a room-bounds clip.
-  3. If TR1 does NOT have it either, then the original relies on the player never
-     being able to stand where the census put her, and the honest fix is a
-     collision one: room 15's floor at 3072 next to room 13's at 2560 with no
-     wall between them is a place TR1 never lets you see from.
-     ★ That is worth checking FIRST - it is cheap, and if true this hole is not
-     a bug to fix but a place to make unreachable.
+    room 15 -> only room 13 in view, y -1024..2560, she is at 3072
+               EVERY face above her feet: missing riser, unfixable by culling
+    room 0  -> rooms 13, 1 and 17 in view with faces above AND below her
+               the geometry is THERE
 
-### ☠️ THE SHAPE OF THIS HUNT - worth reading before starting another
-Runs 50-55 eliminated, with measurements: ALLVIS, room-level and kernel XCULL,
-NEARLOW, SLIVER, HOPBOOT/hop, missing portal, undrawn rooms, VRESN/resolution,
-screen-space backface, empty-y+area as a whole, and the world plane cull.
-  * Run 52 found a 45%-vs-5% controlled correlation and called it the cause. It
-    was not. **Removing the suspect (run 54) closed 7 of 33 points** while the
-    reject rate fell to the clean-room level. A correlation that survives a
-    control still is not a cause.
-  * Six static A/Bs returned EXACTLY 33.1%. Identical numbers across unrelated
-    changes is one strong result, not six weak ones: none of them was in the path.
-  * The thing that finally worked was asking what geometry EXISTS, which is a
-    question about the data and needed no build at all.
+**Five runs of renderer forensics would have been one command.**
+
+### ✅ THE FIX FOR ROOM 0: portal DEPTH, not the hop dial
+`DREWVIS` at that spot: `vis={0,1,3}`, `drew={0,1}` - rooms 13 and 17 carry the
+geometry for that view and were never candidates. The portal depth was a hard 3,
+written as three nested loops, and `HOPBOOT` cannot reach past it (that dial only
+TIGHTENS an already-capped set). Rewritten as a bounded BFS behind **`HOPDEPTH`**
+(default 3). ☠️ Verified byte-identical at the default before trusting anything:
+same `vis=11 drew=3`, same 77.8%.
+
+    HOPDEPTH=3 (ship)              vis={0,1,3} drew={0,1}   77.8% uncovered
+    HOPDEPTH=5 HOPBOOT=4           vis unchanged            75.8%
+    HOPDEPTH=5 HOPBOOT=4 ALLVIS=1  vis=bits0-13 drew=12543  **39.5%**
+
+★ Depth alone was not enough: rooms 13/17 have **no portal window** from there
+(`prv=0`), and `ALLVIS` is what admits a room whose window computes empty. Each
+alone does nothing; together they halve the hole. **Two necessary conditions can
+each measure as "no effect" - run 51 dismissed ALLVIS for exactly this reason.**
+Before/after frames: `/tmp/room0_before.png`, `/tmp/room0_fixed.png` (320x80,
+upscale 3x). The recovered picture is the mansion EXTERIOR - a building with a
+doorway and roof where there was solid black.
+
+### ⬜ NEXT: WHAT DOES IT COST? Then pick the depth.
+This draws ~14 rooms where it drew 2, in a game running 6-7 fps. **Do not ship it
+unmeasured.**
+  1. `tools/fps_measure.py` / `room_cycles.py` on the gym with
+     `HOPDEPTH=4/5 ALLVIS=1` vs the default. Also check the CAVES cost - they
+     never needed the extra depth, so if it is expensive make it per-level.
+  2. The remaining 39.5% is probably legitimate: room 0 is OUTDOORS and TR1 has
+     no sky geometry there. Confirm with `sightline.py` before hunting it.
+  3. If the cost is unacceptable at depth 5, try 4 - the missing rooms were at
+     hop 4, so 4 may buy the whole win.
 
 ### ☠️☠️ TWO KERNEL DIAGNOSTIC FLAGS BUILD AND DO NOT RENDER
     NOEMPTYY=1   GPU halted, flat luma-76 field
@@ -80,25 +77,21 @@ Both report **illegal=0**. `NOBFCULL=1` and `ALLVIS=1` are safe.
 ★ `illegal=0` is not "it rendered" - screenshot every diagnostic build.
 
 ### ★ INSTRUMENTS (all off in shipping builds)
+    sightline.py                  what geometry exists ahead - NO BUILD NEEDED
     DREWVIS=1                     g_visrooms / g_drewrooms room bitmasks
+    HOPDEPTH=N                    portal visibility depth (default 3)
     CULLCOUNT=1 BEXCNT=1 WCCNT=1  per-face counters, RAW DRAM:
                                   $1C0000 staged  $1C0004 rastered
                                   $1C0010 bexit   $1C0014 worldcull
-                                  total = worldcull + staged
-                                  screen-space = staged - bexit - rastered
     probe_spot.py --raw=N=0xADDR / --set=SYM=VAL
     build_conf.sh EXTRA= / SKIP=
-☠️ Counters ACCUMULATE - take DELTAS. Geometry layout for offline work: room blob
-header 16B `>HHHHH`+`>hhh`, verts `>hhhH` at +16, quads 36B = 12B plane
-`{(ny<<16)|nx, nz, d}` + 4 u16 idx + 8 u16 UV; tris 30B.
+☠️ Counters ACCUMULATE - take DELTAS.
 
 ### ✅ STILL TRUE — climbing is closed (runs 46-49)
     CAVES    LEDGES 24/24   WALLS 6/6 refused   0 black outliers
-    MANSION  LEDGES 24/24   WALLS 6/6 refused   7 black outliers (this hole)
+    MANSION  LEDGES 24/24   WALLS 6/6 refused
 
 ### ⬜ ALSO STILL OPEN
-  * Room 0's hole is a different shape (everything above the floor missing) -
-    run the line-of-sight query above at that spot FIRST, it is one command.
   * ☠️ `/tmp/cofout4` (the filmed release) predates runs 46-49. Rebuild before
     shipping.
   * Run-25/50 direction questions unanswered; the run-50 report was delivered.
