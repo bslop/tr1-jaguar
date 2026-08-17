@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 30
+RUN: 31
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,64 +17,62 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**USER REQUEST (2026-08-16): "test the entire level and home. Try out every
-ledge/jump/obstacle/room/etc. Notate what works and doesn't work in comparison
-to the PSX version. Then fix the Jaguar version."** He then said: continue for
-another 25 cycles. This is the standing task now.
+**STANDING TASK (user, 2026-08-16):** *"test the entire level and home. Try out
+every ledge/jump/obstacle/room/etc. Notate what works and doesn't work in
+comparison to the PSX version. Then fix the Jaguar version."* + "continue on
+your next 25 cycles".
 
-### ★★★★★ THE UNLOCK: RUNTIME TELEPORT. 100 builds -> 1.
-`SPAWNAT_*` is compile-time, so a spot-by-spot sweep would be ~100 fifteen-minute
-builds. **`jagemu ctl <inst> poke` moves Lara live.** Verified exactly:
+### `tools/conformance.py` — built, refuses to lie, ONE bug left
+It teleports, walks in, holds UP+B, and reports CLIMBED / PARTIAL / NO-CLIMB /
+UNTESTABLE with black% and a JSON dump. Two real improvements landed this run:
 
-    poke g_curroom=11, g_lax=50688, g_lay=7168, g_laz=56832 ; run 30
-    -> room 11, X 50688, Z 56832, floor 7424, black 4.3%
-       (matches run 27's independent measurement of that spot to the digit)
+* **`seat()`** — quiesce, zero `g_lavy/g_fally/g_jumped/g_lajf`, place, settle,
+  then **VERIFY** (`floor == g_lay` and within 256 of the target). Anything else
+  is reported **UNTESTABLE**. ★ It no longer manufactures the bug it reports:
+  the old "room 11 = 97% black" readings were the harness overshooting, and
+  that same spot seats cleanly at 0.6%.
+* **HOME recovery waypoint** — once Lara is outside the world, poking a good
+  position does not bring her back; re-seating at the level start first does.
+  Without it, ONE bad spot early poisoned every later spot.
 
-`tools/conformance.py <rom.cof> <elf> [--limit N] [--out DIR]` is written and
-RUNS end to end: teleport -> settle -> walk in -> hold UP+B -> read
-Y/floor/black% -> verdict CLIMBED / PARTIAL / NO-CLIMB, plus a JSON dump.
+### ☠️ THE REMAINING BUG — and the exact next diagnostic
+The seat sequence **works perfectly by hand** on a fresh instance:
 
-### ☠️ IT IS NOT TRUSTWORTHY YET — ONE KNOWN BUG, DIAGNOSED
-Batch runs report room-11 spots at **97% black, floor -256**. That is NOT real:
-teleporting to the *same* spot standalone gives **0.6% black, floor 7680**, and
-36 fields of UP leaves it at 0.3%. So the spot, the teleport and the drive are
-all fine in isolation.
+    poke room=11,x=52736,y=7680,z=56832 ; run 20
+    -> A. Y=3072 floor=3072   B. Y=7680 floor=3072   C. Y=7680 floor=7680
 
-⇒ **The harness carries motion state between spots.** It teleports while Lara is
-still falling / mid-animation from the previous test, and poking position does
-not clear her vertical velocity — so she resumes falling from the new place and
-ends up out of the world (floor -256 is the tell).
+But inside the harness loop the same pokes **do not land** — `seat()` debug
+shows `want(y=7680) -> y=3072`, i.e. Lara never moves. `peek` works fine in the
+same loop (it reads 3072 correctly), so the transport is alive.
 
-**THE FIX FOR THE NEXT RUN** (do this first, it gates everything else):
-  * poke `g_lavy = 0` before/with the position (it exists; find it via `nm`)
-  * `ctl release` and run ~30 fields BEFORE the teleport so she settles first
-  * assert after settle: `floor == g_lay` and `black% < 20`; if not, re-seat and
-    retry once, and mark the spot UNTESTABLE rather than reporting a fake verdict
-  ★ A harness that reports a confident wrong verdict is worse than one that
-    refuses — the 97% readings looked exactly like a rendering bug.
+**NEXT: print `poke()`'s JSON response.** `ctl()` currently discards it. Add
+`if os.environ.get("CONF_DEBUG"): print(out)` inside `poke()` and run
+`--limit 3`. Either the poke is being rejected (address/format) or it is
+accepted and something re-writes the value during `run` — those two need
+different fixes and are one print apart.
+Also worth trying: poke ONCE and read back immediately (no `run`) inside the
+loop, to separate "write rejected" from "overwritten by the game".
 
-### Then: the actual sweep the user asked for
-1. All ~26 census spots (WALKUP / CLIMB2 / CLIMB3 / JUMPGRAB) in the Caves.
-2. **Lara's Home too** — build without `GYMSD` (the harness ROM already is) and
-   drive the mansion; it has its own sector grid and has never been walked.
-3. Compare against the PSX footage in `res/` — **Part 2 = Caves, 3m20 -> 23m24**
-   is the authority. Note per spot: works / fails / differs-from-PSX.
-4. Then fix what fails.
+Already ruled out: `g_layprev` (added, no change), motion-state zeroing (added,
+no change), stale room (recovery waypoint fixed floor -256 -> 3072).
 
-### Reference — offline instruments (no rig needed)
-    tools/conformance.py             driven per-spot sweep (THIS, once fixed)
-    ROOMTOUR=1 ROOMTOUR_HOLD=60      whole-level render sweep; baseline max 17.4%
-    tools/floor_coverage.py          static: no-mesh + zero-headroom cells
-    tools/ledge_census.py --tsv      climb spots (trustworthy post-patch)
-☠️ Harness ROM: `/tmp/conf.cof` + `/tmp/conf.elf` (no GYMSD, RCLIPFIX=1).
-☠️ Symbols are PER-BUILD; read them from that ROM's own `.elf`.
-☠️ **Never gate a wait on `pgrep` of a pattern your own command contains** — I
-did it again this run waiting on `make MULTIROOM` and hung the shell. Use a PID
-lockfile, as `build_cof.sh` now does.
+### Then the sweep the user actually asked for
+1. All ~26 census spots in the Caves (WALKUP/CLIMB2/CLIMB3/JUMPGRAB).
+2. **Lara's Home** — `/tmp/conf.cof` is built WITHOUT GYMSD so the mansion is in
+   it; it has never been walked.
+3. Compare with the PSX footage in `res/` — **Part 2 = Caves, 3m20 -> 23m24**.
+4. Fix what fails.
+
+### Reference
+    /tmp/conf.cof + /tmp/conf.elf     harness ROM (no GYMSD, RCLIPFIX=1)
+    ROOMTOUR=1 ROOMTOUR_HOLD=60       render sweep; baseline max 17.4% black
+    tools/floor_coverage.py           static collision scan (no-mesh + headroom)
+☠️ Symbols are PER-BUILD. ☠️ Never gate a wait on `pgrep` of a pattern your own
+command contains — hung the shell again in run 29; use a PID lockfile.
 
 ### ⬜ AWAITING THE USER (run-25 checkpoint, still unanswered)
   1. Capture card replugged? 2. Ship Lara's Home? 3. Release or keep polishing?
-Nothing pushed to `origin` (public `tr1-jaguar`). Keep it that way.
+Nothing pushed to `origin` (public `tr1-jaguar`).
 
 ---
 
