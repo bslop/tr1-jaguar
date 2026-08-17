@@ -125,6 +125,33 @@ def main():
                 else:
                     print("☠️ --set %s: not in this build" % k)
 
+        # ☠️ --phases: a SEQUENCE of key holds, because one fixed key set for the
+        # whole run cannot work a switch. Holding `up,b` to reach a switch and
+        # throw it does NOT work - measured run 79: she never moved at all, x
+        # pinned, because ACTION held during a walk is a different state from
+        # ACTION pressed while standing at the switch.
+        #   --phases "up:6,-:1,b:3,-:1,up:8"   ("-" = release everything)
+        if "--phases" in sys.argv:
+            print("%-4s %s" % ("step", "  ".join("%-9s" % w for w in have)))
+            n = 0
+            for ph in sys.argv[sys.argv.index("--phases") + 1].split(","):
+                keys, _, cnt = ph.partition(":")
+                cnt = int(cnt or 1)
+                if keys in ("-", "none", ""):
+                    ctl("release")
+                else:
+                    ctl("input", keys)
+                for _ in range(cnt):
+                    ctl("run", 12)
+                    vals = {w: peek(sy[w]) for w in have}
+                    print("%-4s %s" % ("%s%d" % (keys, n),
+                                       "  ".join("%-9s" % vals[w] for w in have)), flush=True)
+                    if shots:
+                        ctl("frame", os.path.join(shots, "s%02d.png" % n))
+                    n += 1
+            ctl("release")
+            return
+
         print("seated: " + "  ".join("%s=%s" % (w, peek(sy[w])) for w in have[:3]))
         print("%-4s %s" % ("step", "  ".join("%-9s" % w for w in have)))
         ctl("input", keys)

@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 80
+RUN: 81
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,83 +17,85 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ CAVES 11->12 IS A CLOSED DOOR WITH ITS SWITCH BESIDE IT. NOT A BUG.
+# ☠️☠️ THE SWITCH WORKS, THE DOOR OPENS FULLY, AND SHE STILL CANNOT WALK THROUGH.
 
-The one genuinely odd door from run 77 is explained. She halts at exactly
-x=49441 with `g_fwdblk=1`, and everything else about the seam is fine:
+This is a REAL gameplay defect in the shipping level, found by driving the
+mechanic end to end for the first time (`probe_spot.py --phases`, new this run):
 
-    portal plane x=49151, i.e. ONE UNIT before room 11's cell boundary at 49152
-    room 11 cell 1 (49152..50176) floor 7680  <- she stands here
-    room 11 cell 0 (48128..49152) OPEN        <- portal_open did its job
-    room 12 beyond the plane      floor 7680  <- SAME LEVEL, no step
-    g_curroom 11, g_floorroom 11, floors level, cells open
+    --at 50451,7680,57856,11,-16384  --phases "up:4,-:1,b:8,-:1,up:24"
 
-So it is not geometry. The remaining gate in the move path is
-`ent_door_blocks`, and the entity table says why:
+    up0..up3   walks 50169 -> 49441            (stops at the door, as before)
+    b8         door angle 21   (SWITCH WORKS - g_dooff[9] climbing by DOOR_ANG_STEP)
+    b12        door angle 42   (past DOOR_ANG_CLEAR 40)
+    up16       door angle 63
+    up20..up37 door angle **66** (capped; DOOR_ANG_OPEN is 64) - fully open
+               x pinned at **49441** for all 37 steps. She never passes.
 
-    entity  9  DOOR_4  room 11  (49664, 7680, 57856)
-    entity 10  SWITCH  room 11  (49664, 7680, 57856)
+### ☠️ WHAT IS ALREADY RULED OUT
+    the sector data   room 11 cell 0 is OPEN, room 12 beyond is floor 7680,
+                      SAME LEVEL as her 7680 - no wall, no step (run 79)
+    ent_door_blocks   skips a door once `g_dooff[e] >= DOOR_ANG_CLEAR` (40), and
+                      the angle is 66
+    the switch        it fires and drives the swing - that half WORKS
+So the blocker is a THIRD thing in the move gate, and `g_fwdblk=1` proves the
+gate is being consulted and refusing.
 
-**A closed door with its switch in the same cell** - correct TR1 behaviour, and
-`ent_door_blocks` refuses the move until `g_dooff[e] >= DOOR_ANG_CLEAR`.
-★ That is 5 of the 9 "unproven" doors explained as harness or as correct game
-behaviour. `door_walk.py` should skip or flag door-guarded portals rather than
-scoring them - a closed door is not a dead doorway.
+### ⬜ NEXT: MAKE THE MOVE GATE SAY WHY IT REFUSED
+Stop guessing which clause fails - the gate has four and I have eliminated three
+by inference, which is exactly the shape that cost ten runs on the mansion holes.
+Add a diagnostic (behind a flag, e.g. `MVDIAG`) that records WHICH clause vetoed
+the last blocked move:
+    1 room_wall_at(rsect[g_curroom], nx, nz)
+    2 room_floor_mr returned 0
+    3 ent_door_blocks
+    4 g_lafloor - nf > LARA_STEPUP
+Store it in a peekable byte and read it at x=49441. One run, one answer.
+★ SUSPICION, to test not to assume: the door is a HINGED PANEL and the collision
+is an "oriented plane-crossing test" (`project_switch_door_collision_fix`). A
+panel swung 90 degrees may lie ACROSS the corridor instead of along it - i.e. the
+door opens INTO the passage. If so, `ent_door_blocks`' clearance check
+(`g_dooff >= 40 -> skip`) is right but the panel geometry is wrong, and the fix is
+in the swing direction, not the gate.
+☠️ Entity 10 is a SWITCH in the SAME cell (49664,7680,57856) - check whether
+switch entities are also treated as blocking panels before blaming the door.
 
-### ⬜ NEXT: THROW THE SWITCH, THEN CROSS - needs a MULTI-PHASE drive
-Holding `up,b` for the whole walk does NOT work: **she never moved at all**
-(x pinned at 50169, `fwdblk` eventually 1). ACTION held while walking is not the
-same as ACTION pressed at the switch. The drive has to be phased:
-    walk UP to the switch cell -> release -> press B alone -> release -> walk UP
-`probe_spot.py` has one fixed key set for the whole run, so this needs either a
-`--phases "up:6,b:2,up:8"` option or a small purpose-built driver. Then assert
-`g_dooff[9]` rises and `g_curroom` becomes 12. That also tests the switch+door
-mechanic end to end in the shipping build, which nothing has done.
-
-### ★ FROM jag_viewpoint (peer, 2026-08-17) - two things that change our procedure
-  1. **jag_resident hit the OPPOSITE conclusion from the same black-capture
-     symptom**: a HUNG BOARD that `jagpower cycle` fully recovered. So a black
-     capture is not automatically "the video chain". RESOURCES.md now carries an
-     ORDERED procedure, and it is the right one to follow:
-         (a) `jagpower cycle` first - seconds, and decisive IF the GD menu
-             returns... but ☠️ for us "decisive" needs a working capture, which we
-             do not have, so for openlara it is still the TV;
-         (b) then a test-card ROM;
-         (c) then ask the human.
-  2. They verified my jag_gd.sh correction line by line and fixed PROTOCOL.md,
-     which had carried the wrong "self-power-cycles" warning long enough to be
-     copied into their own docs. ★ **A wrong warning in the authoritative file
-     becomes several wrong warnings** - the table-vs-prose lesson in the other
-     direction. What was wrong was "unattended", not "dangerous": mains IS shared,
-     so any explicit cycle resets whatever else is running.
+### ★ `probe_spot.py --phases "keys:steps,..."` (new)
+    --phases "up:4,-:1,b:8,-:1,up:24"      ("-" releases everything)
+One fixed key set for a whole run cannot work a switch: holding `up,b` to reach
+one and throw it leaves her **completely immobile** (run 79 - ACTION held during a
+walk is a different state from ACTION pressed while standing at the switch).
 
 ### ⏳ STILL AWAITING THE USER: WHAT DOES THE TV SHOW?
 `/tmp/cofout7/OPENLARA.COF` has run on the real Jaguar since run 75 (`OK!`).
-A power cycle would only tell us something if capture worked; it does not.
+A power cycle is only decisive if you can SEE the GD menu return; our capture is
+dead upstream, so for us the ladder collapses to the TV.
 
-### ⬜ ALSO OPEN
-  * A test-card ROM (`HW_TESTCARD`): 68000 writes colour bars into the backbuffer,
-    no GPU, no Blitter. Cannot be black if the video path works.
-  * The other 8 unproven doors (signatures in run 77's notes; most are the
-    harness picking a stand-off against geometry).
-  * Climb OUT of the pool (swimming in works - run 78).
-
-### ★ ROSTER IS FIVE: quake · openlara · resident · viewpoint · rr
-⚠️ `sonic2-jaguar-port-cleanup` is running and is NOT on the roster (user informed).
-☠️ A roster change in PROSE only did not happen - update PROTOCOL.md's TABLE too.
-★ `jaghw` is re-entrant via `JAGHW_HELD` - one outer acquisition can wrap a whole
-cycle+upload+capture sequence and still call `jag_gd.sh` inside it.
+### ★ FROM jag_viewpoint - a verification trap worth carrying
+They found their black screen: **`OLP` takes the BYTE address WORD-SWAPPED**
+(`(addr>>16)|(addr<<16)`), while the object's own DATA/LINK fields use `addr>>3`
+un-swapped - so writing OLP the same way as the fields you just wrote is the
+natural mistake and yields a correct list with a black screen.
+★★★★★ **The expensive half: they had "verified" OLP and been REASSURED.** They
+read the register back, computed `value << 3 == &op_list`, and concluded it was
+fine - **a round-trip check performed in the units you assumed is self-consistent
+across a wrong premise and proves nothing.** Verify a register against shipping
+code or the docs, never against your own encoding of it.
+This is the same failure as our own recurring one (the tool measuring itself);
+worth reading `MVDIAG` above in that light - do not "verify" the gate against my
+own model of it, make the gate report.
 
 ### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (50-59) · pickups (65) · mid-walk LOADING (67) ·
     caves black wedges (69, OPEN SKY) · caves room crossing (72, FIXED) ·
-    gym room 18 (73/78, the POOL - and swimming WORKS) ·
-    7 "dead doors" (74, balconies) · caves 11->12 (79, a closed door)
+    gym room 18 (73/78, the POOL - swimming WORKS) ·
+    7 "dead doors" (74, balconies) · caves 11->12 geometry (79 - it is the DOOR)
 
 ### ✅ WHAT IS DONE
     climbing   CAVES 24/24 ledges, 6/6 walls · MANSION 24/24, 6/6
     walking    CAVES 50/58 doors · MANSION 9/18 · crossing works on both
     swimming   the mansion POOL: enter, swim, room 18, renders correctly
+    switches   the 11->12 switch FIRES and swings its door fully open
+    ☠️ doors   ...but the passage stays blocked - see above
     enemies    BEAR and WOLVES render on shipping flags
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
     release    /tmp/cofout7 - on the real Jaguar since run 75, verdict pending
