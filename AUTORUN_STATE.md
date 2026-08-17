@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 37
+RUN: 38
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,51 +17,59 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**✅ LARA'S HOME IS NOW TESTABLE — the blocker was a real extractor-flag bug.**
+# ✅ BOTH LEVELS SWEPT. THE CONFORMANCE PICTURE THE USER ASKED FOR.
 
-`ledge_census.py --prefix gym` crashed on the mansion. Cause: **`soff` bit 31 is
-the WATER-ROOM FLAG**, not part of the offset (`tr2jag_multiroom.py:3219` sets
-it; `main.c:6881` reads it as `rwater[i] = (e[4] & 0x80)`). Room 18 of Lara's
-Home is the pool. The Caves have no water room, so this never bit there.
-Masked with `& 0x7FFFFFFF` in **both** `ledge_census.py` and
-`floor_coverage.py` — the same unmasked read was in both.
+### ☠️ The mansion's "0/10 climbed" (run 36) was MY BUILD FLAG
+I put `PADMUTE=1` in the AUTOGYM flags. It mutes the pad, so driven input did
+nothing — she did not move **at all**, not even X/Z. Caught by driving one spot
+by hand instead of believing the table. Rebuilt without it: **7/10 immediately**.
+★ Fourth false defect from an instrument in this project. The tell was that a
+UNIFORM failure had a UNIFORM cause.
 
-Mansion census now works: **304 ledges** — 110 WALKUP, 90 CLIMB2, 39 CLIMB3,
-55 JUMPGRAB, 10 WALL. (Caves has 26 filtered spots.)
+### CAVES (26 spots, run 32 — still valid)
+    WALKUP   (256)   6/6 ✅      CLIMB2 (512)  5/6 ✅
+    CLIMB3   (768)   5/6 ✅      JUMPGRAB 1024/1536  4/4 ✅
+    JUMPGRAB (1792)  0/2 ⬜ harness only does a standing pull-up; TR1 needs a
+                            RUNNING JUMP here. Not a defect until it can jump.
+    WALL     (2048)  0/2 ✅ correctly refuses
+    => 20/26 CLIMBED, 2 PARTIAL, 4 NO-CLIMB
 
-`tools/conformance.py --prefix gym` added. Mansion ROM built with the GOOD
-toolchain (`AUTOGYM=1`, 1,531,308 B) and it **renders: 3.1% black, maxluma 255**.
+### LARA'S HOME (30 spots, this run — FIRST EVER)
+    WALKUP/CLIMB2/CLIMB3  mostly ✅ (CLIMB3 768 climbs exactly in rooms 1 and 8)
+    JUMPGRAB (1024)  3/6 ✅
+    WALL (2560/2816) 0/6 ✅ correctly refuses
+    => 17/30 CLIMBED, 3 PARTIAL, 10 NO-CLIMB (6 of them the correct WALL refusals)
 
-### ⬜ FIRST GYM RESULT — 0/10 CLIMBED. DO NOT TRUST IT YET.
-    WALKUP  room 1  x6   rose 0   floor -1280
-    CLIMB2  room 1  x3   rose 0   floor -1280
-    CLIMB2  room 2  x1   rose 0   floor 0
-Seating VERIFIED in every case (`y == floor`, so she is standing where intended;
--1280 is plausibly just room 1's floor height). But **this harness has produced
-two confident false negatives already** — the 120-field climb window (run 31)
-and the 32-bit yaw poke (run 30). Before recording "the mansion cannot climb":
+### ⬜ THE REAL FAILURES TO FIX — 4 spots where she FELL instead of climbing
+Negative rise means she lost height where a ledge was expected:
+    CLIMB2   room 1   rose  -18   floor 1280
+    CLIMB3   room 8   rose -512   floor 1792
+    JUMPGRAB room 8   rose -768   floor 2048   (x2)
+Note all four end on a POSITIVE floor while their climbing neighbours end
+negative (-1536 / -1792) — so she is dropping to a different surface entirely.
+**Start here**: drive one by hand with telemetry and watch where the fall begins.
 
-1. **Drive ONE gym spot by hand with telemetry**, exactly as run 25 did for the
-   Caves: serve, `run 1250`, `input up` in 12-field steps, then `up,b`, peeking
-   `g_lay/g_laz/g_lafloor` between samples. If Y moves at all, the harness is
-   wrong; if Y is flat through a held UP+B, the mansion genuinely does not climb.
-2. Check the **yaw**: if the census yaw faces her away from the ledge, `UP`
-   walks the wrong way and every spot reads NO-CLIMB. Compare her Z/X drift
-   against the ledge direction.
+### ⬜ BLACK-SCREEN OUTLIERS IN THE MANSION (baseline max is 17.4%)
+    room 0  WALL      97.2%  and 77.4%   <- strongest void signature yet
+    room 12 JUMPGRAB  33.8 - 38.3%  (x4)
+    room 3/4/5 WALL   32.8 - 37.3%
+Frames in `/tmp/gymall/s0NN.png`. Room 0 at 97% is the same signature as the two
+collision voids already fixed in the Caves — check it with
+`floor_coverage.py --prefix gym` (the reader now masks the water flag, so it
+works on the mansion).
 
 ### Toolchain — STILL PINNED to 59e5896
-`beb2c15` does NOT fix the jcc68k regression (still 100% black). Build with
-`COBWEB_DIR=/tmp/cobweb-old`; `tools/toolchain_smoke.sh` guards updates
-(baseline: black 1.1%, ROM 1,292,812 B) and is wired into `cobweb_check
---update`. Harness ROM with the good toolchain is 1,538,508 B — exactly run 29's
-working size.
+`beb2c15` does NOT fix the jcc68k regression. Build everything with
+`COBWEB_DIR=/tmp/cobweb-old`. `tools/toolchain_smoke.sh` guards updates
+(baseline black 1.1%, ROM 1,292,812 B).
+☠️ Working ROMs: `/tmp/conf.cof` (Caves) and `/tmp/gym.cof` (mansion, AUTOGYM,
+**no PADMUTE**), both 1,538,508 B.
 
-### Caves status (valid, run 32)
-20/26 CLIMBED, 2 PARTIAL, 4 NO-CLIMB. WALKUP 6/6, CLIMB2 5/6, CLIMB3 5/6,
-JUMPGRAB 1024/1536 4/4, WALL correctly refused. JUMPGRAB 1792 needs a jump
-drive to be a real test.
-⬜ Room 22 cell (17,11) is a REAL geometry hole (zero faces, 60-73% black at
-every yaw); `--faces` finds 49 such cells but walling them is the WRONG remedy.
+### Also open
+⬜ Add a jump drive to `conformance.py` (JUMPGRAB 1792 + the mansion 1024s).
+⬜ Room 22 cell (17,11) in the Caves is a REAL geometry hole (zero faces,
+60-73% black at every yaw). Walling is the WRONG remedy — `--faces` is opt-in.
+⬜ Compare against `res/` PSX footage (Part 2 = Caves, 3m20 -> 23m24).
 
 ### ⬜ AWAITING THE USER (run-25 checkpoint)
   1. Capture card replugged? 2. Ship Lara's Home? 3. Release or keep polishing?
