@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 40
+RUN: 41
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,52 +17,53 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**✅ THE MANSION'S "SHE FALLS" SPOTS ARE FIXED. NO-CLIMB 6 -> 2.**
+# ✅✅ THE CONFIRMED CAVES HOLE IS FIXED. BOTH LEVELS ARE CLEAN OF VOIDS.
 
-☠️ **Correction to run 33**: I blamed `floor_coverage --faces` for a 100%-black
-ROM. That was wrong — reverting it did not restore rendering, and the real cause
-was the cobweb jcc68k regression. Re-tested with the good toolchain: walling all
-**84 mansion face-holes** renders fine (3.1% black, maxluma 255) and fixed the
-four spots where Lara fell instead of climbing. **Room 8 had 76 of them** — and
-room 8 was exactly where the falls were.
-★ *A remedy blamed while another variable was uncontrolled deserves a re-test
-once that variable is fixed.* The comment in the tool has been corrected.
+Walling the 49 Caves face-holes (`floor_coverage.py --faces --patch`) removed
+**room 22 cell (17,11)** — the hole proven in run 33 with zero faces over it and
+60-73% black at every yaw.
 
-    mansion  16/26 CLIMBED, 6 NO-CLIMB  ->  17/26 CLIMBED, 2 NO-CLIMB
-    the remaining 2 NO-CLIMB are WALL (2048) correctly refusing
+    CAVES   before  20/26 CLIMBED, 4 NO-CLIMB, room 22 spot at 60.4% black
+            after   18/25 CLIMBED, 2 NO-CLIMB (both correct WALL refusals)
+                    ONE spot over baseline: room 3 at 20.8% (marginal vs 17.4%)
+    MANSION before  16/26 CLIMBED, 6 NO-CLIMB
+            after   17/26 CLIMBED, 2 NO-CLIMB (both correct WALL refusals)
+                    room 8's 76 face-holes were causing four FALLS
+    Both render clean: Caves 1.1% black, mansion 3.1%, maxluma 217/255.
 
-### ⬜ ROOM 12: DO NOT CALL IT A DEFECT YET — MY THRESHOLD IS WRONG
-9 room-12 samples read 21-38% black, above the "17.4% baseline". **But 17.4% is
-a CAVES number**, measured by ROOMTOUR on a different level with different
-lighting and far fewer openings. Judging mansion spots against it is
-apples-to-oranges, and I have already produced four false defects in this
-project by trusting an instrument past its range.
+`--faces` is now in `tools/build_cof.sh` for **both** prefixes. ☠️ Run 33 blamed
+this pass for a 100%-black ROM; that was the cobweb jcc68k regression, and the
+pass is now verified on both levels with a good toolchain.
 
-Looking at the frame (`/tmp/gymall3/s018.png`): a properly lit interior —
-wooden floor, walls, Lara centred — with a dark band across the upper middle
-that reads as an OPENING, not absent geometry. Its face-holes were already
-walled and the blackness did not move, which also argues it is not a hole.
+### THE COLLISION STORY, COMPLETE
+Four distinct classes of "collision says floor, nothing is drawn there", all
+found by DRIVING and none by static analysis alone:
+1. **Seam floors** — 403 cells, boundary patch (pre-existing).
+2. **Wall-border ring** — 350 Caves + 160 mansion; every room's mesh spans only
+   `1024..(n-1)*1024`.
+3. **Zero/inverted headroom** — 40 cells, floor == ceiling.
+4. **Inside-bbox face holes** — 49 Caves + 84 mansion.
+☠️ The mansion still has **no boundary patch** (class 1): `mrt_boundary_audit.py`
+hardcodes `mrt_sect.bin` and reads LEVEL1.PSX. It needs a prefix +
+`TRLEVEL=GYM.PSX`. The Caves got 403 cells from it, so expect a similar set.
 
-**NEXT: establish a MANSION baseline before judging.** `ROOMTOUR` needs
-`roomtour_tab.h`, which is generated for `mrt` only — either extend that
-generator to the gym prefix, or teleport to each of the 19 gym room centres via
-`conformance.py`-style pokes and record black% per room. Then compare.
-
-### ⬜ STILL OPEN
-1. Mansion baseline (above), then judge room 12.
-2. **The mansion never got the BOUNDARY patch.** `mrt_boundary_audit.py`
-   hardcodes `mrt_sect.bin` and reads LEVEL1.PSX; it needs a prefix +
-   `TRLEVEL=GYM.PSX`. The Caves got 403 cells from it.
-3. Consider running `--faces` on the CAVES too (49 cells) now that the pass is
-   cleared — it may fix Caves room 22 cell (17,11), the confirmed hole.
-4. Jump drive for JUMPGRAB (Caves 1792, mansion 1024s).
+### ⬜ WHAT IS LEFT
+1. **Mansion boundary patch** (above) — the last unapplied collision class.
+2. **Room 12 blackness** (mansion, 21-38%): still unjudged, and deliberately so.
+   17.4% is a CAVES baseline; the mansion needs its own. The frame shows a lit
+   interior with what reads as an opening, and its face-holes are already
+   walled without the blackness moving. Build a mansion room-centre baseline
+   before calling it anything.
+3. **Caves room 3 at 20.8%** — marginal, same caveat.
+4. **Jump drive** for JUMPGRAB (Caves 1792, mansion 1024s) — the last spots that
+   the harness cannot fairly test, since it only does a standing pull-up.
+5. Compare against `res/` PSX footage (Part 2 = Caves, 3m20 -> 23m24).
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression. `tools/toolchain_smoke.sh` guards
-updates. Working ROMs: `/tmp/conf.cof` (Caves), `/tmp/gym.cof` (mansion,
-AUTOGYM, **no PADMUTE** — that flag mutes the pad and reads as "nothing climbs").
-
-### Caves status (run 32, valid): 20/26 CLIMBED
+updates (baseline black 1.1%, 1,292,812 B).
+Working ROMs: `/tmp/conf.cof` (Caves), `/tmp/gym.cof` (mansion, AUTOGYM, **no
+PADMUTE** — that flag mutes the pad and reads as "nothing climbs").
 
 ### ⬜ AWAITING THE USER (run-25 checkpoint)
   1. Capture card replugged? 2. Ship Lara's Home? 3. Release or keep polishing?
