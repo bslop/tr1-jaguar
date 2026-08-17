@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 75
+RUN: 76
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,84 +17,76 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ MANSION DOORS: 10 OF 12 TESTABLE ONES CROSS. THE "FAILURES" WERE MY HARNESS.
+# ⏳ THE RELEASE IS RUNNING ON THE REAL JAGUAR. AWAITING THE USER'S EYES.
 
-★ USER RULED (run 73): **Lara's Home IS in the release.** It is in scope.
+★ USER RULED (run 75): **"Use the hardware"** - the batched/no-rig standing order
+is lifted when he says so. He also ruled earlier that **Lara's Home IS in the
+release**.
 
-`tools/door_walk.py` (new) walks every doorway and asserts `g_curroom` becomes
-the destination. Boots ONCE for the level - 32 doors at a 4-minute boot each is
-why this had never been done. Result on the patched gym ROM:
+Uploaded `/tmp/cofout7/OPENLARA.COF` (1,538,700 B - the first hardware boot of a
+ROM containing the portal fix, the TR1 jump-reach solve, the ledge-probe window
+fix, `climb_fits` and `FITSTEP`):
 
-    16 of 32 wall-portals are WALKABLE AT FLOOR LEVEL and get tested
-    **10 crossed**, 2 FAILED, 4 UNTESTABLE
+    ./jag_gd.sh upload /tmp/cofout7/OPENLARA.COF
+    -> UPLOADING ... EXECUTE... **OK!**   lease held 12s, released clean
 
-### ☠️☠️ THREE HARNESS BUGS, EACH OF WHICH FAKED A LEVEL FULL OF DEAD DOORS
-  1. **Inverted yaw on Z-plane portals.** Standing at smaller z it faced -Z, i.e.
-     AWAY from the door. 9 of 10 doors "failed" while she walked off backwards.
-     The X-plane case was correct, which is why one door passed and hid it.
-     Forward is (SIN,COS): yaw 0 = +Z, 16384 = +X, -16384 = -X, -32768 = -Z.
-  2. **A bad seat is not a door failure.** Rooms overlap, so a stand-off point can
-     resolve to a different room than the one under test (four gym doors seat into
-     room 12). Now reported UNTESTABLE.
-  3. ★★★★★ **A PORTAL HAS A HEIGHT.** This was the big one. 7 doors "failed"
-     because I placed her at the portal's XZ centre on whatever floor she had and
-     ignored the portal's Y extent. Example measured: the 3->1 plane is z=53247
-     and the floor beyond it is **-1280** while she stands on **1280** - a
-     2560-unit step up, ten clicks, which the move gate refuses exactly as TR
-     does. Those are balconies and ledges, not broken doorways. The tool now
-     requires her feet at the doorway's own floor (within 512 of the portal's
-     lowest y) and the floor beyond within LARA_STEPUP.
-★ The tell that saved this: run 73's tour crossed gym 1->0 for real, so a tool
-reporting that door dead was measuring itself. **When a new instrument disagrees
-with a thing you have already SEEN work, the instrument is wrong.**
+☠️ **`OK!` MEANS THE UPLOAD LANDED, NOT THAT IT RENDERS.** The capture card is
+still unplugged (and `jag_gd.sh capture` is blocked by the permission classifier
+here), so there is NO channel to see the screen. `OK!` + a black TV means the
+VIDEO chain is dead and the console is fine - that distinction can only come from
+the user. **ASK WHAT THE TV SHOWS.**
 
-### ⬜ NEXT
-  1. **The 2 remaining failures are probably still the stand point**: 2->5 and
-     2->6 both show her moving only **164/188 units** - she is wedged where she
-     is placed, not refused at the door (a refused door shows ~1260, the full
-     stand-off). Try a stand-off of 768, or step along the portal's span instead
-     of using its centre, before believing them.
-  2. **4 UNTESTABLE doors** (7->9, 7->2, 8->10, 8->11) all seat into room 12.
-     Pick the stand point from a cell the SOURCE room owns exclusively.
-  3. **Run it on the Caves too** - `--prefix mrt`, 62 wall-portals, never tested
-     door by door. Room crossing there is fixed (run 72) but only 0->1->2 has
-     been walked.
-  4. **The pool**: swim down through the room 14 water surface and confirm
-     `g_curroom` becomes 18.
+### ⬜ WHAT TO ASK / WHAT IT MEANS
+    title ring -> the whole front-end works on silicon; then Start Game and walk
+    black screen -> A10 boot lottery. `PADTEXT=N` is POSITIONAL and any layout
+        change re-rolls it: `tools/roll_walk.sh <arm> 0 136 272 408 544 816`.
+        ☠️ A cycle fixes a LAYOUT miss, never a broken build.
+    error screen -> a real fault; roll_walk calls a solid error screen "LIT", so
+        do not trust an automated verdict here even if capture comes back.
 
-### ☠️ COBWEB: NEW COMMIT READ, PIN STANDS
-`6f56d3e jcc68k: honour unsigned integer literal suffixes` - a real wrong-code
-fix (`1u` was typed plain `int`, so `(0u-1u)` wrapped to -1 and `(1u-6u)>>8`
-folded as an arithmetic shift). **Our pin (59e5896) predates it, so our jcc68k
-has the bug - and it is NOT reachable in the four TUs jcc68k compiles for us**
-(blit.c, gpu.c, video.c, vidpanel.c): no u-literal subtractions, no right shifts
-of u-expressions, and the four oversized literals (0xA5000000u, 0xFFFFFFFFu,
-0xA5A5A5A5u) are only assigned or compared where the int converts back to
-unsigned with identical bits. None of the 6 commits since the pin touches the
-16-bit-parameter mixed-link ABI regression that forced it, so **the pin stays.**
+### ☠️ RIG RULES THAT APPLIED THIS RUN - keep them
+  * `jag_bubsy3d` held the board (373s left) when I started; `jag_gd.sh` queues
+    through `jaguar-shared/hw/jaghw` for free, so I let it queue rather than
+    barge. The agreement gives openlara the slot AFTER bubsy3d.
+  * **I did NOT write the SD card.** The shared namespace contract
+    (`hw/SD_LAYOUT.md`) requires project-prefixed basenames (`OL*`) because
+    `jaggd -wf` can only write the card ROOT - but this ROM reads UNPREFIXED
+    names (`CAVES.JV`, `MUSIC.PCM`). Writing them would clobber another
+    project's files. The bulk assets are Tier 2, placed by mounting the card.
+    ⬜ If the videos/music turn out stale on the card, that needs the user to
+    mount it - do not `-wf` unprefixed names.
+  * ☠️ Never `-wf` while a ROM is streaming; power-cycle first.
+
+### ⬜ NEXT (offline, ready to go)
+  1. **`door_walk.py` on the CAVES** - `--prefix mrt`, 62 wall-portals, never
+     tested door by door. The stand-point selection was improved THIS RUN
+     (sweeps along the portal span and prefers a cell no other room owns) to fix
+     the two "wedged at 164/188 units" failures and the four UNTESTABLE seats
+     from run 74; **that improvement is UNVERIFIED - run gym first and confirm
+     10/12 has not regressed before trusting a Caves number.**
+  2. The pool: swim down through the room 14 water surface, confirm `g_curroom`
+     becomes 18.
 
 ### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (50-59) · pickups (65) · mid-walk LOADING (67) ·
     caves black wedges (69, OPEN SKY) · caves room crossing (72, FIXED) ·
-    gym room 18 "sealed" (73 - it is the POOL, water-surface bit 0)
+    gym room 18 "sealed" (73, it is the POOL) ·
+    7 mansion "dead doors" (74 - a PORTAL HAS A HEIGHT; they are balconies)
 
 ### ★ INSTRUMENTS
-    door_walk.py <rom> <elf> --prefix P   walk every doorway, assert the room flips
-    portal_open.py --prefix P [--patch|--audit]   open portal cells / audit doors
-    release_play.py --tour [--gym]        play-through with telemetry
+    jag_gd.sh upload|status|power|capture   the rig, via the shared jaghw lease
+    door_walk.py · portal_open.py --patch/--audit · release_play.py --tour
     probe_spot.py --raw= / --set= · sightline.py · entity_check.py
-    room_cycles.py --prefix=gym · HOLEVIS=1 / DREWVIS=1 / HOPDEPTH=N
-☠️ Parse probe output BY COLUMN NAME.  ☠️ SYMBOLS ARE PER-BUILD.
-☠️ REBUILD THE ROM AFTER AN ASSET PATCH - I nearly filed the gym doors as broken
-   while testing a ROM built before portal_open existed.
-☠️ FPS cannot be measured offline.
+    room_cycles.py · HOLEVIS=1 / DREWVIS=1 / HOPDEPTH=N
+☠️ SYMBOLS ARE PER-BUILD.  ☠️ REBUILD THE ROM AFTER AN ASSET PATCH.
+☠️ FPS still cannot be measured offline; on hardware it needs the capture card.
 
 ### ✅ WHAT IS DONE
     climbing   CAVES 24/24 ledges, 6/6 walls · MANSION 24/24, 6/6
-    walking    CAVES crosses 0->1->2 in the RELEASE · MANSION 10/12 doors cross
+    walking    CAVES crosses 0->1->2 · MANSION 10/12 testable doors cross
     enemies    BEAR and WOLVES render on shipping flags
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
-    release    **/tmp/cofout7** - current, walkable, both levels, with symbols
+    release    **/tmp/cofout7** - uploaded to the REAL JAGUAR, running now
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,

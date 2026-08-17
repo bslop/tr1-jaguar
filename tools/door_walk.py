@@ -88,24 +88,46 @@ def main():
         x0, x1, y0, y1, z0, z1 = min(xs), max(xs), min(ys), max(ys), min(zs), max(zs)
         if y0 == y1 and x0 != x1 and z0 != z1:
             continue                                   # vertical portal
-        mx, mz = (x0 + x1) // 2, (z0 + z1) // 2
         cand = None
+        # ☠️ THE SPAN CENTRE IS NOT ALWAYS STANDABLE, AND THE SOURCE ROOM MUST OWN
+        # THE CELL. Two failure modes from run 74, both harness:
+        #   * 2->5 and 2->6 "failed" with her moving only 164/188 units - wedged
+        #     on the stand-off cell itself, not refused at the door (a refused
+        #     door shows ~1260, the full stand-off);
+        #   * four doors seated into room 12 because rooms OVERLAP, so the point
+        #     resolved to a different room than the one under test.
+        # So sweep along the span and out from the plane, and PREFER a cell no
+        # other room supplies a floor for - exclusive ownership is what makes the
+        # runtime agree with the room we asked for.
+        def owners(wx, wz):
+            n = 0
+            for q in range(nroom):
+                v = cellval(q, wx, wz)
+                if v is not None and v < OPEN:
+                    n += 1
+            return n
+
+        best = None
         for sgn in (-1, 1):
+          for frac in (0.5, 0.3, 0.7, 0.15, 0.85):
+            for dist in (1300, 768, 1800):
+              mx = int(x0 + (x1 - x0) * frac)
+              mz = int(z0 + (z1 - z0) * frac)
             # ☠️ FACE THE DOOR, NOT AWAY FROM IT. Forward is (SIN,COS): yaw 0
             # faces +Z, 16384 +X, -16384 -X, -32768 -Z. The first version had the
             # Z case INVERTED - standing at smaller z it faced -Z - and 9 of 10
             # doors "failed" while she walked away from each one. The X case was
             # right, which is why 2->1 passed and hid it.
-            if z0 == z1:
-                sx, sz, yaw = mx, z0 + sgn * STANDOFF, (0 if sgn < 0 else -32768)
-            elif x0 == x1:
-                sx, sz, yaw = x0 + sgn * STANDOFF, mz, (16384 if sgn < 0 else -16384)
-            else:
+              if z0 == z1:
+                sx, sz, yaw = mx, z0 + sgn * dist, (0 if sgn < 0 else -32768)
+              elif x0 == x1:
+                sx, sz, yaw = x0 + sgn * dist, mz, (16384 if sgn < 0 else -16384)
+              else:
                 continue
-            v = cellval(r, sx, sz)
-            if v is None or v >= OPEN:                 # need a REAL floor to stand on
+              v = cellval(r, sx, sz)
+              if v is None or v >= OPEN:               # need a REAL floor to stand on
                 continue
-            fy = struct.unpack(">h", struct.pack(">H", v))[0]
+              fy = struct.unpack(">h", struct.pack(">H", v))[0]
             # ☠️☠️ A PORTAL HAS A **HEIGHT**, AND A DOORWAY ON ANOTHER LEVEL IS
             # NOT A FAILED DOORWAY. Ignoring the y extent made 7 of 12 gym doors
             # "fail": e.g. 3->1's plane is z=53247 and the floor past it is -1280
@@ -113,17 +135,29 @@ def main():
             # the move gate refuses exactly as TR does. Her feet must be at the
             # doorway's own floor (y1 = max y = the LOWEST point, +Y is down),
             # and the floor beyond must be within one step.
-            if abs(fy - y1) > 512:
+              if abs(fy - y1) > 512:
                 continue
-            beyond = cellval(r, sx - (sx - mx and 0) if False else
-                             (sx if z0 == z1 else (x0 - (sx - x0))),
-                             (z0 - (sz - z0)) if z0 == z1 else sz)
-            if beyond is not None and beyond < OPEN:
+              # the cell just past the plane, to reject a doorway that is a step up
+              bx = sx if z0 == z1 else (x0 - sgn * 512)
+              bz = (z0 - sgn * 512) if z0 == z1 else sz
+              beyond = cellval(r, bx, bz)
+              if beyond is not None and beyond < OPEN:
                 by = struct.unpack(">h", struct.pack(">H", beyond))[0]
                 if fy - by > 256:                      # LARA_STEPUP
-                    continue
-            cand = (sx, sz, yaw, fy)
+                  continue
+              score = owners(sx, sz)                   # 1 = the source room alone
+              if best is None or score < best[0]:
+                best = (score, sx, sz, yaw, fy)
+              if score == 1:
+                break
+            else:
+              continue
             break
+          else:
+            continue
+          break
+        if best:
+            cand = best[1:]
         if cand:
             tests.append((r, dst) + cand)
     if limit:
