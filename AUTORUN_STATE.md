@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 70
+RUN: 71
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,52 +17,59 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ THE CAVES BLACK WEDGES ARE **SKY**. NOT A DEFECT. THREAD CLOSED.
+# ⬜⬜ SHE CANNOT WALK OUT OF ROOM 0 GOING +Z. THE FAR ROW IS WALL IN EVERY LANE.
 
-Run 68 flagged large black wedges during normal Caves play. Chased properly this
-run, and the answer is the same one the mansion gave:
+Run 68's tour never left room 0 and I attributed that to room 0 simply being the
+whole opening corridor. It is more than that. Walked her at the boundary with
+telemetry (`--at 74240,3072,18944,0,0 --keys up --frames 20`):
 
-    worst tour frame t_08, 27.9% black, at x=75744 z=17519 y=3556 (room 0)
-    HOLEVIS at that exact spot   ->  35.2% UNCOVERED, 0.2% black
-    sightline in all 4 directions ->  39-130 faces, lowest y 3584..4096
-                                      (BELOW her feet - geometry IS there)
-    mrt room 0 ceilings          ->  45 of 120 cells have NO CEILING (38%)
+    z 19178 -> 21430 over 8 steps, then STOPPED for the remaining 11 samples
+    g_floorroom flips 0 -> 1 (the floor ahead IS room 1's)
+    g_curroom NEVER changes
 
-The Caves opening is an **open-topped canyon**, and TR1 has no skybox: open cells
-render black. Lara's Home room 0 is 39% open and produced exactly the same false
-alarm in runs 56-59. Two levels, same trap, twice.
+The sector data says why, and it is not a lane problem:
 
-### ★★★★★ HOLEVIS PROVES NOTHING WAS DRAWN. IT DOES NOT PROVE SOMETHING SHOULD
-### HAVE BEEN. "Uncovered" is not "broken".
-That distinction is now IN THE TOOL: `sightline.py` prints the room's no-ceiling
-count FIRST, before any geometry list, and says outright
-`<- OPEN TO THE SKY: black above is CORRECT` when a third or more of the room is
-open. Check that line before treating any black region as a hole.
+    room 0, x=74240:  z<=21500 floor 3072   |  z>=22016 WALL
+    room 1, x=74240:  z<=21500 WALL         |  z>=22000 floor 3072
+    room 0's LAST ROW (z=22016) is WALL across ALL SIX x lanes
+                      72192 73216 74240 75264 76288 77312
 
-### ⬜ NEXT - nothing is known-broken; pick by appetite
-  1. **Hand the release over.** `/tmp/cofout6` is current, verified into gameplay
-     on BOTH levels, ships with symbols, and now has a 54,000-unit play-through
-     capture at full health with no anomalies. The run-25/50 direction questions
-     are unanswered and **"is this the release?" is the blocking one.**
-  2. Bats (ents 1, 11, 31) unseen: AIRBORNE at y -2432; a floor stand-off leaves
-     them out of frame. Needs an air teleport or camera pitch. Cosmetic.
-  3. A longer/multi-room play-through capture if a demo video is wanted - the
-     tour currently stays in room 0 because room 0 IS the whole opening corridor
-     (6x20 cells). Driving into room 1 needs it to get past z=20480.
-  4. ☠️ Driven mechanics tests need the rig and a human at the TV. Do NOT claim
-     the rig - the capture card is unplugged.
+The move gate blocks on `room_wall_at(rsect[g_curroom], ...)` - the room she is
+IN - which is the documented TR rule ("a WALL sector in the room Lara is IN
+blocks her outright, even when an overlapping room has floor beyond it"). Room 0
+says WALL along its whole far edge, so **no +Z lane can cross into room 1.**
 
-### ☠️ CLOSED - DO NOT REOPEN (five threads, all closed with measurements)
+### ⬜ NEXT: FIND THE REAL 0->1 PORTAL BEFORE CONCLUDING ANYTHING
+`gym_adjgen`-style adjacency lists room 0 <-> room 1, so a connection EXISTS.
+☠️ Do NOT jump to "the level is unplayable" - I only scanned the +Z edge.
+  1. Scan room 0's OTHER edges (x=71680 and x=77824 columns, and its z=2048 end)
+     for cells that are floor while room 1 has floor beyond - same method as the
+     table above, it is ~15 lines of Python and no build.
+  2. Check `mrt_portalv`/`mrt_portal_ofs` for the 0->1 portal quad and read its
+     WORLD COORDINATES directly - that is the authoritative answer to where the
+     doorway is, rather than inferring it from floor maps.
+  3. Then walk her at THAT spot and watch `g_curroom` flip. If it flips, this is
+     closed and room 0 is just a large dead-end corridor whose exit is elsewhere.
+     If no edge is walkable, the extractor is not encoding horizontal portals
+     into the sector map and **the demo is confined to room 0** - which would be
+     a headline defect and would explain the tour's oscillation.
+★ `project_room_crossing_fixed` records room crossing as FIXED, so a regression
+here would matter; check that note before re-deriving.
+
+### ✅ WHAT WAS VERIFIED THIS RUN
+  * **Room tracking itself works**: teleported deep into room 1 (74240,3072,
+    28160) and both `g_curroom` and `g_floorroom` read 1, floor agrees, stable
+    over 6 samples. The problem is reaching it on foot, not representing it.
+
+### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (50-59)   room 15 = MISSING GEOMETRY; room 0 = OPEN SKY
     pickups (65)            they WORK; `g_pickups` is DEMO_PROPS, not compiled in
     mid-walk LOADING (67)   never existed; a contact-sheet misread
-    caves black wedges (69) OPEN SKY, 38% of room 0 has no ceiling
-    ★ THE PATTERN: four of the five were me reading a PICTURE and inferring
-    STATE. The ones that resolved fast all started from DATA - the sector table,
-    the entity table, the symbol map.
+    caves black wedges (69) OPEN SKY - 38% of mrt room 0 has no ceiling.
+                            sightline.py now prints that FIRST.
 
 ### ★ INSTRUMENTS (all off in shipping builds)
-    sightline.py                    what geometry is NEARBY + IS THE ROOM OPEN
+    sightline.py                    geometry NEARBY + IS THE ROOM OPEN TO SKY
     release_play.py --tour          wall-following play-through WITH TELEMETRY
     release_play.py --play/--gym    straight walk / select Lara's Home
     entity_check.py                 stand next to any entity and photograph it
@@ -70,14 +77,12 @@ open. Check that line before treating any black region as a hole.
     room_cycles.py --prefix=gym     per-room kernel cycles (fill NOT included)
     HOLEVIS=1                       paints UNCOVERED pixels white
     DREWVIS=1 / HOPDEPTH=N ; CULLCOUNT=1 BEXCNT=1 WCCNT=1
-                                    $1C0000 staged  $1C0004 rastered
-                                    $1C0010 bexit   $1C0014 worldcull
     build_conf.sh EXTRA= / SKIP=
 ☠️ Counters ACCUMULATE - take DELTAS.
 ☠️ SYMBOLS ARE PER-BUILD - use the .elf from the SAME build.
-☠️ NOEMPTYY=1 and NOSDCULL=1 BUILD AND DO NOT RENDER (illegal=0 either way).
-☠️ FPS CANNOT be measured offline (capture card unplugged; 68k counters run at
-   the 30 Hz LOGIC tick).
+☠️ Parse probe output BY COLUMN NAME - the column order changes as WATCH grows,
+   and positional awk has now produced two wrong readings.
+☠️ FPS CANNOT be measured offline (capture card unplugged).
 
 ### ✅ WHAT IS DONE
     climbing   CAVES   LEDGES 24/24  WALLS 6/6 refused
