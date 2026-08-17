@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 21
+RUN: 22
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,45 +17,58 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**✅ COLUMN 319 FIXED AND CLOSED — `RCLIPFIX=1`, now in the release recipe.**
+**✅ THE B+UP CLIMB MECHANIC WORKS — verified offline with position telemetry,
+no rig.** And it surfaced a NEW bug worth chasing.
 
-Run 19 left an unexplained 75-pixel residual. Run 20 explained it, and **my
-first hypothesis was wrong**: matching the shade pass's clamp changed the
-residual not at all (still exactly 75). The real answer came from varying the
-sample field:
+Method (reusable for every movement bug — this is the important part):
 
-    field 1480   col319 80   elsewhere 30
-    field 1490   col319 80   elsewhere 30
-    field 1500   col319 80   elsewhere 75
-    field 1510   col319 80   elsewhere 72
+    make ... SPAWNAT_ROOM=11 SPAWNAT_X=59904 SPAWNAT_Y=7168 SPAWNAT_Z=56832 \
+             SPAWNAT_YAW=-16384 PADTEXT=0        # coords from ledge_census.py --tsv
+    jagemu serve --rom <rom> --instance clm
+    jagemu ctl clm run 1250          # reach the level
+    jagemu ctl clm input up          # then: run 12 ; peek ; repeat
+    jagemu ctl clm input up,b        # request the climb
+    jagemu ctl clm peek 0x001549e4   # g_lay (Y, DOWN is +) ; g_laz 0x001549ec
+                                     # g_lafloor 0x001549e8 ; g_curroom 0x00154970
 
-The residual **varies with when you screenshot**; column 319 does not. So the
-extra pixels are a **partially-drawn frame caught mid-render**, and the stable
-30 is the debug bit-block readout displaying a counter that legitimately
-changed. Nothing systematic. ★ *A difference that moves when you change the
-sampling instant is an artifact of the instrument, not of the change* — the
-same lesson as the wall-clock window, arriving from the other direction.
+Telemetry — this is what "it works" looks like, and it is unambiguous:
 
-Both clamps take the `+1` anyway (texture at `sp_run`, shade at `shx_c1`) and
-that is correct on its own terms: fixing only one leaves 319 textured but
-unshaded, which is the "bright 1px line down the right edge" the kernel already
-paid for once. Measured free — 232/398 rendered frames, identical to baseline,
-`illegal=0`, image verified.
+    walk (UP)     Y 7168 constant,  Z +282/step        flat ground
+    UP+B          Y 7168 -> 7100 -> 6964 -> 6861 ->
+                    6725 -> 6656,  floor 7168 -> 6656  SMOOTH, lands on ledge
+    then          Y 6656 constant, Z advancing         walks on the new floor
+
+★ It climbs **only on the button** (Y is flat through the whole UP-only phase),
+which is what the user asked for after "she automatically pulls herself up".
+★ The rise is **gradual over ~6 samples**, not a teleport — the "floats up"
+complaint does not reproduce.
+
+☠️ **Get the walk distance right.** My first attempt held UP+B for 120 fields
+and carried her **2,525 units** (2.5 sectors) past the target — she climbed
+*a* ledge, not *the* one. Same trap already recorded ("walking 6s carried her
+eight sectors past it"). Use ~12-15 fields per step and sample between.
+
+### ⬜ NEW BUG: after climbing, the world renders 97.2% BLACK
+Final frame is black except Lara. `g_curroom` is still **11** — she did NOT
+cross a portal, so this is not room-crossing. She climbed onto a surface inside
+room 11 and the camera sees nothing.
+
+**Before chasing it, establish whether that surface is REACHABLE IN PLAY.** The
+spawn came from `ledge_census.py`, which lists geometric steps, not places the
+player can get to — climbing onto scenery that a real player can never stand on
+would make this a non-issue. Check the census coordinate against the PS1 footage
+(`res/`, Part 2 = Caves) or walk there from the level start.
+If it IS reachable, this is a strong candidate for the user's *"I fall into some
+blackness then the area"* — and note run 18 already refuted the portal-hop cap
+as the cause of drop-blackness, so this would be a different mechanism
+(camera inside/above geometry, everything backface-culled).
 
 ### What to do next
-1. **Task #8 / #10 offline** with the SPAWNAT + `jagemu video` method (run 18).
-   `ledge_census.py --tsv` gives CLASS ROOM RISE X Y Z YAW ready to spawn at.
-   For #10 drive UP+ACTION via `jagemu ctl <inst> input`.
-2. **Re-run `tools/build_cof.sh` end to end** — the recipe changed again
-   (RCLIPFIX). Last full run was run 9/10 and it passed; this is a cheap
-   re-verify plus a fresh container.
-3. **RIG, batched** — `PHRASEDST=1` yes/no (the only silicon-blocked question),
-   title-music fix, enemy skins, the mansion, PHRASECLEAR, RCLIPFIX.
-
-### Refuted / closed this stretch
-* Drop blackness is NOT the portal-hop cap (8.2% vs 8.3%).
-* The 319 residual is NOT a shade/texture clamp mismatch (identical with both).
-* Perf: only `PHRASEDST` is non-null; everything else measured 0.
+1. Reachability check above, then chase the black room if it is real.
+2. Task #8 (ivy drop) with the same telemetry method.
+3. Re-run `tools/build_cof.sh` (recipe gained RCLIPFIX in run 20).
+4. **RIG, batched** — `PHRASEDST=1` yes/no, title-music, enemy skins, mansion,
+   PHRASECLEAR, RCLIPFIX.
 
 ---
 
