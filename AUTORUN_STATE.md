@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 43
+RUN: 44
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,49 +17,53 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ ROOM 12 IS NOT A DEFECT — and the threshold that accused it is now fixed.
+**✅ JUMP DRIVE ADDED AND VERIFIED — and it measured Lara's jump.**
 
-New tool `tools/room_black.py <rom> <elf> [--prefix gym]`: teleports Lara to
-every room's centre and records black%. Works on any prefix straight from the
-sector data (ROOMTOUR needs a generated `roomtour_tab.h`, built for `mrt` only).
+`conformance.py` now drives JUMPGRAB spots as TR1 does: run, JUMP (A), with
+ACTION held to catch the lip, then the shared pull-up loop. Previously it only
+offered a standing pull-up, so every JUMPGRAB was an unasked question rather
+than a failure.
 
-    mansion  19 rooms   median  9.1%   MAX 36.3%   (rooms 10, 11 at ~36%)
-    caves    38 rooms   median  1.7%   MAX 51.2%
+**Measured by hand (Caves room 22, floor 6656):**
 
-**Room 12's centre reads 21.2%** and its sweep spots 21-38% — squarely inside
-normal for the mansion. The "17.4%" it was being judged against was a CAVES
-ROOMTOUR figure. Two different levels, two different lightings.
-★ That would have been the FIFTH false defect in this project from trusting a
-number past its range. The pattern is now explicit enough to state as a rule:
-**a threshold measured on one level is not evidence about another.**
+    run-up      X 24064 -> 24556, Y flat
+    jump        Y 6656 -> 6182 -> 5924 -> 5882 (peak), vy -64 -> -28 -> +8
+    => PEAK JUMP HEIGHT ~774 UNITS above the floor, then she falls back.
 
-`conformance.py` now reads `tools/.black_<prefix>` instead of hardcoding 20%.
-Re-reported: the mansion drops from 9 flagged spots to **2**, both marginal
-(36.8 and 37.9 against a 36.3 max).
+So the **1792 ledge at Y 4864 is ~1018 units out of reach** — even adding TR1's
+grab reach (~870 from the hands) she tops out near 1644. **`NO-CLIMB` there is
+very likely CORRECT, not a defect.** `ledge_census.py` classifies anything
+<= 1920 as JUMPGRAB, and that upper band looks optimistic for this engine.
 
-☠️ The max-based threshold is still sharp enough to catch real holes: the Caves
-room-22 void measured **60.4%**, above the 51.2% Caves max, so it would have
-been flagged; today's worst normal Caves spot is 20.8%.
+⬜ **Only the PSX footage can settle it**: if TR1 lets her reach that ledge,
+our jump or grab reach is short; if it does not, the census band should be
+tightened to ~1600 so it stops generating impossible spots. `res/` Part 2 =
+Caves, 3m20 -> 23m24.
 
-### WHERE BOTH LEVELS STAND
-    CAVES    18/25 CLIMBED, 2 NO-CLIMB (both correct WALL refusals)
-    MANSION  17/26 CLIMBED, 2 NO-CLIMB (both correct WALL refusals)
-    All four collision classes applied to both; no unexplained voids left.
+### WHERE BOTH LEVELS STAND (unchanged by the jump drive)
+    CAVES    18/25 CLIMBED, 5 PARTIAL, 2 NO-CLIMB   0 spots over the 51.2% baseline
+    MANSION  17/26 CLIMBED, 7 PARTIAL, 2 NO-CLIMB   2 marginal over 36.3%
+    All four collision classes applied to both levels; no unexplained voids.
 
 ### ⬜ REMAINING
-1. **Jump drive** in `conformance.py` — it only does a standing pull-up, so
-   Caves JUMPGRAB 1792 and the mansion 1024s are untested rather than failing.
-   This is the last real gap in coverage.
-2. The 7 mansion PARTIALs — check whether they are genuinely short or just the
-   climb window again (that produced a false defect in run 31).
-3. Compare against `res/` PSX footage (Part 2 = Caves, 3m20 -> 23m24).
-4. **Re-run `tools/build_cof.sh` end to end** — the recipe has gained the gym
+1. **The PARTIALs** (5 Caves, 7 mansion). Check whether they are genuinely short
+   or the climb window again — that produced a false defect in run 31. Compare
+   `rose` against `rise`: 732/768 and 494/512 are suspiciously close.
+2. PSX comparison for the JUMPGRAB band (above).
+3. **Re-run `tools/build_cof.sh` end to end** — the recipe gained the gym
    boundary patch and `--faces` on both prefixes since its last full run.
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression. `tools/toolchain_smoke.sh` guards
 updates. Working ROMs: `/tmp/conf.cof` (Caves), `/tmp/gym.cof` (mansion,
-AUTOGYM, **no PADMUTE** — that flag mutes the pad and reads as "nothing climbs").
+AUTOGYM, **no PADMUTE**).
+
+### Instruments (all offline, no rig)
+    tools/conformance.py   driven per-spot sweep, per-level black baseline
+    tools/room_black.py    per-room black% baseline (caves max 51.2, gym 36.3)
+    tools/floor_coverage.py  collision-vs-mesh scan + patch (--prefix, --faces)
+    tools/mrt_boundary_audit.py  seam-floor audit + patch (--prefix)
+    tools/toolchain_smoke.sh  build a ROM and LOOK at it after a toolchain move
 
 ### ⬜ AWAITING THE USER (run-25 checkpoint)
   1. Capture card replugged? 2. Ship Lara's Home? 3. Release or keep polishing?
