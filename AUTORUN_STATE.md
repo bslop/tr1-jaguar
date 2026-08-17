@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 71
+RUN: 72
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,80 +17,91 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ⬜⬜ SHE CANNOT WALK OUT OF ROOM 0 GOING +Z. THE FAR ROW IS WALL IN EVERY LANE.
+# ☠️☠️☠️ THE CAVES ARE NOT WALKABLE PAST ROOM 0. 25 OF 38 ROOMS ARE SEALED.
 
-Run 68's tour never left room 0 and I attributed that to room 0 simply being the
-whole opening corridor. It is more than that. Walked her at the boundary with
-telemetry (`--at 74240,3072,18944,0,0 --keys up --frames 20`):
+This is the most important open item in the project and it is in the SHIPPING
+level. Two independent measurements agree:
 
-    z 19178 -> 21430 over 8 steps, then STOPPED for the remaining 11 samples
-    g_floorroom flips 0 -> 1 (the floor ahead IS room 1's)
-    g_curroom NEVER changes
+**Empirical.** Walking +Z from (74240,3072,18944) she advances z 19178 -> 21430
+and then STOPS for 11 straight samples. `g_floorroom` flips 0 -> 1 (the floor
+ahead really is room 1's); `g_curroom` never changes.
 
-The sector data says why, and it is not a lane problem:
+**In the data.** The 0->1 portal is a plane at z=21504, x 72704..76800
+(`mrt_portalv`). The two rooms tile perfectly across it and NEITHER side has a
+walkable cell at the seam:
 
-    room 0, x=74240:  z<=21500 floor 3072   |  z>=22016 WALL
-    room 1, x=74240:  z<=21500 WALL         |  z>=22000 floor 3072
-    room 0's LAST ROW (z=22016) is WALL across ALL SIX x lanes
-                      72192 73216 74240 75264 76288 77312
+    room 0 cell 18 (z 20480..21504)  WALL 2560 3072 3072 2816 WALL   <- she is here
+    room 0 cell 19 (z 21504..22528)  WALL WALL WALL WALL WALL WALL
+    room 1 cell 0  (z 20480..21504)  WALL WALL WALL WALL WALL WALL WALL
+    room 1 cell 1  (z 21504..22528)  WALL WALL 2560 3072 3072 3072 WALL
 
-The move gate blocks on `room_wall_at(rsect[g_curroom], ...)` - the room she is
-IN - which is the documented TR rule ("a WALL sector in the room Lara is IN
-blocks her outright, even when an overlapping room has floor beyond it"). Room 0
-says WALL along its whole far edge, so **no +Z lane can cross into room 1.**
+The move gate blocks on `room_wall_at(rsect[g_curroom])` - the room she is IN -
+so a WALL cell in room 0 stops her even though room 1 has floor beyond it. That
+rule is correct TR behaviour; what is missing is the OPENING.
 
-### ⬜ NEXT: FIND THE REAL 0->1 PORTAL BEFORE CONCLUDING ANYTHING
-`gym_adjgen`-style adjacency lists room 0 <-> room 1, so a connection EXISTS.
-☠️ Do NOT jump to "the level is unplayable" - I only scanned the +Z edge.
-  1. Scan room 0's OTHER edges (x=71680 and x=77824 columns, and its z=2048 end)
-     for cells that are floor while room 1 has floor beyond - same method as the
-     table above, it is ~15 lines of Python and no build.
-  2. Check `mrt_portalv`/`mrt_portal_ofs` for the 0->1 portal quad and read its
-     WORLD COORDINATES directly - that is the authoritative answer to where the
-     doorway is, rather than inferring it from floor maps.
-  3. Then walk her at THAT spot and watch `g_curroom` flip. If it flips, this is
-     closed and room 0 is just a large dead-end corridor whose exit is elsewhere.
-     If no edge is walkable, the extractor is not encoding horizontal portals
-     into the sector map and **the demo is confined to room 0** - which would be
-     a headline defect and would explain the tour's oscillation.
-★ `project_room_crossing_fixed` records room crossing as FIXED, so a regression
-here would matter; check that note before re-deriving.
+    mrt: 38 rooms, **25 with ZERO 0x7FFE openings**, including 0, 1, 2, 3
+         [0,1,2,3,5,6,7,8,9,11,12,14,15,17,23,24,25,28,29,30,31,32,35,36,37]
 
-### ✅ WHAT WAS VERIFIED THIS RUN
-  * **Room tracking itself works**: teleported deep into room 1 (74240,3072,
-    28160) and both `g_curroom` and `g_floorroom` read 1, floor agrees, stable
-    over 6 samples. The problem is reaching it on foot, not representing it.
+### ☠️ WHY - and it is NOT the runtime
+`project_room_crossing_fixed` (2026-07-30) recorded this as FIXED, asset-only:
+mark wall cells under a portal's footprint as 0x7FFE, 71 cells opened, silicon
+reached 9 rooms. The extractor's actual rule is
+`tools/tr2jag_multiroom.py:3191`:
+
+    hport = (sector_portal(fidx) is not None) or (_ci in doorcells)
+    fy = (0x7FFE if (below != 255 or hport) else 0x7FFF) if floor == -127 else floor*256
+
+so a cell only opens if the SECTOR carries an FD portal command (`func==1`) or is
+in `doorcells`. At the 0/1 seam neither side qualifies, so both stay 0x7FFF.
+**The room's PORTAL LIST is not consulted at all** - and that list is exactly
+what the memory note says the fix was supposed to use.
+
+### ⬜ NEXT: OPEN THE CELLS FROM THE PORTAL GEOMETRY
+  1. For every room, for every portal quad (dst + 4 corner verts, already parsed
+     for render clipping), mark the WALL cells on BOTH sides of the portal plane
+     within its XZ span as 0x7FFE. ☠️ The plane is ZERO-THICKNESS and lies
+     exactly on a cell boundary, so "cells whose centre is inside the quad"
+     matches NOTHING - that is very likely why the original fix missed these.
+     Expand by half a cell on each side, or mark the cells the plane separates.
+  2. Re-measure: `25 rooms with zero openings` must drop, and room 0 must gain
+     cells at cell 19 x-lanes 1..4.
+  3. Re-verify empirically - the same walk must cross:
+     `probe_spot.py ... --at 74240,3072,18944,0,0 --keys up --frames 20`
+     and `g_curroom` must go 0 -> 1.
+  4. ☠️ `mrt_sect.bin` is GITIGNORED and regenerated - whatever fixes this must
+     live in the extractor or in a `--patch` that `build_cof.sh` runs, or it will
+     evaporate on the next asset regen. That is the most likely reason this
+     regressed after being fixed once.
+★ `room_floor_mr` already skips >=0x7FFE and takes the floor from the neighbour,
+and `room_wall_at` treats only 0x7FFF as solid, so **no runtime change should be
+needed** - exactly as the 2026-07-30 note says.
+
+### ✅ VERIFIED WORKING (so the fault is narrow)
+  * Room tracking: teleported to (74240,3072,28160) deep in room 1 - both
+    `g_curroom` and `g_floorroom` read 1, floor agrees, stable.
+  * The portal DATA is right: `mrt_portalv` has the 0->1 quad with sane
+    coordinates; adjacency lists 0<->1.
 
 ### ☠️ CLOSED - DO NOT REOPEN
-    mansion holes (50-59)   room 15 = MISSING GEOMETRY; room 0 = OPEN SKY
-    pickups (65)            they WORK; `g_pickups` is DEMO_PROPS, not compiled in
-    mid-walk LOADING (67)   never existed; a contact-sheet misread
-    caves black wedges (69) OPEN SKY - 38% of mrt room 0 has no ceiling.
-                            sightline.py now prints that FIRST.
+    mansion holes (50-59) · pickups (65) · mid-walk LOADING (67) ·
+    caves black wedges (69, OPEN SKY - sightline prints the sky count first)
 
-### ★ INSTRUMENTS (all off in shipping builds)
-    sightline.py                    geometry NEARBY + IS THE ROOM OPEN TO SKY
-    release_play.py --tour          wall-following play-through WITH TELEMETRY
-    release_play.py --play/--gym    straight walk / select Lara's Home
-    entity_check.py                 stand next to any entity and photograph it
+### ★ INSTRUMENTS - see the list in git history if trimmed; the load-bearing ones:
     probe_spot.py --raw= / --set=   per-spot telemetry; teleport anywhere
-    room_cycles.py --prefix=gym     per-room kernel cycles (fill NOT included)
-    HOLEVIS=1                       paints UNCOVERED pixels white
-    DREWVIS=1 / HOPDEPTH=N ; CULLCOUNT=1 BEXCNT=1 WCCNT=1
-    build_conf.sh EXTRA= / SKIP=
-☠️ Counters ACCUMULATE - take DELTAS.
-☠️ SYMBOLS ARE PER-BUILD - use the .elf from the SAME build.
-☠️ Parse probe output BY COLUMN NAME - the column order changes as WATCH grows,
-   and positional awk has now produced two wrong readings.
-☠️ FPS CANNOT be measured offline (capture card unplugged).
+    sightline.py                    geometry NEARBY + is the room open to sky
+    release_play.py --tour/--play/--gym   drive the RELEASE with telemetry
+    entity_check.py                 photograph any entity
+    room_cycles.py --prefix=gym     per-room kernel cycles
+    HOLEVIS=1 / DREWVIS=1 / HOPDEPTH=N / CULLCOUNT=1 BEXCNT=1 WCCNT=1
+☠️ Parse probe output BY COLUMN NAME - positional awk has misread it twice.
+☠️ SYMBOLS ARE PER-BUILD.  ☠️ FPS cannot be measured offline.
 
 ### ✅ WHAT IS DONE
-    climbing   CAVES   LEDGES 24/24  WALLS 6/6 refused
-               MANSION LEDGES 24/24  WALLS 6/6 refused
-    enemies    BEAR and WOLVES render in-game on shipping flags
+    climbing   CAVES 24/24 ledges, 6/6 walls · MANSION 24/24, 6/6
+    enemies    BEAR and WOLVES render on shipping flags
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
-    release    CURRENT, both levels into gameplay, symbols, play-through capture
-               -> /tmp/cofout6
+    release    /tmp/cofout6 - both levels into gameplay, symbols, tour capture
+               ☠️ but the player cannot walk out of room 0 (above)
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,
