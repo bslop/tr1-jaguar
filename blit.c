@@ -82,7 +82,31 @@ void blit_band(void *fb, int y0, int y1, uint32_t c)
 
     blit_wait();
     A1_BASE  = (uint32_t)fb;
+#if defined(PHRASECLEAR) && defined(FB8)
+    /* ★★★ PHRASE-MODE CLEAR. The per-frame in-game clear is the single most
+       expensive Blitter shape in the level: `jagemu --blit-histogram
+       --pc-histogram --fidelity silicon` at f1500 puts 320x80 srcen=no at
+       21.2% of ALL transfer ticks, 16,916 ticks/frame - more than the next
+       seven shapes combined. It ran with BLIT_XPIX (pixel X-add), i.e. ONE
+       BYTE PER TICK, while the machine can fill a PHRASE (8 bytes) per tick.
+       Phrase addressing is XADDCTRL 0 - simply DROPPING BLIT_XPIX - which is
+       exactly what blit_copy_phrase does, and that path is silicon-verified
+       (it was the 95ms -> 5ms video lever). B_COUNT stays in PIXELS either
+       way, so only the flag changes.
+       ☠️ DECLINES RATHER THAN GUESSES, like blit_bytes: phrase mode needs an
+       8-aligned row start. Rows are RENDER_W (320) apart and 320 % 8 == 0, so
+       every row inherits the base's alignment - but if the base is not phrase
+       aligned we fall through to the byte path instead of running the Blitter
+       away over DRAM (the first phrase build came back black and looked
+       exactly like an A10 miss). */
+    if ((((uint32_t)fb) & 7u) == 0) {
+        A1_FLAGS = pixflag | BLIT_WID320;        /* XADDCTRL 0 = XADDPHR */
+    } else {
+        A1_FLAGS = pixflag | BLIT_WID320 | BLIT_XPIX;
+    }
+#else
     A1_FLAGS = pixflag | BLIT_WID320 | BLIT_XPIX;
+#endif
     A1_PIXEL = ((uint32_t)y0 << 16);
     A1_STEP  = (1u << 16) | ((uint32_t)(-RENDER_W) & 0xFFFFu);
     B_SRCD   = cc;

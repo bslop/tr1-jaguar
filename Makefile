@@ -1051,6 +1051,14 @@ CFLAGS   += -DAUTOGYM
 CXXFLAGS += -DAUTOGYM
 endif
 
+# PHRASECLEAR=1: fill the per-frame screen clear in PHRASE mode (8 bytes/tick)
+# instead of pixel mode (1 byte/tick). The clear is the biggest single Blitter
+# shape in the level - 21.2% of all transfer ticks by --blit-histogram.
+ifdef PHRASECLEAR
+CFLAGS   += -DPHRASECLEAR
+CXXFLAGS += -DPHRASECLEAR
+endif
+
 ifdef GYMTEST
 CFLAGS   += -DGYMTEST
 CXXFLAGS += -DGYMTEST

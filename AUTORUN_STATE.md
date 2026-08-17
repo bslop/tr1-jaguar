@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 13
+RUN: 14
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,69 +17,53 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**★★★★★ THE BLITTER PROFILE IS OPEN — and the biggest single shape is the CLEAR.**
+**★★★★★ TRANSFER TICKS ARE NOT TIME. Do not optimise on the histogram's
+`transfer_ticks` column.**
 
-`--blit-histogram` works, with two gates (found by `jag_rr`, reproduced here):
+Run 13 converted the per-frame clear to phrase addressing (`PHRASECLEAR=1`,
+`blit.c` — drop `BLIT_XPIX`, `XADDCTRL 0 = XADDPHR`, the path
+`blit_copy_phrase` already proved on silicon):
 
-    jagemu run <rom>.cof --frames 1500 --blit-histogram --pc-histogram \
-        --core gpu --fidelity silicon        # output goes to STDERR, not JSON
+    clear byte mode : phrase=no  25,374,720 ticks  16,916/frame  21.2%
+    clear phrase    : phrase=yes  3,189,760 ticks   2,127/frame   3.3%
+    output PIXEL-IDENTICAL (0/25,600 differ), illegal=0, all pads build
 
-* `--fidelity silicon` is required — the default `functional` runs no timing
-  model, so EVERY `timing.*` field reads 0. ★ **All timing fields zero (dsp too,
-  not just blit) = no timing model, not a Blitter problem.**
-* `--blit-histogram` alone is **inert**: the reader lives in `boot_profiled`,
-  which only runs when `--pc-histogram`/`--profile68k` is also passed.
+**8x fewer ticks, 22.2 MILLION removed — and the wall clock did not move:**
 
-### ☠️ MEASURE IN THE LEVEL. 300 frames is the TITLE SCREEN.
-This ROM does not reach gameplay until ~f1200 (AUTOSTART exits the ring, then
-boot video + loading screen). The wall-clock block is the tell:
+    baseline: Tom 15.665 s 62.6%  (Blitter 3.491 s, 13.9%)
+    phrase  : Tom 15.714 s 62.8%  (Blitter 3.497 s, 14.0%)
 
-    f300 :  Tom 8.1%  (Blitter 0.2%)   Jerry 80.5%   48 shapes   <- MENU
-    f1500:  Tom 62.6% (Blitter 13.9%)  Jerry 96.0%  438 shapes   <- LEVEL
+⇒ Blitter "busy" time is launch/arbitration/wait, **not bytes moved**. This is
+the third independent time transfer-bytes has failed to predict time here:
+`FLATFLOOR` was 7.50 fps on both arms, and the fill work already concluded
+"spans are ~9 px, PER-SPAN OVERHEAD dominates, no per-pixel optimisation can
+pay". ★ **The histogram's useful column is `count`, not `transfer_ticks`.**
 
-A conclusion drawn at f300 ("a few big full-screen copies dominate") is exactly
-inverted in the level. ★ **Always read the wall-clock accounting next to the
-shares — it is what catches the wrong window.**
+`jag_rr` ran all 438 rows: spans (outer==1) = 490,029 blits / 71.1% of transfer;
+area blits = 384 blits / 28.9%. Real, but by the above that share does not
+predict frame time either. They have `--blit-top N` + an always-printing
+coverage footer built (uncommitted in their tree); I said yes please.
 
-### The gameplay profile (f1500, top of 438 shapes)
-
-     inner outer srcen  count  ticks/frame  % xfer
-       320    80    no    177        16916   21.2%   <- VRESN=80 FULL-SCREEN CLEAR
-       320   240   yes      4         2294    2.9%   (menu leftovers)
-       320   240    no      6         1720    2.2%
-       320    28   yes     18         1204    1.5%
-        17     1   yes   8272         1048    1.3%
-        73     1   yes   1378          751    0.9%
-         5     1   yes  19306          721    0.9%
-        55     1   yes   1632          670    0.8%
-
-⇒ **one full-width clear (21.2%) plus a very long tail of single-scanline
-spans** — 19,306 blits of 5x1, 8,272 of 17x1, and 400+ more shapes below the
-printed rows.
-
-☠️ **The table is TOP-20 of 438 and the printed rows total only ~32% of
-transfer. Do NOT aggregate from it** — I tried and got a bogus 64.5%/31.8%
-split. Asked jag_rr for a `--top N` or full rows in JSON; the tail is where the
-rest of the answer is.
+☠️ In this window **Jerry is 96.0% busy in both arms** vs Tom 62.6%. The
+critical path may be JERRY, not Tom — which would explain an invisible 8x
+Blitter win. **Check that before any further Blitter work.**
 
 ### What to do next
-1. **Attack the 320x80 clear — 21.2% of transfer in ONE shape.** Options: skip
-   clearing where the world provably covers the band; clear only the dirty
-   region; or fold the clear into the first draw. ☠️ Prior art says `NOCLEAR=1`
-   ships a visible SMEAR, so a naive removal is not it — the target is a
-   *narrower* clear, not no clear.
-2. **Get the full 438-row tail** (needs the jagemu change, or parse repeated
-   runs) before optimising spans — 5x1 x19,306 is a lot of blits for 0.9%, so
-   the per-span cost may be launch overhead rather than transfer.
-3. Docker container build was started in run 12 (`jag-openlara:run12`,
-   `/tmp/dockout`) — check it finished and diff against the host baseline:
-   `OPENLARA.COF md5 0861a1f9db23cca31155eb451595ebb5`.
+1. **Find out what Jerry is doing at 96%.** `--pc-histogram --core dsp
+   --fidelity silicon --dsp-map` on a gameplay window. If Jerry is the critical
+   path, every Blitter lever is mis-aimed. This is the highest-value open item.
+2. Keep `PHRASECLEAR=1` (strictly cheaper, identical output) but **do NOT claim
+   an fps win** — it goes on the silicon list, not into the notes as a lever.
+3. Rig-batched when the user is at the TV: #2 run-through, title-music check
+   (run 10's fix is offline-unverifiable), enemy skins, the mansion, PHRASECLEAR.
 
-### ✅ CLOSED: task #12, flat-shaded floors
-**Already answered on silicon and I nearly re-ran it**: `FLATFLOOR` measured
-7.50 fps on BOTH arms (jagemu agreed at −0.0%), arm B verified to really render
-flat floors. Do not re-open. Its lesson stands and is now confirmed by the
-histogram: per-pixel cost is not the lever.
+### ✅ Container build VERIFIED (run 13)
+`docker build -t jag-openlara:run12 .` then a run against the disc reproduces
+the asset pipeline **bit-for-bit**: CAVES/CORE/EIDOS/INTRO.JV and MUSIC.PCM all
+md5-match the host. `OPENLARA.COF` differs only because the host copy predates
+run 10's music fix. Container ROM boots in jagemu with its SD card, illegal=0.
+
+### ✅ CLOSED: task #12 flat floors (silicon null, do not re-open)
 
 ---
 
