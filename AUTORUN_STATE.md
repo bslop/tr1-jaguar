@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 18
+RUN: 19
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,49 +17,50 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**The offline perf campaign is COMPLETE. One candidate, blocked on silicon.**
+**★★★ DRIVEN/SPAWN TESTS RUN ENTIRELY OFFLINE — the rig is not needed for them.**
+I had been treating gameplay repro as rig-blocked because the capture card is
+unplugged. It is not: jagemu supplies both the pad (`--press`, `ctl input`) and
+the framebuffer. A `SPAWNAT_*` arm + `jagemu video` reproduces a fall, a drop, a
+ledge — no hardware at all. **Use this for tasks #8 and #10.**
 
-    fields   baseline  PHRASECLEAR  NOSOUND  PHRASESHADE  PHRASEDST
-      1500        232          232      232          232        253  (+9.1%)
-      2500        398          399      398          398        443  (+11.3%)
+### ☠️ REFUTED: the ivy-drop blackness is NOT the portal-hop cap
+Clean A/B at a 1792-unit drop (room 22, from `ledge_census.py`), flag verified
+on the compile line (`-DHOPBOOT=4`):
 
-`PHRASEDST=1` is the only non-null anywhere in this campaign. It is now
-de-risked as far as the emulator allows:
+    HOPBOOT=1 (shipping, "room +/- 1")   8.2% of screen black
+    HOPBOOT=4 (uncapped)                 8.3% of screen black
 
-* renders clean in the **Caves** (`illegal=0`; 29/25,600 px differ at matched
-  game-frame counts = one animation frame, not damage)
-* renders clean in the **MANSION** — different geometry, different atlas,
-  `illegal=0`, image verified by eye
-* alignment risk **cleared**: differing pixels spread evenly across `x mod 8`
-  (5,4,8,5,5,4,6,8), not clustered at phrase boundaries
-* stable across two cobweb fidelity upgrades (`3ebf805`, `59e5896`) — both arms
-  re-measured identically after each
+Draw distance is not the cause. Do not re-try raising `HOPBOOT` for this. The
+8.2% in that scene is genuine empty geometry (the room ends), not a renderer cap
+— which is also why the earlier "EYE-CLEARED no black doorways" verdict at cap 1
+was not wrong.
 
-☠️ **STILL NOT A LEVER.** The kernel's risk 2 stands: *"whether the Blitter can
-assemble 8 GATHERED source pixels into one dest phrase at all — jagemu will
-happily apply its formula either way."* **Only silicon decides.** Do not write
-it into the notes as a win, and do not ship it, until the rig answers.
+### ⬜ NEW BUG (small, real, systematic): COLUMN 319 IS NEVER DRAWN
+Fully-black columns, measured across three unrelated scenes:
 
-★ `PHRASESHADE=1` measured **exactly null** (232/398). That matters: it is the
-*source-free* phrase blit (DSTEN read-modify-write, no gather, so risk 2 does
-not apply). The safe subset bought nothing; the risky one bought 11%. So there
-is no dodging risk 2 by restricting phrase mode to source-free blits.
+    normal gameplay (caves)  1 dead column   x 319
+    mansion                  1 dead column   x 319
+    fall spawn (room 22)     8 dead columns  x 312..319   (6 of those are geometry)
+
+`gpu_geotex_setclip(0, 319, 0, RENDER_H-1)` sets the right edge **inclusive**, so
+something downstream is treating it as exclusive — a classic off-by-one at
+`clipx1`. One pixel column down the right of every frame, every scene.
+**Next:** find the right-clip compare in `gpu_geotex.gas` (the left one is the
+`cmp r4,r29` noted at `ss_bw`, where r4 = CLIPX0) and check whether it is `<` vs
+`<=`. Low visual value on an overscanned TV, cheap to fix, and it would be
+embarrassing on a screenshot.
 
 ### What to do next
-1. **RIG, batched** — this is now the top item and it is a narrow yes/no:
-   flash `PHRASEDST=1` vs baseline, ask the user whether the picture is correct
-   and whether it is visibly faster. Everything else offline is exhausted.
-   Also in the batch: title-music fix, enemy skins, the mansion, PHRASECLEAR.
-2. While waiting, the remaining emulator-answerable items are gameplay, not
-   perf: task #8 ivy-drop blackness, #10 second ledge grab.
-3. Published `jaguar-shared/techniques/blitter-span-cost.md` (31b3483) — the
-   cost model, the five nulls it predicts, and the method traps.
+1. **Task #8 / #10 offline** using the SPAWNAT + `jagemu video` method above.
+   For #10, `ledge_census.py --tsv` gives ready-made CLIMB2/CLIMB3/JUMPGRAB
+   coordinates (cols: CLASS ROOM RISE X Y Z YAW) — spawn on the low side and
+   drive UP+ACTION with `ctl input`.
+2. Fix the column-319 off-by-one.
+3. **RIG, batched** (still the only silicon-blocked item): `PHRASEDST=1`
+   yes/no, title-music fix, enemy skins, the mansion, PHRASECLEAR.
 
-### Do NOT re-test (all measured null, with reasons)
-per-pixel cost (FLATFLOOR, silicon) · 68k-side transfer (PHRASECLEAR) · 68k work
-(GCCHOT) · audio (NOSOUND, superset ablation) · launch batching (RUNBATCH /
-TRAPEZOID — launch is only 14% of a span) · source-free phrase blits
-(PHRASESHADE).
+☠️ `SPAWNAT_*` arms render Lara DEFORMED — always have. Judge the WORLD from
+them, never the model.
 
 ---
 
