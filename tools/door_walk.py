@@ -185,6 +185,24 @@ def main():
             # and the floor beyond must be within one step.
               if abs(fy - y1) > 512:
                 continue
+              # ☠️ THE SEAT CELL BEING WALKABLE DOES NOT MEAN THE APPROACH IS.
+              # Caves 25->22: the seat has a real floor at 6656, and the cell she
+              # must walk THROUGH - the source room's own cell touching the plane
+              # - is 0x7FFF WALL. She moved 141 units and the sweep called it a
+              # dead door for runs on end. The doorway is 6 cells wide and only
+              # ONE column is walled; the 0.5 frac landed exactly on it.
+              # So check the cell adjacent to the plane on HER side, at the seat's
+              # cross-axis position, and reject the candidate if it is solid or a
+              # step she cannot walk. The frac sweep then finds a clear column.
+              ax = sx if z0 == z1 else (x0 + sgn * 512)
+              az = (z0 + sgn * 512) if z0 == z1 else sz
+              av = cellval(r, ax, az)
+              if av is None or av == 0x7FFF:
+                continue                               # walled off on the way
+              if av < OPEN:
+                avy = struct.unpack(">h", struct.pack(">H", av))[0]
+                if abs(avy - fy) > 256:
+                  continue                             # a step she cannot walk
               # the cell just past the plane, to reject a doorway that is a step up
               bx = sx if z0 == z1 else (x0 - sgn * 512)
               bz = (z0 - sgn * 512) if z0 == z1 else sz
@@ -240,15 +258,34 @@ def main():
         only = None
         if '--door' in sys.argv:
             only = tuple(int(v) for v in sys.argv[sys.argv.index('--door') + 1].split(','))
+        # ☠️ THE PREDICTOR MUST MODEL THE RULE THE RUNTIME ACTUALLY USES.
+        # It used to take the plain LOWEST floor, which was right until run 100
+        # gave room_floor_mr a Y-aware pass and run 101 added the drop rule. It
+        # then told me "resolves to room 12" for gym 7->9 and 8->11 while the
+        # game seated her in 7 and 8 - a dry run that invents failures is worse
+        # than no dry run. Mirrored here: rank candidates by TIER (a floor at or
+        # below her feet beats one above) then by closeness, and finally never
+        # let another room's lower floor beat the one her own room offers.
         for (r, dst, sx, sz, yaw, fy) in tests:
-            lowest, who = None, None
+            best = None                       # (tier, dist, floor, room)
+            own = None
             for q in range(nroom):
                 v = cellval(q, sx, sz)
                 if v is None or v >= OPEN:
                     continue
                 f = struct.unpack('>h', struct.pack('>H', v))[0]
-                if lowest is None or f > lowest:
-                    lowest, who = f, q
+                d = f - fy
+                tier = 1 if d < 0 else 0      # ground mode: at/below the feet first
+                key = (tier, abs(d), f, q)
+                if best is None or key[:2] < best[:2]:
+                    best = key
+                if q == r and (own is None or key[:2] < own[:2]):
+                    own = key
+            if best is None:
+                continue
+            who = best[3]
+            if own is not None and best[2] > own[2]:
+                who = r                       # the drop rule: her own floor wins
             if who != r:
                 bad.append((r, dst, who))
             if only is None or only == (r, dst):

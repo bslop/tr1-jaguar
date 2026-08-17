@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 104
+RUN: 105
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,41 +54,47 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ✅✅ THE RELEASE IS REBUILT WITH ALL THREE GAMEPLAY FIXES AND DRIVEN CLEAN.
+# ✅✅✅ EVERY DOORWAY ON BOTH LEVELS IS NOW ACCOUNTED FOR. NO ARTEFACTS LEFT.
 
-`/tmp/cofout8` - built from the disc with the pool fix (93), the floor-room
-attribution fix (100) and the drop rule (101) all in. Caves 38 rooms, gym 19.
+    CAVES    56 crossed / 2 FAILED    both "DOOR shut"  - correct, they need switches
+    MANSION  15 crossed / 3 FAILED    all "STEP UP"     - correct, they need vaults
 
-    LARA'S HOME  ring -> page 4 -> level -> 24-step tour
-                 51,321 units, health 1000 throughout, **0 checkshot complaints**
-    CAVES        30-step tour, rooms 0 and 1
-                 88,051 units, health 1000 throughout, **0 checkshot complaints**
+Not one unexplained failure and not one harness artefact on either level. The
+release itself was rebuilt with all three gameplay fixes in run 103 and driven
+clean on both levels (51,321 and 88,051 units, health 1000, 0 frame complaints).
 
-★ Every captured frame now passes checkshot unassisted - run 94's recalibration
-(a recorded per-level colour floor instead of a constant) holds up across two
-full drives. The mansion tour is byte-for-byte the same trajectory as run 94
-(51,321 units), which is the expected result: it wall-follows inside room 0,
-where none of the three fixes apply.
+### ★ CAVES 25 -> 22 WAS A ONE-COLUMN WALL AND A SEAT THAT LANDED ON IT
+The last unexplained line. The seat cell has a real floor at 6656 - so it passed
+every check - but the cell she has to walk THROUGH, room 25's own cell touching
+the plane, is `0x7FFF` WALL. She moved 141 units and the sweep called it a dead
+door for runs on end. The doorway is **6 cells wide and only ONE column is
+walled**, and the 0.5 frac landed exactly on it (x=21504 is the first x of the
+walled cell). ★ A seat that is standable is not the same as an approach that is
+walkable. `door_walk` now checks the plane-adjacent cell on HER side and rejects
+the candidate if it is solid or a step she cannot walk; the frac sweep then finds
+a clear column (x=20889) and she crosses. No other doorway changed - both levels
+still produce 58 and 18 seats.
 
-### ☠️☠️ THE CAPTURE CARD IS REPORTING **ONLINE** NOW - THE USER MUST RULE ON IT
-`session_run.sh start` printed:
+### ☠️ ALSO FIXED: THE DRY RUN WAS LYING
+`--seats` still predicted with the plain lowest-floor rule, which stopped being
+the runtime's rule when run 100 added the Y-aware pass and run 101 the drop rule.
+It claimed gym 7->9 and 8->11 would seat in room 12 while the game seated them in
+7 and 8 - it cost me a wrong diagnosis twice. It now mirrors the real rule (tier,
+then closeness, then the drop rule) and agrees with the live sweeps: mrt predicts
+**0** wrong-room seats, and the live run seats all 58 correctly.
+★ A dry run that invents failures is worse than no dry run.
 
-    hardware   GameDrive online (03eb:800e) · capture /dev/video0 ok
-
-Every autorun prompt still says the card is *physically unplugged* and that rig
-time needs a human at the TV, so **I did not claim the rig** - but the premise
-that blocked hardware verification for ~30 runs may no longer hold. This is
-flagged to the user; do not act on it without his word. ☠️ And remember a dead
-capture FAKED nine black boots once: `OK!` + black means the VIDEO chain, not the
-console. Ask what the TV shows.
-
-### ⬜ NEXT
-  1. **CAVES 25 -> 22** - the last unexplained line on either level. She moves
-     only 141 units and the seat does NOT drift (she really is in room 25), so
-     re-seating cannot help: the stand-off cell itself blocks her. Pick a
-     different cell along the span - `--seats --door 25,22` then trace.
-  2. `HW_TESTCARD`.
-  3. Hardware verification - the user's call, see above.
+### ⬜ NEXT - THE EMULATOR-ANSWERABLE WORK IS DONE
+The gameplay defect list is EMPTY, both levels sweep clean, and the release is
+rebuilt and driven. What is left is gated on the user:
+  1. **Hardware verification** - and ☠️ `session_run.sh start` now prints
+     `capture /dev/video0 ok`, contradicting the standing "physically unplugged"
+     premise. Flagged to him in run 103; do not claim the rig without his word.
+  2. **The run-100 checkpoint question is still open** - he was asked to choose
+     between silicon validation, frame rate (VRESN=80 is +12% and unshipped), and
+     new content. Until he rules, prefer small verifiable work over starting a
+     campaign - see `user_goal_and_endpoint`: do not start open-ended campaigns.
+  3. `HW_TESTCARD`.
 
 ### ⚠️ BUILD STATE
 `/tmp/cofout8/` = the SHIPPING payload with ALL THREE gameplay fixes (COF +
