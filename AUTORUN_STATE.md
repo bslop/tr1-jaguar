@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 15
+RUN: 16
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,56 +17,52 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**☠️ RETRACTION — run 13's headline was WRONG.** It said "8x fewer transfer
-ticks moved the wall clock zero, therefore transfer ticks are not time." The
-experiment could not support that: **jagemu's timing counters are PER-CORE but
-the histogram is machine-wide**, and the 320x80 clear books to the **DSP**
-bucket, while the line I watched (`Tom GPU busy ... of which Blitter`) is
-GPU-only. Corrected measurement, same two ROMs:
+**★★★★★ THE CRITICAL PATH IS TOM'S SPAN POPULATION — established by elimination,
+with three measured arms. Perf work should target SPAN COUNT and nothing else.**
 
-    arm       gpu blit_count  gpu transfer   dsp blit_count   dsp transfer
-    cavesfix        490,029     84,979,645             384     34,583,955
-    phrclr          492,016     85,113,091             385     10,336,495
+Method that finally worked (write this down, it defeated two earlier attempts):
+build each arm with **`PADTEXT=0` via plain `make`** so `build/openlara.elf`
+matches the `.cof` you run, then take `g_synccalls` from **that arm's own `nm`**
+— the arms land at *different* addresses (0x1a0b50 / 0x1a0b70 / 0x1a06a0), which
+is exactly why a shared-address peek returned zeros in run 14.
 
-⇒ `dsp.timing.blit_transfer` **−24,247,460**; GPU bucket unchanged. The phrase
-clear works exactly as intended. **Whether it changes frames-rendered is still
-UNMEASURED** — that is "not measured", not "no effect". (Caught by `jag_rr`;
-attribution is `bus.tom.last_blit_ticks` consumed by `mem::take` in RISC
-execution, so a blit books to whichever core runs NEXT — with Jerry at 96% that
-is nearly always Jerry. The "dsp" label does NOT mean Jerry issued it.)
+    jagemu peek <arm>.cof --at <that arm's g_synccalls> --len 4 \
+        --frames N --fidelity silicon        # value = rendered frames
 
-### ☠️ I walked into my own run-3 trap while trying to measure throughput
-Peeked `g_synccalls` / `frame_count` and got 0 from both arms, because
-`build/openlara.elf` is a **different PADTEXT pad** than the p0 `.cof`s being
-run, and PADTEXT shifts every address. **To measure throughput: build the arm
-with `PADTEXT=0` via plain `make` so `build/openlara.elf` matches the ROM you
-run**, then peek `g_synccalls` (one increment per rendered frame).
+    fields    baseline   PHRASECLEAR   NOSOUND
+      1500         232           232       232
+      2500         398           399       398
 
-    THE MEASUREMENT TO RUN NEXT (this is the whole next increment):
-      for each arm: rm -rf build; make <BASE flags> PADTEXT=0 [PHRASECLEAR=1]
-      nm build/openlara.elf | grep g_synccalls    # per-arm address!
-      jagemu peek build/openlara.cof --at <addr> --len 4 --frames 1500 --fidelity silicon
-    More rendered frames = faster. This is the fps number, offline.
+### What each arm rules out
+* **68000 — not the path.** `jag_rr`'s attribution fix shows the clear is issued
+  by the **68000** (384 blits, 34,583,955 ticks), not Jerry; the "dsp" bucket was
+  an artifact of blits booking to whichever core runs next, and Jerry's spin loop
+  won that race every time. The 68k sleeps in `STOP` most of the frame, so
+  removing 24.2M of its transfer ticks is **null** — consistent with GCCHOT
+  (−22% 68k instructions, 0 fps).
+* **Jerry — not the path.** 96% busy is an *idle* spin loop (8.57M polls for
+  ~275k samples). `NOSOUND=1` deletes the whole audio subsystem: **null**.
+  ★ That is a SUPERSET ablation, so the null bounds the subset — the idle pump
+  cannot be costing frames either, and the isolating experiment is unnecessary.
+  ★★ **A confounded experiment still answers cleanly when it returns null in the
+  direction that bounds what you care about.** Confounds only matter when the
+  result is non-zero and you must attribute it.
+* **Tom — everything that is left.** 490,029 blits, 84,979,645 transfer ticks.
 
-### ★★★ Jerry's 96% is a SPIN LOOP, not work
-`--pc-histogram --core dsp --fidelity silicon` + a `jas --map` of `dsp_pose.das`:
-the hot PCs are all `main_loop`, which bumps a heartbeat, inlines `AUDIO_PUMP`
-and polls `CMD_D` — **8,570,495 iterations in 1500 frames (~51k/frame)**, with
-111M load-stall cycles at `main_loop+0x12` and 135.5M external-memory cycles.
-`CMD_D`/`LOOP_COUNT` are DSP-local, so the external traffic is the audio pump.
-The source already says it: *"the pump is inlined at 5 sites and pays its poll
-on EVERY pass even when no tick elapsed - a standing tax on Jerry's
-throughput."* ~275k samples are actually needed in that window; it polls 8.57M
-times. **`NOSOUND=1` compiles the pump out — that is the ready-made ablation to
-size the ceiling**, on a machine whose recorded shape is "Tom is
-bandwidth-bound".
+☠️ Run 13's claim ("transfer ticks are not time") is **true but was proven by an
+invalid experiment** (wrong bucket). It has now survived a valid one. Keep both
+facts: a conclusion surviving a later valid test is not the same as the original
+test having been sound.
 
 ### What to do next
-1. **Run the throughput measurement above** on cavesfix vs phrclr. It settles
-   run 13's retracted claim with a real number.
-2. **Then `NOSOUND=1` as a third arm** — if Jerry's idle DRAM traffic is costing
-   Tom bandwidth, that is where it shows. Not shippable, but it sizes the prize.
-3. Keep `PHRASECLEAR=1` (strictly cheaper, pixel-identical) — silicon list.
+1. **Attack SPAN COUNT.** 490,029 spans / ~327 per frame. The open questions:
+   where are they emitted, and what is the count per rendered frame at steady
+   state? `--pc-histogram --core gpu --fidelity silicon` with a `jas --map` of
+   `gpu_geotex.gas` will name the emitter, the same way it named Jerry's loop.
+2. Do **not** re-test: per-pixel cost (FLATFLOOR silicon null), transfer ticks
+   (measured null), 68k work (GCCHOT null), audio (measured null).
+3. `PHRASECLEAR=1` is kept — strictly cheaper, pixel-identical — but it is **NOT
+   a lever** and must not be written up as one.
 
 ---
 
