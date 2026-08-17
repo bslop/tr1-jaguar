@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 33
+RUN: 34
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,57 +17,69 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**☠️ RETRACTION OF RUN 31: "ALL SIX CLIMB3 LEDGES FAIL" WAS MY HARNESS, NOT THE
-GAME.** The pull-up now runs the animation at its own length (the run-1 fix that
-stopped it reading as "floating"), so a 768 climb needs ~195 fields. The harness
-gave up after 120. Widened to 300 and five of six CLIMB3 spots rise **exactly
-768**. ★ Third time an instrument has produced a confident false defect in this
-project — check the measurement window before believing a uniform failure.
+# ☠️☠️☠️ REGRESSION: THE TREE CURRENTLY BUILDS A 100% BLACK ROM. FIX THIS FIRST.
 
-### CAVES CONFORMANCE — 20/26 CLIMBED, 2 PARTIAL, 4 NO-CLIMB
-    WALKUP   (256)   6/6 ✅
-    CLIMB2   (512)   5/6 ✅   one stops at 494
-    CLIMB3   (768)   5/6 ✅   one stops at 732
-    JUMPGRAB (1024)  1/1 ✅
-    JUMPGRAB (1536)  3/3 ✅
-    JUMPGRAB (1792)  0/2 ⬜  harness only drives UP+B (a standing pull-up).
-                            TR1 needs a RUNNING JUMP + grab here. NOT a defect
-                            until the harness can jump.
-    WALL     (2048)  0/2 ✅  correctly refuses
+`make <harness flags> PADTEXT=0` -> 1,538,092 B, and every frame from f900
+onward is **100% black, maxluma 0**. Not a crash: `illegal=0`, 68k asleep in
+`cpu_stop_unless` (normal), **GPU running with 218M instructions**, DSP running,
+Blitter doing 5.4M polls, vector 64 intact. Everything renders; nothing is
+visible. That shape says the CAMERA is somewhere with no geometry in view, or
+the display/OP path is wrong - not that the renderer died.
 
-### THE TWO THINGS ACTUALLY WORTH CHASING
-1. ⬜ **room 22 JUMPGRAB spot: 60.4% black** (`/tmp/confall2/s020.png`). Room 22
-   reads **1.1-1.5% at its centre** in the ROOMTOUR baseline, so this is a real
-   outlier, not a dark room. Frame shows Lara on a ledge with rock above and the
-   right half missing. Same signature as the two collision voids already fixed -
-   check that cell with `floor_coverage.py --tsv` and by walking it.
-   (room 3 WALKUP at 20.8% is marginal; the baseline max was 17.4%.)
-2. ⬜ **Two climbs stop just short** (CLIMB2 494/512, CLIMB3 732/768) while
-   their siblings in the same room complete exactly. Worth one look at whether
-   the pull-up ends on `g_vaulty` or leaves a remainder.
+### KNOWN-GOOD REFERENCE
+`/tmp/cofout2/OPENLARA.COF` (the run-26 release build) still renders **43.9%
+black, maxluma 230** under the CURRENT jagemu. So the emulator is NOT the cause
+and cobweb bf31dee is exonerated.
 
-### Still to do for the user's request
-1. **Add a jump drive** (`input up,a` then grab) so JUMPGRAB 1792 is a real test.
-2. **Sweep Lara's Home** - `/tmp/conf.cof` includes it (built without GYMSD) and
-   its sector grid has never been walked. Needs census spots for the gym rooms:
-   `ledge_census.py` currently reads `mrt_*` only.
-3. Compare against PSX footage in `res/` (Part 2 = Caves, 3m20 -> 23m24).
-4. Fix what genuinely fails.
+### WHAT I ALREADY RULED OUT (do not redo)
+* **The 49 face-hole cells** - reverting them did not fix it.
+* **A stale `mrt_sect.bin`** - I regenerated it from scratch; the fresh
+  extraction reproduces `c358f277` exactly and both patches give `bfdd5a87`,
+  identical to what was there. Sector data is correct and deterministic.
+* **The atlas** - my regeneration had skipped the four atlas patch passes
+  (ROM was 83,456 B short, exactly the patch delta). Re-ran DOORPATCH /
+  PICKPATCH / GUNPATCH / ENEMYTEX / GUNONLY / GUNANIM; atlas is back to the
+  correct **373,248 B** and the ROM is back to 1,538,092 B - **still black**.
+* **The emulator** (see reference above).
 
-### Harness reference
-    python3 tools/conformance.py /tmp/conf.cof /tmp/conf.elf --out DIR [--limit N]
-    CONF_DEBUG=1 shows every seat/poke and its response.
-☠️ **Poke width matters**: `g_layaw` is 16-bit and `g_curroom` sits 2 bytes
-after it - a 32-bit yaw poke stomps the room. Use `poke16()`. Every poke
-returned `ok:true` while doing this, which is why it took three runs to find.
-☠️ Symbols are PER-BUILD; read them from that ROM's own `.elf`.
+### THE ONE UNEXPLAINED FACT — START HERE
+The run-29 harness ROM was **1,538,508 B and rendered fine**; the current build
+is **1,538,092 B — 416 bytes smaller** with what should be identical assets.
+**Find those 416 bytes.** Compare the link map of a known-good build against
+this one. Candidates: a title/ring asset (`pass_geom.bin`, `pass2_*`,
+`ctrl_*`, `photo_*`, `font_load.bin`) that my hand-run extraction did NOT
+regenerate while something else moved, or `gym_*` drift from the several gym
+re-extractions in runs 6/7/27.
 
-✅ cobweb bf31dee taken (incl. jag_rr's "book blits to the master that issued
-them"); renderer byte-identical, `COBWEB_REV` bumped.
+### THE SAFE RECOVERY, IF BISECTION STALLS
+**Run `tools/build_cof.sh <disc> /tmp/cofoutN` end to end.** It is the only
+asset chain PROVEN to produce a working ROM (run 26, plus bit-identical assets
+across two independent runs). It regenerates everything in the right order -
+base, boundary patch, coverage patch, all four atlas patches, gun anims, title
+art, ring items, videos - which is exactly what my piecemeal hand-run did not.
+★ **Lesson: do not hand-run pieces of an asset chain.** I ran the base
+extraction alone to "verify" the sector file and silently dropped four atlas
+passes; the tree has been inconsistent since.
 
-### ⬜ AWAITING THE USER (run-25 checkpoint)
-  1. Capture card replugged? 2. Ship Lara's Home? 3. Release or keep polishing?
-Nothing pushed to `origin` (public `tr1-jaguar`).
+### The user's standing request (blocked on the above)
+"Test the entire level and home... notate what works vs the PSX version, then
+fix the Jaguar version." Progress so far:
+* `tools/conformance.py` WORKS - teleport, drive, verdicts. Caves sweep gave
+  **20/26 CLIMBED, 2 PARTIAL, 4 NO-CLIMB** (run 32; CLIMB3 is fine, run 31's
+  "all six fail" was the harness window being too short).
+* Confirmed real hole: **room 22 cell (17,11)** - zero faces cover it,
+  60-73% black AT EVERY YAW. `floor_coverage.py --faces` finds 49 such cells.
+  ☠️ **Walling them is the WRONG remedy** (it was in the tree when the blackness
+  appeared, though reverting did not fix it). A hole needs GEOMETRY, not less
+  collision. Left opt-in behind `--faces`, default off.
+* Still to do: jump-drive for JUMPGRAB 1792, sweep Lara's Home, compare to the
+  PSX footage in `res/` (Part 2 = Caves, 3m20 -> 23m24).
+
+### Face-record layout (decoded this run, needed by any geometry work)
+Quads are **36 bytes**: 12-byte PLANE prefix (FACE_PLANES=1), 4x u16 vertex
+indices at +12, then 8x u16 UVs. Tris are **30 bytes** (12 + 3x u16 + 6x u16).
+NOT the 24/18 the kernel header comment states - parsing at 24 overflows every
+index immediately, which is the tell. Verified against every room's blob length.
 
 ---
 
