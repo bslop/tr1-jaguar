@@ -448,6 +448,20 @@ static int g_flr_grab;    /* 1 = ledge-search mode: plain closest-floor (the
    ledge she should climb"). 848 = GRABREACH 720 + a 128 slack. */
 #define FLR_UPWIN_GROUND 384
 #define FLR_UPWIN_LEDGE  848
+/* ☠️☠️ 848 IS RIGHT FOR THE AIRBORNE GRAB AND FAR TOO SHORT FOR THE ARM PROBE.
+   Both set g_flr_grab, but they ask different questions. The airborne grab asks
+   "is a lip within hand's reach", and 720+128 covers that. The AUTO JUMP-REACH
+   arm asks "is there a ledge worth jumping at", and its band runs to
+   LARA_JUMPGRAB (1920, TR1's own) - so every ledge above 848 was thrown away
+   BEFORE being scored and could never arm.
+   ★ It worked in the Caves by luck: where only ONE room covers the column, no
+   candidate passes the window, nfound stays 0, and the search falls back to
+   "lowest floor wins" - which IS the ledge, because it is the only candidate.
+   Lara's Home room 8 has room 12 UNDER it; room 12's floor passes the window,
+   so the fallback never runs and the ledge stays invisible. A bug that hides
+   wherever the geometry is simple is the kind that ships.
+   Zero = use the mode default. */
+static int g_flr_upwin;
 static int g_flr_wy;      /* caller's current Y for Y-AWARE floor selection:
    with vertically STACKED rooms (10-room sets), "lowest floor wins" grabbed
    floors in rooms BELOW; instead prefer the nearest floor at/below wy that's
@@ -601,7 +615,8 @@ static int room_floor_mr(const uint8_t **rsect, int n, int wx, int wz, int *floo
          * from an adjoining room (that caused her to float near walls). */
         if (!found || fy > best) { best = fy; best_w = w; found = 1; g_floorroom = r;
                                    g_flr_slx = sxs; g_flr_slz = szs; }
-        if (fy >= g_flr_wy - (g_flr_grab ? FLR_UPWIN_LEDGE : FLR_UPWIN_GROUND)) {
+        if (fy >= g_flr_wy - (g_flr_upwin ? g_flr_upwin
+                              : (g_flr_grab ? FLR_UPWIN_LEDGE : FLR_UPWIN_GROUND))) {
             /* prefer the floor CLOSEST to the caller's feet: picking the
                HIGHEST reachable floor made phantom stacked floors ~300 up
                win over the real ground ("floating above the ground").
@@ -612,8 +627,19 @@ static int room_floor_mr(const uint8_t **rsect, int n, int wx, int wz, int *floo
                only used when the column has nothing below (stair step-up).
                LEDGE mode (g_flr_grab, vault/grab searches): plain closest —
                those searches legitimately look for a floor above. */
-            int d = fy - g_flr_wy, tier = 0;
+            /* ☠️ LEDGE MODE MUST PREFER THE FLOOR *ABOVE* HER, not the
+               nearest one. "Plain closest" reads fine until a room overlaps
+               from below: at Lara's Home room 8 the ledge sits 1024 ABOVE her
+               feet and room 12's floor 768 BELOW, so closest picked the floor
+               UNDER her, the climb probe reported a drop where there is a
+               block, and she walked into the block's column and fell through
+               it. A vault/grab search asks "what can I get onto", so a floor
+               above is the answer and one below is only the absence of one.
+               Ground mode keeps its own preference (at/below the feet first),
+               or walking off a crate snaps to the room-above's floor. */
+            int d = fy - g_flr_wy, tier;
             if (d < 0) { d = -d; tier = g_flr_grab ? 0 : 1; }
+            else       {         tier = g_flr_grab ? 1 : 0; }
             if (!nfound || tier < nbtier ||
                 (tier == nbtier && d < nbestd)) {
                 nbest = fy; nbest_w = w; nbestd = d; nbtier = tier; nfound = 1; g_floorroom = r;
@@ -8558,7 +8584,9 @@ bootvid_entry:
                     int lf, handY = g_lay - LARA_GRABTOP, lfok;
                     int cy1;
                     g_flr_grab = 1;
+                    g_flr_upwin = LARA_JUMPGRAB + 128;  /* reach the whole band */
                     lfok = room_floor_mr(rsect, roomCount, px, pz, &lf);
+                    g_flr_upwin = 0;
                     g_flr_grab = 0;
                     /* SWEPT grab window.  TR1's rule is |ledge - hands| < 64
                        (lara.h checkHang), but at 7.5 fps she covers ~500 units

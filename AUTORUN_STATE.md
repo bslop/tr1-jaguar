@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 47
+RUN: 48
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,104 +17,89 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅✅✅ THE 1792 LEDGE WAS A REAL PSX-PARITY BUG, AND IT IS FIXED
+# ✅ THE LEDGE PROBE COULD NOT SEE PAST 848 UNITS. FIXED, +1 SPOT.
 
     CAVES    24/25 CLIMBED   0 PARTIAL   1 NO-CLIMB   (the 1 is a 2048 WALL)
-    MANSION  20/30 CLIMBED   0 PARTIAL  10 NO-CLIMB   (6 of the 10 are WALLs)
+    MANSION  21/30 CLIMBED   0 PARTIAL   9 NO-CLIMB   (6 of the 9 are WALLs)
 
-Run 45 closed the Caves 1792 JUMPGRAB as "physics, not a bug: measured peak jump
-774, ledge 1018 further up." **That was wrong on both halves.** The 774 was the
-harness, and TR1 does reach that ledge.
+Run 46 left "4 genuine mansion failures, clustered in room 8." Hand-driving one
+with a new tool (`tools/probe_spot.py`, prints every gate on the climb path per
+step) showed she walks at the ledge, **falls 768 through it**, ends up in a
+different room, and hits a wall she correctly refuses. So the arm never fired.
 
-### ★★★★★ TR1 DOES NOT JUMP AT A FIXED SPEED — IT SOLVES FOR THE LEDGE
-`fixed/lara.h:1586`, in the engine we are porting:
+### ★★★★★ THE ROOT CAUSE: A WINDOW SIZED FOR THE WRONG QUESTION
+`room_floor_mr` discards candidate floors more than `FLR_UPWIN_LEDGE` = **848**
+above the caller. That is correct for the AIRBORNE GRAB (hands reach 720+slack).
+But the **AUTO JUMP-REACH ARM sets the same flag** while looking for ledges up to
+`LARA_JUMPGRAB` = 1920 — so every ledge above 848 was thrown away *before it was
+scored*, and could never arm.
 
-    else if (cinfo.f.floor >= -1920 && cinfo.f.floor <= -896) {
-        goalState = STATE_JUMP_UP;
-        extraL->vSpeedHack = sqrt(-2 * GRAVITY * (cinfo.f.floor + 800)) + 3;
+★★★★★ **It worked in the Caves by luck.** Where only ONE room covers the column,
+every candidate fails the window, `nfound` stays 0, and the search falls back to
+"lowest floor wins" — which IS the ledge, being the only candidate. Lara's Home
+room 8 has room 12 UNDERNEATH it (verified in the sector data: rooms 7, 8 and 12
+all cover x=49664 z=40448 at floors 0 / 1280 / 2560). Room 12's floor passes the
+window, so the fallback never runs and the ledge stays invisible.
+**A bug that hides wherever the geometry is simple is the kind that ships.**
 
-For a ledge 896..1920 above her, TR1 computes exactly the launch speed that
-arrives. We launched every auto-jump at a flat `JUMP_VEL_UP` 110 — and then,
-because a flat 110 cannot reach higher, **capped the armed band at
-`LARA_JUMPGRAB` 1664**, its own comment deriving the cap from the flat velocity.
-So the cap was a workaround for the missing solve, and a 1792 ledge was never
-even armed. ★ The formula self-checks: at the top of the band it gives 118, and
-the branch just above it (ledge past 1920) uses a flat 116.
+Fixed in three parts, both levels re-swept:
+  1. `g_flr_upwin` — a caller-settable up-window; 0 keeps the mode default.
+  2. **Ledge mode now prefers the floor ABOVE her**, not the nearest. "Plain
+     closest" picked room 12's floor 768 BELOW over the ledge 1024 above, so the
+     probe reported a drop where there is a block — and she walked into the
+     block's column and fell through it. A vault/grab search asks "what can I get
+     onto"; a floor below is the absence of an answer, not an answer. Ground mode
+     keeps its own preference or walking off a crate snaps to the room above.
+  3. The arm probe sets the window to `LARA_JUMPGRAB + 128`.
 
-Fixed in three parts, each measured:
-  1. `jump_reach_vel()` — TR1's solve, bit-by-bit isqrt (no libm, no 64-bit).
-     Clamped to never return less than 110, so the change is MONOTONE and no
-     jump that already cleared its ledge could regress. None did.
-  2. `LARA_JUMPGRAB` 1664 -> **1920**, TR1's real band.
-  3. `LARA_GRABTOP` 800, split from `LARA_GRABREACH` 720. **This was the last 18
-     units.** With the solve in, she rose exactly 990 — the predicted discrete
-     apex for a launch of 112 — but the grab TEST still reached only 720+64, so
-     her hands topped out at 1774 against a 1792 ledge. The launch was solving
-     for 800 (the `+800` in TR1's own formula) while the catch tested 720: two
-     halves of one move disagreeing by 80. `LARA_GRABREACH` still PLACES her on
-     the lip at 720, where it must equal TR1's `LARA_HANG_OFFSET` 724.
+Mansion 20 -> **21** (the room 1 CLIMB2 recovered), Caves unchanged at 24/25,
+render baseline still exactly 1.1% / maxluma 217. Nothing regressed.
 
-`ROSE 990 -> 1792` on that spot, and Caves went 23 -> 24 with the PARTIAL gone.
+### ⬜ NEXT: THE 3 REMAINING ROOM-8 SPOTS — AND THERE IS A NAMED SUSPECT
+Two JUMPGRAB 1024 and one CLIMB3 768, all at x=**49664** (the four room-8 spots
+that DO climb are at x=46592). The probe showed something the fix does not
+address: seated in room 8 standing on room 8's floor, **`g_curroom` reads 12**.
+Room resolution, not the floor search, put her there.
 
-### ☠️ EIGHTH INSTRUMENT FALSE-DEFECT — the "774 peak" was the harness
-`conformance.py` drove `up,a` for JUMPGRAB spots on the theory that a high ledge
-needs a running jump. It does not: `main.c` arms the AUTO JUMP-REACH on
-`(PAD_UP && g_fwdblk)` alone — walk into the wall and the game jumps for you.
-The A launched a MANUAL jump first, and with UP held that selects the
-DIRECTIONAL jump at `JUMP_VEL_FWD` 100, **apex 784**. That is the "774". It was
-never the up-jump (110, apex 954), let alone the solved one. Now it holds UP and
-stays out of the way. Same shape as the other seven: a uniform failure with a
-uniform cause in the harness.
+That matters because `room_floor_mr` SKIPS rooms up front:
 
-### ★★★★★ THE ANSWER CAME FROM THE SOURCE, NOT THE FOOTAGE
-Run 45 left "does TR1 reach the 1792 ledge?" for a PSX-footage comparison. The
-engine we port from answers it exactly, in a constant, with a cross-check —
-which no amount of squinting at video would have given. **When the question is
-"what does TR1 do", `OpenLara-master/src/fixed/` is a better authority than the
-capture.** `res/` still owns questions about how it LOOKS.
+    if (g_flr_limit ? !room_reachable(g_curroom_fwd(), r)
+                    : !room_within3(g_curroom_fwd(), r)) continue;
 
-### ☠️☠️ `tools/build_conf.sh` — THE ROM FLAGS WERE NEVER WRITTEN DOWN
-Runs 40-45 recorded only the PATHS `/tmp/conf.cof` and `/tmp/gym.cof`, never the
-flags. This run needed to re-measure and could not reproduce the ROM the old
-numbers came from — the "a value only in shell history is not a setting" trap,
-and it cost two dead builds:
-  * AUTOSTART with no BOOTVID -> flat blue screen past 2600 fields, all 25 spots
-    UNTESTABLE with garbage floor reads.
-  * FASTBOOT instead -> renders to ~frame 400, then **100% black**. (Ruled out
-    as my own patch by rebuilding the identical flags from the pre-patch source:
-    identical failure. Always do that before blaming the change under test.)
-The set that works is **`tools/toolchain_smoke.sh`'s**, deliberately, because it
-is the only combination with a RECORDED RENDERING BASELINE — `.toolchain_baseline`
-1.1% black / maxluma 217 at frame 1500, which this ROM reproduced exactly. Both
-conformance ROMs now come from one script that also verifies each flag reached
-the compile line.
+If she is registered in room 12 and room 8 is not reachable/within-3 of it, then
+**room 8 is never a candidate at all** and no window or preference can help. Test
+that first: probe the spot and print `g_floorroom` alongside `g_curroom`, and
+check `room_reachable(12, 8)`. ☠️ Do not "fix" the window again — it is not the
+window this time.
 
-### ⬜ WHAT IS ACTUALLY LEFT
-1. **4 genuine mansion failures**, and they CLUSTER — three in room 8 at floor
-   1280 (one CLIMB3 768, two JUMPGRAB 1024) and one CLIMB2 512 in room 1 at
-   floor -1280. Every other spot at those same classes climbs, so this is a
-   place, not a class. ☠️ Hand-drive ONE before believing it.
-2. ☠️ **ROOM 8 IS THE SUSPECT, and the two instruments agree on it.** I assumed
-   the mansion black outliers were a baseline artifact (the old 36.3% came from
-   a ROM at a different VRESN) and re-measured to prove it — **the new baseline
-   is 36.8%, essentially identical**, so that explanation is dead and the
-   outliers are REAL. What is left points one way:
-     * room 8 CLIMB3 spots read **51.1 / 38.7 / 37.4%** black *while climbing
-       successfully* — over baseline with no failure to blame it on;
-     * room 8 holds **3 of the 4** genuine climb failures, all at floor 1280;
-     * room 0 WALL reads **77.8%** twice, the highest in either level.
-   A climb failure and a black outlier in the same room is the signature both
-   earlier collision bugs had (53% and 81%). Start at room 8, floor 1280.
-3. Caves is CLEAN: 0 spots over baseline, 0 PARTIAL, walls refuse.
+### ★ `tools/probe_spot.py` — hand-drive ONE spot, see every gate
+    tools/probe_spot.py <rom> <elf> --at X,Y,Z,ROOM,YAW [--keys up,b] [--shots D]
+Prints per step: g_gunst, feet Y, floor, room, g_fwdblk, g_autoj, g_autojv,
+g_jumped, g_lavy, g_hang, g_vault, x/z. A failure names the FIRST gate that did
+not open, which is what separates a collision bug from a harness bug in one run
+instead of three. It is how both of this run's findings were made.
 
-### ✅ RELEASE READY — the full recipe ran end to end this run
-`tools/build_cof.sh` produced all 7 files, `OPENLARA.COF` 1,538,068 B, with the
-gym boundary patch and `--faces` on both prefixes for the first time. Booted in
-jagemu with `--sd` and FILMED: Core Design logo -> the full FMV intro -> TOMB
-RAIDER title with a working ring menu (passport rotating, "A Select / Game").
-The whole front-end chain is verified, not assumed. Output in `/tmp/cofout4`.
-★ `build_cof.sh` now DEFAULTS `COBWEB_DIR` to the pinned toolchain instead of
-trusting the caller to export it — forgetting it ships a black release.
+### ☠️ NINTH INSTRUMENT NOTE: DRIVE UP+ACTION, NOT UP ALONE
+Run 46 changed the JUMPGRAB drive to hold UP by itself and it passed all of the
+Caves, which made it look right. It is not: the arm gate is
+`(pad & PAD_UP) && g_fwdblk && (g_gunst == GST_OFF || (pad & ACT_ACTION))`, so UP
+alone only works while her hands are EMPTY — and TR1's own rule is that she never
+climbs without ACTION. The Caves have no guns, so it happened to work there and
+would have broken the moment a build armed her. Now drives `up,b`. (Measured: it
+changed no verdict either way, since `g_gunst` was already 0. Correct by rule,
+not by luck.)
+
+### ⬜ ALSO STILL OPEN
+  * Mansion black outliers are REAL (baseline re-measured at 36.8%, essentially
+    the old 36.3%): room 8 CLIMB3 reads 51.1 / 38.7 / 37.4% *while climbing*,
+    room 0 WALL reads 77.5% twice. Same room as the climb failures.
+  * Caves is CLEAN: 0 over baseline, 0 PARTIAL, walls refuse.
+
+### ✅ RELEASE READY (run 46, unchanged)
+`tools/build_cof.sh` ran end to end: 7 files, `OPENLARA.COF` 1,538,068 B, output
+in `/tmp/cofout4`. Booted in jagemu with `--sd` and FILMED: Core Design logo ->
+full FMV intro -> TOMB RAIDER title with a working ring menu. ☠️ That ROM predates
+this run's collision fix and run 46's jump fix — **rebuild before shipping**.
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,

@@ -231,8 +231,18 @@ def test_spot(sy, sp, outdir, idx):
     # failure with a uniform cause in the harness. Hold UP and stay out of the
     # way - auto-arm launches, g_autograb latches the lip, then the shared
     # pull-up loop below finishes it.
+    # ☠️ HOLD ACTION TOO, even though UP alone arms the auto-jump. Run 46 drove
+    # UP by itself and it passed all of the Caves, which made it look right. It
+    # is not: the arm gate is
+    #     (pad & PAD_UP) && g_fwdblk && (g_gunst == GST_OFF || (pad & ACT_ACTION))
+    # so UP alone only works while her hands are EMPTY. TR1's own rule is that
+    # she never climbs without ACTION; the UP-only path is a convenience this
+    # port adds on top. The Caves have no guns, so UP alone happened to work
+    # there and would have failed the moment a build armed her.
+    # Holding UP+ACTION satisfies the gate unconditionally AND is what the
+    # airborne grab already wants, so it is correct in both worlds.
     if sp["cls"] == "JUMPGRAB":
-        ctl("input", "up")                   # UP alone: let the game auto-jump
+        ctl("input", "up,b")                 # UP+ACTION: let the game auto-jump
         for _ in range(6):                   # arm -> compress -> launch -> grab
             ctl("run", 12)
             sample()
