@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 99
+RUN: 100
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,55 +17,59 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ CLOSED: `HOPBOOT=1` IS THE RIGHT SHIPPING SETTING. KEEP IT.
+# ✅ NO DOORWAY IS UNTESTABLE ANY MORE (4 -> 0). ONE REAL DEFECT FELL OUT.
 
-Run 97's one surviving lead, settled. Uncapping the portal-hop draw distance
-buys **nothing visible** and costs **10.8% of the frame rate**.
+Caves, 58 wall-portals tested, before -> after this run:
 
-Method: ONE Caves ROM (`EXTRA="DREWVIS=1"`), one boot, teleporting through 7 room
-centres twice via `set:` phases - once at `g_hopcap=1` (the shipping value) and
-once at 4 (uncapped). Same ROM, same seats, so nothing but the dial differs.
+    51 crossed   3 FAILED   4 UNTESTABLE      ->   51 crossed   7 FAILED   0 UNTESTABLE
 
-    seat   cap=1 fps   cap=4 fps   delta
-    r0     13.75       11.25       -2.50
-    r8     13.75       12.50       -1.25
-    r12    10.00        7.50       -2.50
-    r17    15.00       15.00       +0.00
-    r22     7.50        6.25       -1.25
-    r30    11.25       10.00       -1.25
-    r34    10.00       10.00       +0.00
-    MEAN   11.61       10.36       -10.8%
+Same 51 crossings, so no seat change broke a door that used to pass. The four
+UNTESTABLE became four verdicts:
 
-    rooms ONLY the uncapped dial ever drew: 3, 16, 19, 28, 29
+    11 -> 12   DOOR shut          explained, correct (needs its switch)
+    25 -> 28   DOOR shut          explained, correct
+    25 -> 22   moved 141          WEDGED on the stand-off cell - harness
+    18 -> 15   saw [22]           seat drifted into room 22 - harness, FLAGGED
+    18 -> 23   saw [22]           seat drifted into room 22 - harness, FLAGGED
+    34 -> 37   saw [36]           seat drifted into room 36 - harness, FLAGGED
+    18 -> 21   saw [18,22], 2253  ☠️ VALID SEAT, LEFT ROOM 18, NEVER REACHED 21
 
-### ☠️ FIVE MORE ROOMS DRAWN AND THE PICTURE IS THE SAME
-Captured the same two seats at both settings and diffed the pixels:
+### ⬜ NEXT: CAVES **18 -> 21** IS THE ONE REAL FINDING - CHASE IT
+It is the only failure with a seat the runtime agrees with. She walks 2253 units,
+leaves room 18, ends up in **22**, and never sees 21. Everything else on the list
+is either a door that is correctly shut or a seat the harness cannot place.
+Start from `tools/door_walk.py --prefix mrt --seats` (instant, no emulator) to see
+the seat, then MVDIAG's veto codes at that spot (1 WALL, 2 no floor, 3 DOOR shut,
+4 STEP UP, 5 nothing refused).
 
-    room 0 corridor  105 of 25600 pixels differ (0.41%)
-    room 12          209 of 25600 pixels differ (0.82%)
+### ★ WHAT CHANGED IN THE TOOL, AND THE HONEST SIZE OF EACH PART
+1. **Seat ranking now models `room_floor_mr`** - it takes the LOWEST floor (largest
+   +Y), so rank on "does the source room WIN this cell", not on "is anyone else
+   here". ☠️ Measured offline, this alone moved unreachable seats **9 -> 8** across
+   both levels. Nearly a no-op, and worth saying so.
+2. **Candidate sweep widened** to 11 fracs x 8 distances x 2 sides: **8 -> 7**.
+   Also marginal. Together they proved the point: at those doorways the source
+   room does not supply the winning floor at ANY candidate, so no ordering and no
+   sampling density can seat them. **The seat was unreachable, not mis-chosen.**
+3. **THE ACTUAL FIX - stop discarding them.** A seat in an overlapping room is
+   still a test: she stands at the right PLACE and the right floor height, and
+   "can she walk through this doorway" does not depend on which of two
+   overlapping rooms the runtime attributes her cell to. So the walk now runs and
+   is judged on whether she reaches `dst`, with `(seat resolved to room N -
+   overlapping rooms)` printed on the result so a pass is never read as cleaner
+   than it is.
+4. **NEW `--seats` DRY RUN** - `tools/door_walk.py x x --prefix mrt --seats`
+   prints the chosen seats and which room each will resolve to, with no emulator,
+   in about a second. ☠️ This is what made the A/B above honest: the run that
+   produced the old numbers was gone, and re-deriving them from memory is how a
+   change gets credited with an improvement it did not make. `--rank-owners`
+   keeps the old ranking available for exactly that comparison.
 
-and **every differing pixel is on LARA** - the two runs caught her animation one
-frame apart. The world geometry is pixel-identical. The five extra rooms are far
-enough away to contribute nothing while costing a tenth of the frame rate.
-★ The mask said the dial WORKS; the pixels said it does not MATTER. A counter
-proving a code path ran is not evidence the path changed the output - the same
-trap as run 96, where uncapping drew two more rooms and moved coverage 0.7%.
-
-### ⚠️ CAVEAT ON THE fps NUMBERS
-Short holds (5 steps) quantise the rate to multiples of 1.25 fps. Good enough for
-a -10.8% verdict, too coarse for a 2-3% question. Use `tools/fps_measure.py` if
-anything needs finer.
-
-### ⬜ NEXT: THE TASK LIST - RENDERING IS SETTLED FOR NOW
-Runs 95-98 spent four runs on the mansion render and closed all of it as
-NOT-A-BUG. Nothing in that area needs work. Remaining:
-  1. **The 8 untestable door seats** - they resolve into an overlapping room, so
-     the seat ranking picks the wrong one; it needs a fallback. `tools/door_walk.py`
-     already classifies every other failure, so this is a bounded fix.
+### ⬜ ALSO STILL OPEN
+  1. The gym walk has not been re-run with the fallback (4 drifted seats there:
+     7->9, 7->2, 8->10, 8->11). Same command, `--prefix gym`, on an AUTOGYM build.
   2. `HW_TESTCARD`.
-  3. The hardware boot capture - blocked on the user's permission (the capture
-     card is unplugged; a human at the TV is required).
-  4. Re-verify the release end-to-end if anything above lands.
+  3. The hardware boot capture - blocked on the user's permission.
 
 ### ⚠️ BUILD STATE
 `/tmp/cofout7/` = the SHIPPING payload built this run WITH the pool fix (COF +

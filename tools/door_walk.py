@@ -19,6 +19,9 @@ is the pool and is reached that way.
 """
 import importlib.util, json, os, struct, subprocess, sys, time
 
+RANK_OWNERS = '--rank-owners' in sys.argv   # the pre-run-99 ranking, for A/B
+SEATS_ONLY  = '--seats' in sys.argv         # dry-run the seat choice, no emulator
+
 D = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 JE = "/home/jvilla/Documents/Git/jag_openlara/cobweb/sim/target/release/jagemu"
 INST = "door"
@@ -113,6 +116,31 @@ def main():
                     best = f
             return best
         
+        # ☠️ EXCLUSIVITY IS THE WRONG QUESTION - "WHO WINS" IS THE RIGHT ONE.
+        # 8 seats came back UNTESTABLE because the point resolved into an
+        # overlapping room. Counting owners only asks whether anyone else is
+        # there; room_floor_mr does not care how many rooms supply a cell, it
+        # takes the LOWEST floor (largest +Y). So model that rule exactly:
+        #   0 the source room STRICTLY supplies the lowest floor -> the runtime
+        #     has no choice but to agree with the room we are testing
+        #   1 it ties (same height, so the seat is at the right level, but which
+        #     room the runtime attributes it to is not ours to decide)
+        #   2 another room is lower -> the seat WILL resolve elsewhere; this is
+        #     exactly the cell that produced every UNTESTABLE result
+        # Ranking on this instead of on ownership costs nothing and turns the
+        # unusable seats into usable ones wherever a strict winner exists.
+        def winrank(wx, wz):
+            v = cellval(r, wx, wz)
+            if v is None or v >= OPEN:
+                return 2
+            mine = struct.unpack('>h', struct.pack('>H', v))[0]
+            lowest = anyfloor(wx, wz)
+            if lowest is None or mine > lowest:
+                return 0                      # cannot happen, but do not rank it worst
+            if mine == lowest:
+                return 0 if owners(wx, wz) == 1 else 1
+            return 2
+
         def owners(wx, wz):
             n = 0
             for q in range(nroom):
@@ -123,8 +151,14 @@ def main():
 
         cands = []
         for sgn in (-1, 1):
-          for frac in (0.5, 0.3, 0.7, 0.15, 0.85):
-            for dist in (1300, 768, 1800):
+          # ☠️ THE CANDIDATE SET, NOT THE RANKING, IS WHAT LEAVES SEATS UNUSABLE.
+          # Re-ranking the same five fracs x three distances moved the count 9 -> 8
+          # across both levels: at those doorways the source room does not supply
+          # the winning floor at ANY candidate, so no ordering of them can help.
+          # Sweep finer and further instead - a seat only has to exist, and the
+          # rank keeps the doorway centre at the standard stand-off preferred.
+          for frac in (0.5, 0.3, 0.7, 0.15, 0.85, 0.4, 0.6, 0.22, 0.78, 0.08, 0.92):
+            for dist in (1300, 768, 1800, 1024, 1536, 512, 2048, 2300):
               mx = int(x0 + (x1 - x0) * frac)
               mz = int(z0 + (z1 - z0) * frac)
             # ☠️ FACE THE DOOR, NOT AWAY FROM IT. Forward is (SIN,COS): yaw 0
@@ -173,7 +207,8 @@ def main():
               # gym score went 10/12 -> 7/14. The centre of the doorway at the
               # standard stand-off is the right place to start from; exclusivity
               # and distance are tie-breakers, not the objective.
-              cands.append((owners(sx, sz) > 1, abs(frac - 0.5),
+              key = (owners(sx, sz) > 1) if RANK_OWNERS else winrank(sx, sz)
+              cands.append((key, abs(frac - 0.5),
                             abs(dist - 1300), sx, sz, yaw, fy))
         if cands:
             cands.sort()
@@ -182,6 +217,29 @@ def main():
             tests.append((r, dst) + cand)
     if limit:
         tests = tests[:limit]
+    # ☠️ --seats: DRY-RUN THE SEAT CHOICE, no emulator. Seat selection is pure
+    # geometry, so which seats a ranking picks - and whether each one will resolve
+    # to the room under test - is answerable offline in a second instead of a
+    # 20-minute boot-and-walk. That is what makes an A/B between rankings honest:
+    # the run that produced the OLD numbers is long gone, and re-deriving them by
+    # memory is how a "fix" gets credited with an improvement it did not make.
+    if SEATS_ONLY:
+        bad = []
+        for (r, dst, sx, sz, yaw, fy) in tests:
+            lowest, who = None, None
+            for q in range(nroom):
+                v = cellval(q, sx, sz)
+                if v is None or v >= OPEN:
+                    continue
+                f = struct.unpack('>h', struct.pack('>H', v))[0]
+                if lowest is None or f > lowest:
+                    lowest, who = f, q
+            if who != r:
+                bad.append((r, dst, who))
+        print("  ranking=%s: %d seats, %d will resolve to the WRONG room%s"
+              % ("owners" if RANK_OWNERS else "wins", len(tests), len(bad),
+                 (": " + ", ".join("%d->%d seats in %s" % b for b in bad)) if bad else ""))
+        return
     total_wall = sum(1 for (r, d, xs, ys, zs) in po.portals(pfx)
                      if not (min(ys) == max(ys) and min(xs) != max(xs) and min(zs) != max(zs)))
     print("%s: %d of %d wall-portals are WALKABLE AT FLOOR LEVEL and get tested"
@@ -213,10 +271,23 @@ def main():
             # point can resolve to a different room than the one being tested
             # (one test seated in room 12 while probing room 7). Report it as
             # UNTESTABLE rather than blaming the doorway.
+            # ☠️ A SEAT IN THE WRONG ROOM IS STILL A TEST - DO NOT THROW IT AWAY.
+            # 7 doorways (Caves 18->15, 18->23, 34->37; gym 7->9, 7->2, 8->10,
+            # 8->11) can NEVER be seated in the room under test: those rooms
+            # overlap and the OTHER room supplies the lower floor at every cell
+            # near the doorway, so room_floor_mr must resolve there. Re-ranking
+            # the candidates moved the count 9 -> 8 and sweeping 11 fracs x 8
+            # distances only reached 7 - proof the seat, not the ranking, is
+            # unreachable.
+            # But the question this tool asks is "can she walk through this
+            # doorway", and that does not depend on which of two overlapping
+            # rooms the runtime attributes her cell to. She is standing at the
+            # right PLACE, at the doorway's own floor height. So run the walk and
+            # judge it on whether she reaches `dst` - just say the seat drifted,
+            # so nobody reads the pass as cleaner than it is.
+            seat_note = ""
             if seated != r:
-                print("  --   %2d -> %-2d  UNTESTABLE: seat resolved to room %s"
-                      % (r, dst, seated), flush=True)
-                continue
+                seat_note = "  (seat resolved to room %s - overlapping rooms)" % seated
             # ☠️ LOG WHETHER SHE MOVED. "ended in the same room" has two very
             # different causes - she walked to the door and was refused, or she
             # never moved at all (facing a wall, wedged on the stand-off cell) -
@@ -279,7 +350,7 @@ def main():
                     got = dst
             if got == dst:
                 ok += 1
-                print("  ok   %2d -> %-2d" % (r, dst), flush=True)
+                print("  ok   %2d -> %-2d%s" % (r, dst, seat_note), flush=True)
             else:
                 fail += 1
                 # ☠️ ASK THE GAME WHY, DO NOT PREDICT IT. Three attempts to
@@ -318,7 +389,7 @@ def main():
                 elif "g_mvveto" not in syms:
                     why = "  (build without MVDIAG=1 - no reason available)"
                 print("  ☠️ FAIL %2d -> %-2d  saw %s, moved %d%s"
-                      % (r, dst, sorted(seen), moved, why), flush=True)
+                      % (r, dst, sorted(seen), moved, why + seat_note), flush=True)
     finally:
         ctl("release")
         srv.terminate()
