@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 88
+RUN: 89
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,88 +17,82 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ☠️☠️ `g_layaw` IS `uint8_t`, NOT 16-BIT. THE COMMENT SAYING OTHERWISE WAS WRONG.
+# ★ NEW RULE (user, 2026-08-17): **THE TURN ENDS WITH A REBOOT.**
+    "Each session now takes turns. Their turn is 5 minutes max before the Jaguar
+     is given up for the next session."  +  "Jaguar needs to be rebooted at end
+     of turn."
 
-    main.c:1106   static uint8_t g_layaw;   /* Lara heading (0..255) */
+`jag_gd.sh endturn` implements it (reboot-to-stub under a lease); the loop scripts
+carry a note that a rig cycle's last act must be that call. Leases were capped at
+300 s in run 86. Documented in `hw/GD_ACCESS.md` and pushed.
 
-Every yaw poke in the harness used `poke16`, on the strength of a long-standing
-`☠️☠️ YAW IS 16-BIT` note in `probe_spot.py`'s seat. That wrote the angle into
-`g_layaw` **and a stray zero into the following byte**. It survived only because
-the linker left padding there - `g_layaw 0x154dce`, `g_curroom 0x154dd0` - which is
-LUCK, not correctness, and the layout differs per build.
-★ It also "worked" for a second accidental reason: the 16-bit yaws the tests use
-convert exactly, `0xC000 -> 0xC0 = 192 = 270 degrees = -X`. Both tools now poke ONE
-byte (`poke8`), verified behaviourally identical: Caves doors 48 crossed / 6
-failed before and after.
-☠️ The original note was written after a REAL bug (a 32-bit poke stomping
-`g_curroom`) and the fix - halve the width - was one step short. **A comment that
-records a fix is not evidence of the type; check the declaration.**
+☠️☠️ **THE CONSEQUENCE CHANGES HOW WE VERIFY.** A ROM you upload **STOPS** at the
+end of your turn. "Upload now, look later" no longer exists - and that is exactly
+what we have been doing: `/tmp/cofout7` has been sitting on the board since run 75
+waiting for a verdict. It must now be **upload -> observe -> reboot, inside one
+5-minute turn**, which cannot be done at all without the capture permission
+(`jag_gd.sh capture`, refused by this session's classifier in run 75) unless a
+human is at the TV during that same 5 minutes.
+★ Reboot-to-stub is a good end state for a second reason: it leaves the board on
+the GameDrive menu, which is jag_resident's known-good oracle for "is the video
+chain alive" - it needs none of our code.
 
-### ☠️ I SHIPPED A FALSE EXPLANATION THIS RUN AND CAUGHT IT BY CONTRADICTION
-Reading `g_mvyaw` back gave 192, 64, 128 while the tests aim -16384, 16384,
--32768, so I added a "WHY: FACING - aimed X, actual Y" verdict. **Those are the
-same angles in different scales** (256 vs 65536 units per turn), so it fired on
-every failure - and it overrode 11->12's correct **DOOR shut**, a result runs 79
-and 82 had already proven. Caught only because it contradicted something known.
-Reverted; the yaw is now REPORTED with an explicit "DIFFERENT SCALES, do not
-infer" and never compared.
-⭐ **A new explanation that overturns an established one is a red flag, not a
-discovery.** Check it against what you already proved before believing it.
+# ✅✅ THE CAVES DOORS ARE FINISHED: 51 CROSSED, 3 EXPLAINED, ZERO DEFECTS.
+    11 -> 12  DOOR shut (its switch is in the same cell - correct)
+    25 -> 28  DOOR shut (correct)
+    25 -> 22  WALL (correct)
+Mansion: 9 crossed, 5 STEP UP. **Not one broken doorway on either level.**
 
-### ✅ CAVES DOORS - final, all six failures named
-    58 of 62 testable, **48 crossed**, 4 untestable seats
-    11 -> 12  DOOR shut   (its switch is in the same cell - correct)
-    25 -> 28  DOOR shut   (correct)
-    23 -> 18  STEP UP     (vault-height doorway - correct)
-    25 -> 22  WALL        (correct)
-    21 -> 18  nothing refused - she reaches room 22 instead  } the last 2
-    37 -> 34  nothing refused - she reaches room 36 instead  } genuinely open
-Mansion: 9 crossed, all 5 failures STEP UP (run 85). **Zero door defects.**
+### ★★★ TWO HARNESS BUGS FOUND BY THE LAST DOORS - both classic
+  1. **SAMPLING CANNOT WIN A RACE WITH GEOMETRY.** `door_walk` sampled `g_curroom`
+     every 60 fields (~330 units). Room 18 is a THIN TRANSIT room, narrower than
+     that: at Caves 21->18 she is in room 18 at one sample and room 22 at the next,
+     so the door she crossed never appeared and the test called it a failure.
+     Sampling 3x finer recovered one door and still missed this one.
+     ⇒ Fixed by asking the GAME: `g_roomseen`, a bitmask the ROM ORs every frame
+     (MVDIAG). Zero it, walk, read it - no race at all. Same "ask the subject"
+     move that classified the vetoes.
+  2. **A BITMASK MUST BE SIZED TO THE SET.** The first `g_roomseen` was ONE 32-bit
+     word for a **38-room** level: room 34 aliased onto bit 2, 36 onto 4, 37 onto 5.
+     It printed `saw [2,4,5,36,37]` for a walk nowhere near rooms 2/4/5 - nonsense
+     that could as easily have been believed as doubted. Widened to two words;
+     37->34 immediately passed.
 
 ### ⬜ NEXT
-  1. The last 2 Caves doors (21->18, 37->34). Both END UP IN A NEIGHBOURING ROOM
-     (22, 36), so she IS moving and crossing - just not through the door aimed at.
-     ☠️ Do NOT infer from `g_mvyaw` until the scale question is settled: read
-     `g_layaw` (uint8, 0..255) directly and compare against `aimed >> 8`.
-  2. Capture the hardware boot **if the user grants permission** (`jag_gd.sh
-     capture`, refused by this session's classifier in run 75). Capture WORKS now,
-     and it fits in one 5-minute turn. Do not route around it; do not ask a peer.
-  3. Wire `checkshot.py` into `build_conf.sh` and `release_play.py`.
-  4. Climb OUT of the pool; `HW_TESTCARD`; the 8 untestable seats.
+  1. **Capture the hardware boot if the user grants permission** - now it must be
+     upload+observe+reboot inside ONE 5-minute turn (see above).
+  2. Wire `checkshot.py` into `build_conf.sh` and `release_play.py`.
+  3. The 8 untestable seats (they resolve into an overlapping room); the ranking
+     prefers an exclusively-owned stand cell but needs a fallback.
+  4. Climb OUT of the pool; `HW_TESTCARD`.
 
-### ★ FROM THE PEERS - two things that bound our instruments
-  1. **jag_resident: colour/brightness thresholds on a PHOTOGRAPHED scene are
-     unreliable.** A skin-tone detector matched a wooden floor for 16.5k px; a
-     navy-clothing detector read zero with the character plainly on screen, because
-     warm lighting leaves blue-grey red-dominant. Structural readings survived
-     (header words, coarse whole-frame signatures); colour thresholds did not.
-     ⇒ In `checkshot.py`, the STRUCTURAL checks (size, distinct-luma count, right
-     column vs its neighbour, all-white) are the sound ones. The **`--baseline`
-     black% check is exactly the weak kind** - keep it, but never let it be the
-     only thing standing between a bad frame and a pass. A colour assertion on a
-     SYNTHETIC test card is fine; the target is generated, not observed.
-  2. **The 5-minute turn does not license splitting a measure cycle.** Reset ->
-     settle -> upload -> settle -> capture stays in ONE hold or you photograph
-     another project's picture. **Shrink the cycle, not the turn.** (Our leases
-     were audited and capped in run 86; `jaghw`'s own LEASE_MAX 600 s and
-     OWN_LEASE_MAX 7200 s still exceed the turn and are the user's call.)
+### ★ INSTRUMENT NOTES
+    MVDIAG=1 exposes g_mvveto/g_mvvetoz (which gate clause refused), the step
+    arithmetic (dx/spd/ticks/yaw) and **g_roomseen[2]** (rooms visited).
+    ☠️ `g_layaw` is `uint8_t` 0..255 - poke ONE byte (run 87).
+    ☠️ Anything read only by a debugger must be `volatile` or gcc deletes it.
+    ☠️ Symbol addresses are PER-BUILD.
+    ☠️ `checkshot.py`'s STRUCTURAL checks are the sound ones; its `--baseline`
+       black% is a colour/brightness threshold on an observed scene, which
+       jag_resident measured as unreliable - never let it be the only gate.
 
 ### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (50-59) · pickups (65) · mid-walk LOADING (67) ·
     caves black wedges (69) · caves room crossing (72) · gym room 18 (73/78) ·
     7 "dead doors" (74) · caves 11->12 + switch/door (79-82) ·
-    all 5 mansion door failures (85) · 4 of 6 Caves door failures (86-87)
+    all mansion door failures (85) · **all Caves door failures (86-88)**
 
 ### ✅ WHAT IS DONE
     climbing   CAVES 24/24 ledges, 6/6 walls · MANSION 24/24, 6/6
-    walking    CAVES 48 doors · MANSION 9 · zero defects either level
+    walking    CAVES 51 doors · MANSION 9 · zero defects either level
     swimming   the mansion POOL: enter, swim, room 18, renders correctly
     switches   fire, animate, open the door, and she walks through
     enemies    BEAR and WOLVES render on shipping flags
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
     frames     ASSERTED by tools/checkshot.py (selftest 5/5)
-    rig        every lease honours the 5-minute turn
-    release    /tmp/cofout7 - on the real Jaguar since run 75; verdict pending
+    rig        leases capped at the 5-minute turn; `jag_gd.sh endturn` reboots
+    release    /tmp/cofout7 - built and verified in the EMULATOR; the hardware
+               verdict now needs a capture inside one turn
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,

@@ -228,6 +228,12 @@ def main():
             # 9-11k units and finished in a THIRD room - she had gone through the
             # doorway and out the far side, so an end-state test scored a working
             # door as dead. Collect every room seen and pass if dst appears.
+            # ★ ASK THE GAME WHICH ROOMS SHE ENTERED. g_roomseen is a bitmask the
+            # ROM ORs every frame, so a room narrower than one sample cannot be
+            # missed. Zero it at the start of the walk; read it at the end.
+            if "g_roomseen" in syms:
+                poke("g_roomseen", 0)
+                ctl("poke", hex(syms["g_roomseen"] + 4), "0,0,0,0")   # word 1
             got = None
             seen = set()
             x0p, z0p = peek("g_lax"), peek("g_laz")
@@ -239,9 +245,15 @@ def main():
             # intent is "walk AT this door", so re-assert the yaw every step.
             yv = yaw & 0xFFFF
             ctl("input", "up")
-            for _ in range(5):
+            # ☠️ SAMPLE FINER THAN THE ROOM IS THICK. At 60 fields per sample she
+            # covers ~330 units, and a thin transit room is narrower than that:
+            # measured at Caves 21->18 she is in room 18 at one sample and room 22
+            # at the next, so the door SHE CROSSED never appeared in `seen` and the
+            # test called it a failure. 20 fields x 15 samples covers the same
+            # distance at 3x the resolution.
+            for _ in range(15):
                 ctl("poke", hex(syms["g_layaw"]), "%d" % ((yv >> 8) & 255))  # 8-bit yaw
-                ctl("run", 60, timeout=600)
+                ctl("run", 20, timeout=600)
                 cur = peek("g_curroom")
                 if cur is not None:
                     seen.add(cur)
@@ -250,6 +262,21 @@ def main():
                     break
             ctl("release")
             moved = abs((peek("g_lax") or 0) - (x0p or 0)) + abs((peek("g_laz") or 0) - (z0p or 0))
+            if "g_roomseen" in syms:
+                m0 = peek("g_roomseen") or 0
+                m1 = 0
+                for ln in ctl("peek", hex(syms["g_roomseen"] + 4), "--len", "4").split("\n")[::-1]:
+                    try:
+                        b = json.loads(ln).get("bytes")
+                    except Exception:
+                        continue
+                    if b:
+                        m1 = (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]
+                        break
+                m = (m1 << 32) | (m0 & 0xFFFFFFFF)
+                seen |= {b for b in range(64) if m >> b & 1}
+                if dst in seen:
+                    got = dst
             if got == dst:
                 ok += 1
                 print("  ok   %2d -> %-2d" % (r, dst), flush=True)

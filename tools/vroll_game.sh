@@ -17,6 +17,10 @@
 #      unless its calibration word decodes.
 set -uo pipefail
 cd "$(dirname "$0")/.."
+
+# ☠️ END THE TURN WITH A REBOOT (user, 2026-08-17). Whoever edits this loop:
+# the last thing a rig cycle does must be `jag_gd.sh endturn`, so the next
+# session does not inherit our ROM running on the board.
 GD="${GD:-$HOME/Documents/Git/jag_openlara/jag_gd.sh}"
 JAGHW="${JAGHW:-$HOME/Documents/Git/jaguar-shared/hw/jaghw}"
 export JAGHW_PROJECT=jag_openlara

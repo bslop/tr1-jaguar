@@ -901,6 +901,17 @@ static volatile int g_mvnx, g_mvdx, g_mvspd, g_mvticks, g_mvyaw;
    walking along. An instrument that answers about the wrong axis is worse than
    none: it reads as an exoneration. */
 static volatile int g_mvvetoz, g_mvnfz, g_mvdz;
+/* ★ EVERY ROOM SHE HAS BEEN IN, as a bitmask (bit r = room r), accumulated每
+   frame and cleared by the harness. Sampling g_curroom from outside CANNOT be
+   made reliable: a thin transit room is narrower than one sample's travel, so
+   Caves 21->18 read as a failure while she demonstrably passed THROUGH room 18
+   between two samples. Let the game record it and the race disappears. */
+/* ☠️ TWO WORDS - the Caves have 38 rooms and a 32-bit mask ALIASES: room 34
+   lands on bit 2, 36 on bit 4, 37 on bit 5. The first version printed
+   "saw [2,4,5,36,37]" for a walk that never went near rooms 2/4/5, which reads
+   as nonsense rather than as an overflow, and would have been believed as easily
+   as it was doubted. Size a bitmask to the SET, not to a convenient word. */
+static volatile uint32_t g_roomseen[2];
 #endif
 static int g_fwdblk;                  /* forward held but BLOCKED this frame
                                          (gates the auto-reach probe)      */
@@ -8234,6 +8245,9 @@ bootvid_entry:
                           (g_lafloor - nf3 > LARA_STEPUP)                     ? 4 : 5;
                       g_mvnfz = nf3; g_mvdz = nz - mz0;
                   }
+#endif
+#ifdef MVDIAG
+                  g_roomseen[(g_curroom >> 5) & 1] |= 1u << (g_curroom & 31);
 #endif
                   g_fwdblk = (mv > 0 && g_lax == mx0 && g_laz == mz0);
               }
