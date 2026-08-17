@@ -583,6 +583,20 @@ static int room_floor_mr(const uint8_t **rsect, int n, int wx, int wz, int *floo
     int r, found = 0, best = 0, best_w = 0;
     int nfound = 0, nbest = 0, nbestd = 0, nbest_w = 0;  /* Y-aware: CLOSEST reachable floor */
     int nbtier = 0;
+    /* ☠️☠️ THE RETURNED FLOOR AND `g_floorroom` CAME FROM DIFFERENT ROOMS.
+       Both selections below used to write g_floorroom directly, so whichever
+       ran LAST won - and the lowest-floor bookkeeping runs for every candidate,
+       including ones the Y-aware path rejects. Caves 18->21: room 18 supplies
+       4352 under her feet and room 22 supplies 6400 (2048 BELOW, through the
+       floor portal). The Y-aware path correctly keeps 4352, so she never drops
+       - but room 22 ran second, `fy > best` fired, and g_floorroom was left
+       reading 22. She keeps her footing at the right height and the game moves
+       her into the room below: measured, she walks 2253 units out of room 18,
+       is attributed to 22, and never reaches 21.
+       So each candidate now carries its own room and slope, and the attribution
+       is assigned ONCE, from whichever result is actually returned. */
+    int best_r = -1, best_slx = 0, best_slz = 0;
+    int nbest_r = -1, nbest_slx = 0, nbest_slz = 0;
     g_floorwater = 0;
     for (r = 0; r < n; r++) {
         const uint8_t *sp = rsect[r];
@@ -640,8 +654,8 @@ static int room_floor_mr(const uint8_t **rsect, int n, int wx, int wz, int *floo
         /* rooms overlap at portals: pick the LOWEST floor (largest Y, +Y down)
          * so Lara stands on the actual ground, not a phantom higher surface
          * from an adjoining room (that caused her to float near walls). */
-        if (!found || fy > best) { best = fy; best_w = w; found = 1; g_floorroom = r;
-                                   g_flr_slx = sxs; g_flr_slz = szs; }
+        if (!found || fy > best) { best = fy; best_w = w; found = 1; best_r = r;
+                                   best_slx = sxs; best_slz = szs; }
         if (fy >= g_flr_wy - (g_flr_upwin ? g_flr_upwin
                               : (g_flr_grab ? FLR_UPWIN_LEDGE : FLR_UPWIN_GROUND))) {
             /* prefer the floor CLOSEST to the caller's feet: picking the
@@ -669,14 +683,20 @@ static int room_floor_mr(const uint8_t **rsect, int n, int wx, int wz, int *floo
             else       {         tier = g_flr_grab ? 1 : 0; }
             if (!nfound || tier < nbtier ||
                 (tier == nbtier && d < nbestd)) {
-                nbest = fy; nbest_w = w; nbestd = d; nbtier = tier; nfound = 1; g_floorroom = r;
+                nbest = fy; nbest_w = w; nbestd = d; nbtier = tier; nfound = 1; nbest_r = r;
+                nbest_slx = sxs; nbest_slz = szs;
             }
         }
     }
-    if (nfound) { if (floorY) *floorY = nbest & ~1; g_floorwater = nbest_w; return 1; }
+    if (nfound) { if (floorY) *floorY = nbest & ~1; g_floorwater = nbest_w;
+                  g_floorroom = nbest_r;                  /* the room we RETURNED */
+                  g_flr_slx = nbest_slx; g_flr_slz = nbest_slz;
+                  return 1; }
     if (!found) return 0;
     if (floorY) *floorY = best & ~1;
     g_floorwater = best_w;
+    g_floorroom = best_r;
+    g_flr_slx = best_slx; g_flr_slz = best_slz;
     return 1;
 }
 

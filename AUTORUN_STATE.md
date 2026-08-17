@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 100
+RUN: 101
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,59 +17,59 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ NO DOORWAY IS UNTESTABLE ANY MORE (4 -> 0). ONE REAL DEFECT FELL OUT.
+# ✅✅ REAL GAME FIX: `room_floor_mr` RETURNED THE RIGHT FLOOR WITH THE WRONG ROOM.
 
-Caves, 58 wall-portals tested, before -> after this run:
+    CAVES    51 crossed / 7 FAILED   ->   **55 crossed / 3 FAILED**
+    MANSION                          ->   **15 of 18 crossed / 3 FAILED, 0 UNTESTABLE**
 
-    51 crossed   3 FAILED   4 UNTESTABLE      ->   51 crossed   7 FAILED   0 UNTESTABLE
+Nothing that passed before regressed (51 -> 55 is exactly the four doors fixed).
 
-Same 51 crossings, so no seat change broke a door that used to pass. The four
-UNTESTABLE became four verdicts:
+### THE BUG
+`room_floor_mr` runs TWO selections over the same candidate loop - the old
+"lowest floor wins" bookkeeping and the Y-aware "closest reachable floor" that
+actually supplies the answer - and **both wrote `g_floorroom` directly**, so
+whichever ran LAST won. The bookkeeping runs for every candidate, including ones
+the Y-aware path rejects.
 
-    11 -> 12   DOOR shut          explained, correct (needs its switch)
-    25 -> 28   DOOR shut          explained, correct
-    25 -> 22   moved 141          WEDGED on the stand-off cell - harness
-    18 -> 15   saw [22]           seat drifted into room 22 - harness, FLAGGED
-    18 -> 23   saw [22]           seat drifted into room 22 - harness, FLAGGED
-    34 -> 37   saw [36]           seat drifted into room 36 - harness, FLAGGED
-    18 -> 21   saw [18,22], 2253  ☠️ VALID SEAT, LEFT ROOM 18, NEVER REACHED 21
+Caves 18->21, measured cell by cell: room 18 supplies 4352 under her feet, room 22
+supplies **6400** (2048 BELOW, through the floor portal `18->22`, which spans
+z 47104..58368). The Y-aware path correctly keeps 4352 - she never drops - but
+rooms iterate ascending, room 22 ran second, `fy > best` fired, and `g_floorroom`
+was left reading **22**. `g_floorroom` is what drives the room transition, so she
+keeps her footing at the right height and **the game moves her into the room
+below**: 2253 units walked, out of room 18, attributed to 22, never reaches 21.
 
-### ⬜ NEXT: CAVES **18 -> 21** IS THE ONE REAL FINDING - CHASE IT
-It is the only failure with a seat the runtime agrees with. She walks 2253 units,
-leaves room 18, ends up in **22**, and never sees 21. Everything else on the list
-is either a door that is correctly shut or a seat the harness cannot place.
-Start from `tools/door_walk.py --prefix mrt --seats` (instant, no emulator) to see
-the seat, then MVDIAG's veto codes at that spot (1 WALL, 2 no floor, 3 DOOR shut,
-4 STEP UP, 5 nothing refused).
+☠️ This is a GAMEPLAY defect in the shipping build, not a harness one - anywhere
+an overlapping room supplies a lower floor, walking attributes Lara to the pit
+room under her feet. The door walk is just what finally made it observable.
 
-### ★ WHAT CHANGED IN THE TOOL, AND THE HONEST SIZE OF EACH PART
-1. **Seat ranking now models `room_floor_mr`** - it takes the LOWEST floor (largest
-   +Y), so rank on "does the source room WIN this cell", not on "is anyone else
-   here". ☠️ Measured offline, this alone moved unreachable seats **9 -> 8** across
-   both levels. Nearly a no-op, and worth saying so.
-2. **Candidate sweep widened** to 11 fracs x 8 distances x 2 sides: **8 -> 7**.
-   Also marginal. Together they proved the point: at those doorways the source
-   room does not supply the winning floor at ANY candidate, so no ordering and no
-   sampling density can seat them. **The seat was unreachable, not mis-chosen.**
-3. **THE ACTUAL FIX - stop discarding them.** A seat in an overlapping room is
-   still a test: she stands at the right PLACE and the right floor height, and
-   "can she walk through this doorway" does not depend on which of two
-   overlapping rooms the runtime attributes her cell to. So the walk now runs and
-   is judged on whether she reaches `dst`, with `(seat resolved to room N -
-   overlapping rooms)` printed on the result so a pass is never read as cleaner
-   than it is.
-4. **NEW `--seats` DRY RUN** - `tools/door_walk.py x x --prefix mrt --seats`
-   prints the chosen seats and which room each will resolve to, with no emulator,
-   in about a second. ☠️ This is what made the A/B above honest: the run that
-   produced the old numbers was gone, and re-deriving them from memory is how a
-   change gets credited with an improvement it did not make. `--rank-owners`
-   keeps the old ranking available for exactly that comparison.
+### THE FIX
+Each candidate now carries its own room AND slope (`best_r/best_slx/best_slz`,
+`nbest_r/nbest_slx/nbest_slz`); the attribution is assigned ONCE, at the end, from
+whichever result is actually returned. `g_flr_slx/g_flr_slz` had the identical
+defect - the slope came from the lowest floor even when a different room's floor
+was returned - and is fixed the same way.
 
-### ⬜ ALSO STILL OPEN
-  1. The gym walk has not been re-run with the fallback (4 drifted seats there:
-     7->9, 7->2, 8->10, 8->11). Same command, `--prefix gym`, on an AUTOGYM build.
-  2. `HW_TESTCARD`.
-  3. The hardware boot capture - blocked on the user's permission.
+### WHAT IS LEFT, AND WHAT EACH ONE IS
+    CAVES   11 -> 12   DOOR shut     correct - its switch is in the same cell
+    CAVES   25 -> 28   DOOR shut     correct
+    CAVES   25 -> 22   moved 141     WEDGED on the stand-off cell - harness
+    GYM      2 -> 5    STEP UP       correct - a vault, not a walk (run 84)
+    GYM      2 -> 6    STEP UP       correct
+    GYM      7 -> 9    saw [7,8]     ☠️ THE ONE UNEXPLAINED FAILURE LEFT
+
+### ⬜ NEXT
+  1. **GYM 7 -> 9** - the only unexplained door on either level. She moves 1245
+     units, leaves 7, ends in **8**, never reaches 9. Same method that cracked
+     18->21: `tools/door_walk.py x x --prefix gym --seats --door 7,9` (instant),
+     then walk the cells between the seat and the portal plane and see which room
+     supplies the winning floor at each one.
+  2. ☠️ **RE-RUN THE CLIMB CONFORMANCE.** This run changed the CORE floor query -
+     every movement, water and climb decision goes through it. The door walks are
+     a strong signal (73 doorways across two levels, nothing regressed) but they
+     do not exercise vault/grab, which is exactly what `g_flr_slx/slz` and the
+     LEDGE tier feed. Both levels were 24/24 ledges and 6/6 walls before.
+  3. Re-verify the release once 1 and 2 land.
 
 ### ⚠️ BUILD STATE
 `/tmp/cofout7/` = the SHIPPING payload built this run WITH the pool fix (COF +

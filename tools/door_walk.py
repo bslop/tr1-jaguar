@@ -225,6 +225,9 @@ def main():
     # memory is how a "fix" gets credited with an improvement it did not make.
     if SEATS_ONLY:
         bad = []
+        only = None
+        if '--door' in sys.argv:
+            only = tuple(int(v) for v in sys.argv[sys.argv.index('--door') + 1].split(','))
         for (r, dst, sx, sz, yaw, fy) in tests:
             lowest, who = None, None
             for q in range(nroom):
@@ -236,6 +239,9 @@ def main():
                     lowest, who = f, q
             if who != r:
                 bad.append((r, dst, who))
+            if only is None or only == (r, dst):
+                print("    %2d -> %-2d  seat (%d, %d, %d) yaw %-7d floor %-6d resolves to room %s%s"
+                      % (r, dst, sx, fy, sz, yaw, fy, who, "" if who == r else "  <- WRONG"))
         print("  ranking=%s: %d seats, %d will resolve to the WRONG room%s"
               % ("owners" if RANK_OWNERS else "wins", len(tests), len(bad),
                  (": " + ", ".join("%d->%d seats in %s" % b for b in bad)) if bad else ""))
