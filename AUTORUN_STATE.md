@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 53
+RUN: 54
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,66 +17,71 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ⬜ THE FACES DIE IN THE SCREEN-SPACE STAGE. 45% vs 5%, CONTROLLED.
+# ⬜ SCREEN-SPACE BUCKET IS SPLIT: XCULL OWNS ~1/5 OF IT, NOT ALL
 
-The kernel already had per-face counters and nobody had read them at the hole.
-They are raw DRAM addresses, not symbols:
+Run 52 localised the hole to the screen-space reject stage (45% of faces there
+vs 5% at a control). This run attacked the three rejects inside it - **area**,
+**XCULL**, **empty-y** - with the counters rather than by eye.
 
-    $1C0000 staged   $1C0004 rastered   $1C0010 bexit   $1C0014 worldcull
+    build: SKIP="HOPBOOT" EXTRA="HOLEVIS=1 HOPBOOT=4 CULLCOUNT=1 BEXCNT=1 WCCNT=1"
+    spot:  --at 35328,3072,39424,15,16384    control: --at 37376,-1280,50688,1,-16384
 
-and gpu_geotex.gas:1369 writes the attribution algebra itself:
+                              screen-space   drawn    uncovered (HOLEVIS)
+    baseline (VRESN=80)           45%         32%        32.9%
+    XCULL removed                 35%         41%        28.2%
+    VRESN off (120 lines)         40%          -         30.6%
 
-    total faces  = worldcull + staged
-    near-plane   = bexit
-    screen-space = staged - bexit - rastered      (area + XCULL + empty-y)
-    drawn        = rastered
+### ✅ XCULL owns about a fifth of the bucket - real, and not the whole story
+Removing it moves screen-space 45% -> 35%, drawn 32% -> 41%, and closes ~5 points
+of the hole. ☠️ Run 51 tested `SKIP=XCULL` and called it "no change" because the
+PICTURE barely moved (33.1%); with the counters the same build clearly shows 277
+faces/interval changing hands. **A cull can be guilty and invisible if another
+reject catches the same faces afterwards - judge culls by the counters, not the
+screenshot.**
 
-Build with `CULLCOUNT=1 BEXCNT=1 WCCNT=1` and read them with
-`probe_spot.py --raw=staged=0x1C0000 ...` (added this run).
+### ✅ RESOLUTION IS NOT THE DRIVER
+The run-52 handoff's top suspicion was empty-y via `VRESN=80` (much of the
+screen-space maths predates the 80-line band). Building at the full 120 lines
+leaves the gap at 30.6% and screen-space at 40%. Suspicion retired.
 
-### ★★★★★ THE MEASUREMENT, WITH A CONTROL
-Deltas over one 12-field step, same ROM, same method:
+### ☠️ `NOEMPTYY=1` PRODUCES A NON-RENDERING ROM - DO NOT TRUST IT
+The kernel's own empty-y diagnostic (the "SAFE VARIANT" that clamps y1=y0 rather
+than skipping, gpu_geotex.gas:1885) builds and boots with **illegal=0** but the
+GPU ends up halted and the screen is a flat luma-76 field. It cannot be used to
+test empty-y. ★ The first read of that run looked like a spectacular fix -
+"uncovered 0.0%" - because a dead ctl session returned a 64x1 frame and the
+counters all read -1. **Sanity-check the FRAME SIZE and the counter values before
+believing a result that good.**
 
-                      total   worldcull   near-plane   SCREEN-SPACE   drawn
-    HOLE   (room 15)   2774    309 11%     339 12%      1247  **45%**   879
-    CLEAN  (room 1)    1342    323 24%     486 36%        71    5%      462
+### ⬜ NEXT: A REAL COUNTER ON THE AREA CULL AND ON EMPTY-Y
+~35 of the 45 points are still unattributed between those two. The existing flag
+route is dead (above), so count them:
+  * copy the `bexcnt_stub` pattern at gpu_geotex.gas:4247 - it exists BECAUSE
+    counting inline blew a branch's +-15 word range, so expect the same and go
+    out-of-line from the start;
+  * free counter slots: $1C0008 and $1C000C are used by LARACOUNT, $1C0018 up
+    appears free - check before claiming one;
+  * area cull is around gpu_geotex.gas:1710-1790 (signed area over integer pixel
+    coords, plus the SUB-PIXEL SIGN GUARD and TINYCULL); empty-y at :1885.
+Then re-run the two spots. Whichever sub-bucket carries the ~35 points is the bug.
 
-**Nine times the screen-space rejection rate at the hole.** Every other bucket is
-proportionally NORMAL or lower there. That is the stage, and it is the first
-number in this whole hunt that discriminates - runs 50-51 produced seven
-measurements that were all identical by construction.
-☠️ A number without a control is not evidence: 45% alone means nothing until you
-know a clean spot reads 5%. Take the control in the SAME ROM and the same way.
+### ✅ RULED OUT WITH NUMBERS (runs 50-53) - DO NOT RE-TEST
+    ALLVIS · room-level XCULL · NEARLOW · SLIVER cull · HOPBOOT/hop cull ·
+    missing portal · missing geometry · undrawn rooms · VRESN/resolution
+At `HOPBOOT=4` every visible room IS submitted (`g_visrooms == g_drewrooms`) and
+the gap barely moves: the rooms are drawn, the faces inside them are not.
 
-### ⬜ NEXT: SPLIT THE SCREEN-SPACE BUCKET
-It is three rejects wearing one number - **area**, **XCULL**, **empty-y**. Add a
-counter to each (copy the `bexcnt_stub` pattern at gpu_geotex.gas:4247, which
-exists because counting inline blew a branch's +-15 word range - expect the same
-and use a stub). Then re-run the two spots above; whichever sub-bucket carries
-the 45% names the bug.
-★ Prior suspicion worth testing first: **empty-y**. We render `VRESN=80` and much
-of the screen-space maths was written for 240/120 lines, so a face whose
-projected Y span rounds to empty is the failure mode most likely to be
-resolution-dependent - and the hole IS a horizontal band with a hard top edge
-pinned at row 36 of 80 that grows downward as she approaches.
-★ The spot: `--at 35328,3072,39424,15,16384` on an AUTOGYM ROM; control
-`--at 37376,-1280,50688,1,-16384`. Gap ~33% of screen under `HOLEVIS=1`.
-
-### ✅ RULED OUT, WITH NUMBERS (runs 50-52) - DO NOT RE-TEST
-    ALLVIS · XCULL (room-level) · NEARLOW · SLIVER cull · HOPBOOT/hop cull ·
-    missing portal · missing geometry · undrawn rooms
-The last one is the strongest: at `HOPBOOT=4` every visible room IS submitted
-(`g_visrooms == g_drewrooms`) and the gap only moves 32.9% -> 31.9%. The rooms
-are drawn; the faces inside them are not.
-
-### ★ INSTRUMENTS (runs 50-52, all off in shipping builds)
+### ★ INSTRUMENTS (all off in shipping builds)
     DREWVIS=1                     g_visrooms / g_drewrooms room bitmasks
-    CULLCOUNT=1 BEXCNT=1 WCCNT=1  the four per-face counters above
+    CULLCOUNT=1 BEXCNT=1 WCCNT=1  per-face counters, RAW DRAM:
+                                  $1C0000 staged  $1C0004 rastered
+                                  $1C0010 bexit   $1C0014 worldcull
+                                  total = worldcull + staged
+                                  screen-space = staged - bexit - rastered
     probe_spot.py --raw=N=0xADDR  read raw DRAM alongside symbols
     probe_spot.py --set=SYM=VAL   force a variable after seating
     build_conf.sh EXTRA= / SKIP=  add / REMOVE flags for an A/B
-☠️ The DREWVIS masks ACCUMULATE (probe_spot zeroes them at the seat). The face
-counters accumulate too - always take DELTAS between steps, never absolutes.
+☠️ All counters ACCUMULATE - take DELTAS between steps, never absolutes.
 
 ### ✅ STILL TRUE — climbing is closed (runs 46-49)
     CAVES    LEDGES 24/24   WALLS 6/6 refused   0 black outliers
