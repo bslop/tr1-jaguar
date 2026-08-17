@@ -912,6 +912,11 @@ static volatile int g_mvvetoz, g_mvnfz, g_mvdz;
    as nonsense rather than as an overflow, and would have been believed as easily
    as it was doubted. Size a bitmask to the SET, not to a convenient word. */
 static volatile uint32_t g_roomseen[2];
+/* run 91: the pool climb-out never fires. Its condition reads fy2 and
+   g_floorwater at the cell AHEAD of her, so record BOTH rather than reasoning
+   about what room_floor_mr returns while swimming - the standing suspicion is
+   that it hands back room 18's pool BOTTOM instead of room 14's deck. */
+static volatile int g_wfy2, g_wfw, g_wlay, g_wwatery;
 #endif
 static int g_fwdblk;                  /* forward held but BLOCKED this frame
                                          (gates the auto-reach probe)      */
@@ -8093,6 +8098,10 @@ bootvid_entry:
                       int nz = g_laz + (int)(((int32_t)COS(g_layaw)*28)>>16);
                       int fy2;
                       if (room_floor_mr(rsect, roomCount, nx, nz, &fy2)) {
+#ifdef MVDIAG
+                          g_wfy2 = fy2; g_wfw = g_floorwater;
+                          g_wlay = g_lay; g_wwatery = g_watery;
+#endif
                           /* climb out: at the surface, pushing onto a deck
                              just above the water line */
                           if (!g_floorwater && g_lay <= g_watery + 64 &&

@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 91
+RUN: 92
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,62 +17,70 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ☠️☠️ YOU CAN GET INTO THE MANSION POOL BUT NOT OUT OF IT.
+# ☠️ POOL CLIMB-OUT: THREE OF FOUR CONDITIONS PASS. SHE FLOATS ABOVE THE DECK.
 
-Swimming IN works (run 78). Climbing OUT does not, in either configuration tested.
-For a demo that is a trap: fall in and the only exit is a reset.
+Instrumented the climb-out test itself (`MVDIAG` now records `g_wfy2`, `g_wfw`,
+`g_wlay`, `g_wwatery` inside the water block) and read it while she swims at the
+deck. The condition is
+    !g_floorwater && g_lay <= g_watery+64 && fy2 < g_lay && fy2 >= g_watery-900
+and the measurement is unambiguous:
 
-    seat in the pool, swim at the deck, hold UP (and UP+ACTION):
-    she swims to the pool wall and STOPS, `g_swim` stays 1, room stays 18.
+    floorwater = 0        ✓ passes
+    g_lay 3168 <= 3200    ✓ passes
+    fy2 3328 >= 2236      ✓ passes
+    **fy2 3328 < g_lay 3168   ✗ FAILS** - the deck is BELOW her, not above
 
-### ✅ TWO FACTS ESTABLISHED (not inferred)
-  1. **`g_watery` is derived from where she ENTERED, not from the water surface.**
-     main.c has two entry paths - `g_watery = sfy` (the surface cell) and a
-     fallback `g_watery = g_lay - 96`. She hits the fallback, so the water line
-     read **3232** while the sector data puts the real surface at **3584** (room
-     14's cells over the pool read floor 3585; bit 0 is the water-surface mark).
-     She therefore floats ~350 units too high - ABOVE the 3328 deck she is trying
-     to climb onto.
-  2. **Forcing the true water line is NOT sufficient.** With
-     `set:g_watery=3584, set:g_lay=3584` she floats correctly at 3584 and swims
-     the length of the pool - straight PAST the deck row at z=57856 - to the room
-     boundary at 57348, and the climb-out still never fires.
+She floats at **3168** while the pool deck is at **3328**. +Y is down, so she is
+riding ~160 units ABOVE the deck she is trying to climb onto. Nothing else blocks.
 
-### ☠️ THE CLIMB-OUT CONDITION, for whoever takes this (main.c ~8098)
-    if (!g_floorwater && g_lay <= g_watery + 64 &&
-        fy2 < g_lay && fy2 >= g_watery - 900)
-With the forced water line all four LOOK satisfiable at the deck (fy2 3328 is
-above her 3584; 3328 >= 2684; 3584 <= 3648; the deck cell is even so not water).
-⬜ **HYPOTHESIS, UNTESTED - do not record it as the cause:** `fy2` may not be the
-deck at all. `room_floor_mr` is called with the swim-time `g_flr_limit` still set,
-so the search may be restricted to reachable rooms and return room 18's own
-**pool bottom (5632/6144)** instead of room 14's deck - and 5632 is BELOW her, so
-`fy2 < g_lay` fails and she swims on. Note the successful-climb branch explicitly
-clears `g_flr_limit = 0`, which is a hint that it matters here.
-★ **Do not read the source and reason about it - instrument it.** Add `fy2` and
-`g_floorwater` to MVDIAG inside the water block and read them while she swims past
-the deck. That is one build and one probe, and it has settled every one of these.
+### ☠️ MY RUN-90 HYPOTHESIS IS DISPROVEN - `fy2` IS THE DECK
+I suspected `room_floor_mr` was handing back room 18's pool BOTTOM (5632) because
+the swim-time room limit was still set. **It is not: fy2 reads 3328, the correct
+deck.** It was labelled UNTESTED in the handoff, which is the only reason it cost
+nothing. Keep labelling them.
 
-### ⬜ NEXT
-  1. The pool climb-out (above) - a real defect, and the only one currently open.
-  2. Capture the hardware boot **if the user grants permission**. ☠️ Now
-     upload -> observe -> `jag_gd.sh endturn` inside ONE 5-minute turn, because an
-     uploaded ROM stops at turn end.
-  3. The 8 untestable door seats; `HW_TESTCARD`.
+### ☠️ AND `g_watery` DOES NOT CONTROL HER FLOAT HEIGHT
+Forcing `g_watery = 3584` (the true surface, from room 14's cells over the pool)
+leaves her y at **3168, unchanged**, still swimming. So run 90's "the water line
+is derived from the entry point" is real but is NOT sufficient to explain the
+failure - there is a second mechanism pinning her float height, and
+`if (g_lay < g_watery) g_lay = g_watery;` in the water block demonstrably does not
+fire (3168 < 3584 would push her to 3584 and does not).
 
-### ⚠️ `/tmp/conf.cof` IS A **NOEMPTYY (BROKEN)** BUILD from run 89's falsification
-Rebuild before use. `/tmp/gym.cof` is a good MVDIAG build.
+### ⬜ NEXT: FIND WHAT PINS `g_lay` AT 3168 WHILE SWIMMING
+That is the whole remaining question. Record `g_lay` at the TOP and BOTTOM of the
+water block (two more MVDIAG ints) and see whether it is set before the clamp, or
+the clamp's branch is not reached, or something after the block overwrites it.
+☠️ Do not reason about it from the source - two source-derived hypotheses have now
+been wrong in a row (the pool-bottom fy2, and g_watery as the float height).
+
+### ☠️☠️ I TRIPPED THE PER-BUILD SYMBOL RULE AGAIN, AND IT NEARLY COST THE RESULT
+I reused `g_swim`'s address from the PREVIOUS gym build and read **swim=0** while
+she was plainly swimming - a clean, plausible number that would have supported
+"she is not in the swim state at all". Re-derived from the ELF under test: swim=1
+throughout. **Every address in a probe must come from the ELF of the build being
+probed**; this is the third time and the failure always looks like a result.
+
+### ⬜ ALSO OPEN
+  1. Capture the hardware boot **if the user grants permission** - now
+     upload -> observe -> `jag_gd.sh endturn` inside ONE 5-minute turn.
+  2. The 8 untestable door seats; `HW_TESTCARD`.
+
+### ⚠️ BUILD STATE
+`/tmp/gym.cof` = good MVDIAG build WITH the water diagnostics (this run).
+`/tmp/conf.cof` = still the NOEMPTYY (broken) build from run 89 - rebuild first.
 
 ### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (50-59) · pickups (65) · mid-walk LOADING (67) ·
-    caves black wedges (69) · caves room crossing (72) · gym room 18 exists (73) ·
-    swimming IN (78) · 7 "dead doors" (74) · caves 11->12 + switch/door (79-82) ·
+    caves black wedges (69) · caves room crossing (72) · swimming IN (78) ·
+    7 "dead doors" (74) · caves 11->12 + switch/door (79-82) ·
     all mansion door failures (85) · all Caves door failures (86-88)
 
 ### ✅ WHAT IS DONE
     climbing   CAVES 24/24 ledges, 6/6 walls · MANSION 24/24, 6/6
     walking    CAVES 51 doors · MANSION 9 · zero defects either level
-    swimming   enter/swim/room 18/renders - ☠️ but NO EXIT (above)
+    swimming   enter/swim/room 18/renders - ☠️ NO EXIT, cause narrowed to one
+               failing condition and one unexplained pinned value
     switches   fire, animate, open the door, and she walks through
     enemies    BEAR and WOLVES render on shipping flags
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
