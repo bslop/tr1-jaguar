@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 38
+RUN: 39
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,59 +17,52 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ BOTH LEVELS SWEPT. THE CONFORMANCE PICTURE THE USER ASKED FOR.
+**✅ LARA'S HOME HAD THE SAME COLLISION BUG AS THE CAVES — NOW PATCHED.**
 
-### ☠️ The mansion's "0/10 climbed" (run 36) was MY BUILD FLAG
-I put `PADMUTE=1` in the AUTOGYM flags. It mutes the pad, so driven input did
-nothing — she did not move **at all**, not even X/Z. Caught by driving one spot
-by hand instead of believing the table. Rebuilt without it: **7/10 immediately**.
-★ Fourth false defect from an instrument in this project. The tell was that a
-UNIFORM failure had a UNIFORM cause.
+The mansion had **160 of 1285 walkable cells (12.5%) with no mesh over them** —
+the identical wall-border ring the Caves had (350/2424 = 14.4%) — because
+`floor_coverage.py --patch` had only ever run on the `mrt` prefix.
+`--prefix gym` added (scan AND patch, and the patch message now names the file
+it actually wrote instead of hardcoding "mrt_sect.bin"). Wired into
+`build_cof.sh`, unconditionally: under GYMSD the gym data is not linked so it is
+harmless, and the moment GYMSD comes off it is already right.
 
-### CAVES (26 spots, run 32 — still valid)
-    WALKUP   (256)   6/6 ✅      CLIMB2 (512)  5/6 ✅
-    CLIMB3   (768)   5/6 ✅      JUMPGRAB 1024/1536  4/4 ✅
-    JUMPGRAB (1792)  0/2 ⬜ harness only does a standing pull-up; TR1 needs a
-                            RUNNING JUMP here. Not a defect until it can jump.
-    WALL     (2048)  0/2 ✅ correctly refuses
-    => 20/26 CLIMBED, 2 PARTIAL, 4 NO-CLIMB
+### It fixed the worst void outright
+    before   room 0 WALL   97.2% and 77.4% black   <- worst seen anywhere
+             10 spots over the 17.4% baseline
+    after    room 0 GONE from the list entirely
+             WALL spots that read 32-37% now read 7.4-9.3%
+             7 spots over baseline, ALL in room 12
+★ The census self-corrected 30 -> 26 spots as the walled cells stopped
+generating tests — the same self-validating signal the Caves patch gave.
 
-### LARA'S HOME (30 spots, this run — FIRST EVER)
-    WALKUP/CLIMB2/CLIMB3  mostly ✅ (CLIMB3 768 climbs exactly in rooms 1 and 8)
-    JUMPGRAB (1024)  3/6 ✅
-    WALL (2560/2816) 0/6 ✅ correctly refuses
-    => 17/30 CLIMBED, 3 PARTIAL, 10 NO-CLIMB (6 of them the correct WALL refusals)
+### MANSION NOW: 16/26 CLIMBED, 4 PARTIAL, 6 NO-CLIMB (2 are correct WALL refusals)
 
-### ⬜ THE REAL FAILURES TO FIX — 4 spots where she FELL instead of climbing
-Negative rise means she lost height where a ledge was expected:
-    CLIMB2   room 1   rose  -18   floor 1280
-    CLIMB3   room 8   rose -512   floor 1792
-    JUMPGRAB room 8   rose -768   floor 2048   (x2)
-Note all four end on a POSITIVE floor while their climbing neighbours end
-negative (-1536 / -1792) — so she is dropping to a different surface entirely.
-**Start here**: drive one by hand with telemetry and watch where the fall begins.
+### ⬜ WHAT IS LEFT, IN PRIORITY ORDER
+1. **Room 12 is the remaining black spot** — 22.4-38.0% across 7 samples
+   (CLIMB3 x3, JUMPGRAB x4). It survived the border-ring patch, so it is either
+   an INSIDE-the-bbox hole (like Caves room 22 cell 17,11) or genuinely dark.
+   Check with `floor_coverage.py --prefix gym --faces` (opt-in) and by driving.
+   ☠️ Walling face-holes is the WRONG remedy — it broke nothing here but the
+   remedy for a hole is GEOMETRY.
+2. **Four spots where she FALLS instead of climbing** (JUMPGRAB room 8 rose
+   -768 x2, CLIMB3 room 8 -512, CLIMB2 room 1 -18). All end on a POSITIVE floor
+   while their climbing neighbours end negative — she drops to a different
+   surface. Drive one by hand with telemetry and find where the fall starts.
+3. **The mansion never got the BOUNDARY patch either.**
+   `mrt_boundary_audit.py` hardcodes `mrt_sect.bin` and reads LEVEL1.PSX; it
+   would need a prefix + `TRLEVEL=GYM.PSX` to cover Lara's Home. The Caves got
+   403 cells from it, so the mansion probably has an equivalent set.
+4. Jump drive for JUMPGRAB (Caves 1792, mansion 1024s).
 
-### ⬜ BLACK-SCREEN OUTLIERS IN THE MANSION (baseline max is 17.4%)
-    room 0  WALL      97.2%  and 77.4%   <- strongest void signature yet
-    room 12 JUMPGRAB  33.8 - 38.3%  (x4)
-    room 3/4/5 WALL   32.8 - 37.3%
-Frames in `/tmp/gymall/s0NN.png`. Room 0 at 97% is the same signature as the two
-collision voids already fixed in the Caves — check it with
-`floor_coverage.py --prefix gym` (the reader now masks the water flag, so it
-works on the mansion).
+### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
+`beb2c15` does NOT fix the jcc68k regression. `tools/toolchain_smoke.sh` guards
+updates (baseline black 1.1%, 1,292,812 B).
+Working ROMs: `/tmp/conf.cof` (Caves), `/tmp/gym.cof` (mansion, AUTOGYM, **no
+PADMUTE** — that flag mutes the pad and reads as "nothing climbs").
 
-### Toolchain — STILL PINNED to 59e5896
-`beb2c15` does NOT fix the jcc68k regression. Build everything with
-`COBWEB_DIR=/tmp/cobweb-old`. `tools/toolchain_smoke.sh` guards updates
-(baseline black 1.1%, ROM 1,292,812 B).
-☠️ Working ROMs: `/tmp/conf.cof` (Caves) and `/tmp/gym.cof` (mansion, AUTOGYM,
-**no PADMUTE**), both 1,538,508 B.
-
-### Also open
-⬜ Add a jump drive to `conformance.py` (JUMPGRAB 1792 + the mansion 1024s).
-⬜ Room 22 cell (17,11) in the Caves is a REAL geometry hole (zero faces,
-60-73% black at every yaw). Walling is the WRONG remedy — `--faces` is opt-in.
-⬜ Compare against `res/` PSX footage (Part 2 = Caves, 3m20 -> 23m24).
+### Caves status (run 32, valid)
+20/26 CLIMBED. ⬜ Room 22 cell (17,11) is a real geometry hole.
 
 ### ⬜ AWAITING THE USER (run-25 checkpoint)
   1. Capture card replugged? 2. Ship Lara's Home? 3. Release or keep polishing?

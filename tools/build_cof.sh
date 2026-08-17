@@ -181,6 +181,14 @@ TRLEVEL="$PSX/LEVEL1.PSX" python3 tools/mrt_boundary_audit.py --patch 2>&1 \
 say "Patching collision coverage (standable cells with no mesh)"
 python3 tools/floor_coverage.py --patch 2>&1 | tail -2 \
     || echo "   note: floor_coverage patch failed"
+# ☠️ LARA'S HOME NEEDS IT TOO, AND NEVER GOT IT. The mansion has 160 of 1285
+# walkable cells (12.5%) with no mesh over them - the same wall-border ring as
+# the Caves - because this pass only ever ran on the `mrt` prefix. Room 0's
+# share of them is where a driven sweep found a 97%-black standing spot.
+# Runs unconditionally: under GYMSD the gym data is not linked, so patching its
+# sector file is harmless, and the moment GYMSD comes off it is already right.
+python3 tools/floor_coverage.py --prefix gym --patch 2>&1 | tail -1 \
+    || echo "   note: floor_coverage gym patch failed"
 
 say "Atlas patches (doors, pickups, pistols, enemy skins)"
 for patch in MRT_DOORPATCH MRT_PICKPATCH MRT_GUNPATCH; do
