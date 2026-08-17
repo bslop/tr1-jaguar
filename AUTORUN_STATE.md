@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 27
+RUN: 28
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,56 +17,61 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**✅✅ FULL RELEASE RE-VERIFIED from the disc, with all three recipe changes.**
-`tools/build_cof.sh` -> `/tmp/cofout2`, ~18 min.
+**✅ TASK #8 (IVY-ROOM BLACKNESS) LOOKS FIXED — a SECOND collision class found
+by driving, not by reading.**
 
-    OPENLARA.COF 1,538,236 B    __bss_end 0x1E0A30 = 112,080 B UNDER the guard
-    boots in jagemu off its own SD card: EIDOS -> CORE logo, illegal=0
+Room 11 *is* the ivy room (its foliage is visible in the frame). Driving it
+before the fix:
 
-**★★★ THE ASSET PIPELINE IS BIT-FOR-BIT REPRODUCIBLE.** All five hashes match
-the run-12 build exactly, from an independent full run:
+    walk1..3  Z 56832 -> 59348   black 0.1 - 3.1%    fine
+    walk4..6  STUCK at Z 59348   black 53.5%         <- walked into a void
 
-    fe150ad3b1458e13fb3e017ebcd12ea6  CAVES.JV
-    2068149d3f2c147035dfae4467beef59  CORE.JV
-    e40b6096b980c366fafc52323c21d493  EIDOS.JV
-    973a4a7ebee1892a2b363eabb7231a13  INTRO.JV
-    2ce85536c4f3ec71c2b3bb84bc25a365  MUSIC.PCM
+Z 59348 is cell (2,4), which reads **floor 6400 / ceiling 6400 — ZERO
+HEADROOM**. Collision let her walk into a cell with no vertical space and no
+geometry. Same visible symptom as the border-ring floors, different cause.
 
-And every fix reproduces from a FRESH extraction rather than surviving as
-hand-edited state (which matters: `mrt_sect.bin` and `mrt_entex.h` are
-regenerated every build):
+Level-wide: **38 zero-headroom + 2 inverted (ceiling below floor) = 40 cells**
+of 2074 walkable. `floor_coverage.py` now scans for those too and the patch
+walls them. After:
 
-    boundary patch   403 cells -> 0x7FFE   size 24720 unchanged
-    coverage patch   350 cells -> 0x7FFF   size 24720 unchanged   (correct order)
-    enemy skins      553 faces, 0 untextured, atlas 373,248 B
-    gym_lskin guard  "alias valid, saves 110016 B"
+    walk1..6  stops cleanly at Z 58356 (the real wall)   black 1.7%
+
+★ **Conservative on purpose**: only headroom <= 0 is walled. Lara needs ~762
+units to stand, so small-positive-headroom cells are also unstandable — but TR1
+has legitimate crawlspaces and walling those would change level topology on a
+guess. Zero-or-inverted is certain; anything tighter needs evidence first.
+
+★ **This was found by DRIVING, after two static scans had both come back
+clean.** The bbox scan said 0 remaining and the level still had a black hole.
+Static analysis found the first class; only walking into it found the second.
+
+`tools/build_cof.sh` already calls `floor_coverage.py --patch`, so the new pass
+is in the release chain automatically — **no extra wiring, but the run-26
+release ROM predates it.**
 
 ### What to do next
-1. **Task #8 (ivy drop)** — the last open gameplay bug. Use the driven telemetry
-   method; expect it fixed by the coverage patch. If blackness remains there it
-   is an INSIDE-the-bbox hole and needs the per-face pass (2).
-2. ⬜ **Per-face coverage pass** — `floor_coverage.py` flags only cells outside
-   the mesh bbox (certain, but a LOWER BOUND). Build it only if a symptom
-   survives; do not speculatively broaden the patch.
-3. **Rebuild the container** and diff against `/tmp/cofout2` — the image is
-   pinned at `COBWEB_REV=59e5896` and predates RCLIPFIX + the coverage patch.
-4. **RIG, batched** — `PHRASEDST=1` yes/no (only silicon-blocked question),
-   title-music, enemy skins, mansion, PHRASECLEAR, RCLIPFIX, collision fix.
+1. **Re-run `tools/build_cof.sh`** — the run-26 output (`/tmp/cofout2`) does NOT
+   contain the headroom fix. ~18 min. Assets will be bit-identical again
+   (proven in run 26); only the ROM should move.
+2. **Drive more rooms.** Two collision classes have now been found by walking
+   and neither by static scan alone. The cheap sweep: spawn at a valid cell in
+   each of the 38 rooms, hold UP, and log `black%` per step — anything that
+   spikes above ~10% while she is stuck is another one.
+3. ⬜ Per-face coverage pass — only if a symptom survives (2).
+4. **RIG, batched** — `PHRASEDST=1` yes/no, title-music, enemy skins, mansion,
+   PHRASECLEAR, RCLIPFIX, both collision passes.
 
 ### ⬜ AWAITING THE USER (run-25 checkpoint, still unanswered)
-Do not act on these unilaterally:
-  1. Can the capture card be replugged? (biggest unblock)
-  2. Ship Lara's Home in the release? (fits, works, costs 254KB)
-  3. Is this the release, or keep polishing?
-Nothing is pushed to `origin` (public `tr1-jaguar`). Keep it that way.
+  1. Capture card replugged? 2. Ship Lara's Home? 3. Release or keep polishing?
+Nothing pushed to `origin` (public `tr1-jaguar`). Keep it that way.
 
 ### Reference — offline movement telemetry (no rig needed)
     jagemu serve --rom <rom> --instance N ; ctl N run 1250
     ctl N input up | up,b | release ; ctl N run 15..40 between samples
-    symbols are PER-BUILD - read them from that arm's own `nm`.
-☠️ Room blob header is 16 B (`>HHHHH` then `>hhh`), verts at +16 as `>hhhH`;
-sector cell is `floor:h, ceiling:h, slantX:b, slantZ:b`.
-☠️ Hold UP+B through the WHOLE pull-up; releasing aborts it mid-climb.
+    ctl N frame out.png  -> measure black% ; symbols are PER-BUILD (`nm`).
+☠️ Room blob header 16 B (`>HHHHH` then `>hhh`), verts +16 as `>hhhH`;
+sector cell `floor:h, ceiling:h, slantX:b, slantZ:b`; Y grows DOWN so
+headroom = floor - ceiling.
 
 ---
 
