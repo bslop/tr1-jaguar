@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 54
+RUN: 55
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,59 +17,64 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ⬜ SCREEN-SPACE BUCKET IS SPLIT: XCULL OWNS ~1/5 OF IT, NOT ALL
+# ☠️☠️ THE HOLE IS NOT FACE REJECTION. THE 45% WAS A CORRELATE, NOT A CAUSE.
 
-Run 52 localised the hole to the screen-space reject stage (45% of faces there
-vs 5% at a control). This run attacked the three rejects inside it - **area**,
-**XCULL**, **empty-y** - with the counters rather than by eye.
+Run 52 localised the hole to the screen-space reject stage on a controlled 45%
+vs 5%. That correlation was real and it was **not causal**. Only intervening
+settled it.
 
-    build: SKIP="HOPBOOT" EXTRA="HOLEVIS=1 HOPBOOT=4 CULLCOUNT=1 BEXCNT=1 WCCNT=1"
-    spot:  --at 35328,3072,39424,15,16384    control: --at 37376,-1280,50688,1,-16384
+    build: SKIP="HOPBOOT XCULL"
+           EXTRA="HOLEVIS=1 HOPBOOT=4 ALLVIS=1 NOBFCULL=1 CULLCOUNT=1 BEXCNT=1 WCCNT=1"
+    spot:  --at 35328,3072,39424,15,16384
 
-                              screen-space   drawn    uncovered (HOLEVIS)
-    baseline (VRESN=80)           45%         32%        32.9%
-    XCULL removed                 35%         41%        28.2%
-    VRESN off (120 lines)         40%          -         30.6%
+                          screen-space   drawn    uncovered
+    baseline                  45%         32%      32.9%
+    XCULL off                 35%         41%      28.2%
+    screen-backface off       26%         55%      29.2%
+    ALLVIS + hop 4            --           --      33.0%
+    ALL OF THE ABOVE           7%         61%      26.1%
 
-### ✅ XCULL owns about a fifth of the bucket - real, and not the whole story
-Removing it moves screen-space 45% -> 35%, drawn 32% -> 41%, and closes ~5 points
-of the hole. ☠️ Run 51 tested `SKIP=XCULL` and called it "no change" because the
-PICTURE barely moved (33.1%); with the counters the same build clearly shows 277
-faces/interval changing hands. **A cull can be guilty and invisible if another
-reject catches the same faces afterwards - judge culls by the counters, not the
-screenshot.**
+**Screen-space rejection falls 45% -> 7% - the clean-room rate - and drawn faces
+nearly double, and the hole closes only 7 of its 33 points.** Frame saved at
+`/tmp/hole_maxcoverage.png` (320x80, upscale 3x). A quarter of that screen has no
+geometry submitted that would cover it, no matter what you stop culling.
+★ A view containing a big empty region ALSO contains lots of edge-on and distant
+faces, which is why the reject rate tracked the hole without causing it. **A
+correlation that survives a control can still not be the cause - the only test
+that settles it is removing the suspect and seeing whether the effect moves.**
 
-### ✅ RESOLUTION IS NOT THE DRIVER
-The run-52 handoff's top suspicion was empty-y via `VRESN=80` (much of the
-screen-space maths predates the 80-line band). Building at the full 120 lines
-leaves the gap at 30.6% and screen-space at 40%. Suspicion retired.
+### ⬜ NEXT: THE WORLD-SPACE PLANE CULL IS THE ONE SUSPECT LEFT
+It is the ONLY cull I could not disable, and it is still killing **19%** of faces
+in the max-coverage build (`worldcull` 436 of 2292). Geometry: she stands in room
+15 at y=3072 and room 13's floor along her view is at 1536-2560 - i.e. ABOVE her.
+The band is the vertical RISER between the two floor levels. If those riser faces
+carry a baked plane that points away from her, the world cull drops them and
+nothing later can bring them back.
 
-### ☠️ `NOEMPTYY=1` PRODUCES A NON-RENDERING ROM - DO NOT TRUST IT
-The kernel's own empty-y diagnostic (the "SAFE VARIANT" that clamps y1=y0 rather
-than skipping, gpu_geotex.gas:1885) builds and boots with **illegal=0** but the
-GPU ends up halted and the screen is a flat luma-76 field. It cannot be used to
-test empty-y. ★ The first read of that run looked like a spectacular fix -
-"uncovered 0.0%" - because a dead ctl session returned a 64x1 frame and the
-counters all read -1. **Sanity-check the FRAME SIZE and the counter values before
-believing a result that good.**
+Do it OFFLINE - do not chase the broken flag (below). Parse `gym_geom.bin`:
+  * room blob header 16B: `>HHHHH` vcount,qcount,tcount,atlasW,atlasH then
+    `>hhh` offX,0,offZ; verts at +16 as `>hhhH`;
+  * face records carry a 12B plane prefix `{(ny<<16)|nx, nz, d}` (gpu_geotex.gas
+    :400), quads 36B / tris 30B with FACE_PLANES=1;
+  * the kernel culls iff `N.C < d` with C = camera, room-local.
+Evaluate that for room 13's faces with C at the probe spot and count how many
+land in the band. If the riser faces are culled, the fix is in the extractor's
+plane baking (sign/winding), not in the kernel.
 
-### ⬜ NEXT: A REAL COUNTER ON THE AREA CULL AND ON EMPTY-Y
-~35 of the 45 points are still unattributed between those two. The existing flag
-route is dead (above), so count them:
-  * copy the `bexcnt_stub` pattern at gpu_geotex.gas:4247 - it exists BECAUSE
-    counting inline blew a branch's +-15 word range, so expect the same and go
-    out-of-line from the start;
-  * free counter slots: $1C0008 and $1C000C are used by LARACOUNT, $1C0018 up
-    appears free - check before claiming one;
-  * area cull is around gpu_geotex.gas:1710-1790 (signed area over integer pixel
-    coords, plus the SUB-PIXEL SIGN GUARD and TINYCULL); empty-y at :1885.
-Then re-run the two spots. Whichever sub-bucket carries the ~35 points is the bug.
+### ☠️☠️ TWO KERNEL DIAGNOSTIC FLAGS ARE BROKEN - THEY BUILD AND DO NOT RENDER
+    NOEMPTYY=1   GPU halted, flat luma-76 field   (run 53)
+    NOSDCULL=1   GPU halted, HOLEVIS 100% WHITE = nothing drawn at all
+Both are "replace the jump with a nop" diagnostics whose comments claim the
+instruction count is preserved. Both report **illegal=0**, so the crash check
+passes and the ROM looks fine to anything that does not LOOK at it.
+★ `NOBFCULL=1` and `ALLVIS=1` DO work - those two are safe to use.
+★ Always screenshot a diagnostic build before trusting a number from it:
+`illegal=0` is not "it rendered".
 
-### ✅ RULED OUT WITH NUMBERS (runs 50-53) - DO NOT RE-TEST
-    ALLVIS · room-level XCULL · NEARLOW · SLIVER cull · HOPBOOT/hop cull ·
-    missing portal · missing geometry · undrawn rooms · VRESN/resolution
-At `HOPBOOT=4` every visible room IS submitted (`g_visrooms == g_drewrooms`) and
-the gap barely moves: the rooms are drawn, the faces inside them are not.
+### ✅ RULED OUT WITH NUMBERS (runs 50-54) - DO NOT RE-TEST
+    ALLVIS · room-level XCULL · kernel XCULL · NEARLOW · SLIVER · HOPBOOT/hop ·
+    missing portal · missing room geometry · undrawn rooms · VRESN/resolution ·
+    screen-space backface · empty-y+area as a whole (7% residual proves it)
 
 ### ★ INSTRUMENTS (all off in shipping builds)
     DREWVIS=1                     g_visrooms / g_drewrooms room bitmasks
@@ -78,9 +83,8 @@ the gap barely moves: the rooms are drawn, the faces inside them are not.
                                   $1C0010 bexit   $1C0014 worldcull
                                   total = worldcull + staged
                                   screen-space = staged - bexit - rastered
-    probe_spot.py --raw=N=0xADDR  read raw DRAM alongside symbols
-    probe_spot.py --set=SYM=VAL   force a variable after seating
-    build_conf.sh EXTRA= / SKIP=  add / REMOVE flags for an A/B
+    probe_spot.py --raw=N=0xADDR / --set=SYM=VAL
+    build_conf.sh EXTRA= / SKIP=
 ☠️ All counters ACCUMULATE - take DELTAS between steps, never absolutes.
 
 ### ✅ STILL TRUE — climbing is closed (runs 46-49)
