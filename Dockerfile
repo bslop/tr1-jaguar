@@ -30,7 +30,7 @@ FROM rust:1-slim-bookworm AS cobweb
 # cobweb was current when the layer was first built - this build failed on four
 # hazard errors that had already been fixed upstream. A real revision both busts
 # the cache and makes the image reproducible.
-ARG COBWEB_REV=d930e58
+ARG COBWEB_REV=3ebf805
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 RUN git clone https://github.com/bslop/cobweb.git /cobweb \

@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 16
+RUN: 17
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,52 +17,60 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**★★★★★ THE CRITICAL PATH IS TOM'S SPAN POPULATION — established by elimination,
-with three measured arms. Perf work should target SPAN COUNT and nothing else.**
+**★★★★★ `PHRASEDST=1` IS THE FIRST REAL WIN: +9.1% to +11.3% RENDERED FRAMES.**
+And it is ALSO the one result in this campaign the emulator **cannot** confirm.
 
-Method that finally worked (write this down, it defeated two earlier attempts):
-build each arm with **`PADTEXT=0` via plain `make`** so `build/openlara.elf`
-matches the `.cof` you run, then take `g_synccalls` from **that arm's own `nm`**
-— the arms land at *different* addresses (0x1a0b50 / 0x1a0b70 / 0x1a06a0), which
-is exactly why a shared-address peek returned zeros in run 14.
+    fields   baseline  PHRASECLEAR  NOSOUND  PHRASEDST
+      1500        232          232      232        253   (+9.1%)
+      2500        398          399      398        443   (+11.3%)
 
-    jagemu peek <arm>.cof --at <that arm's g_synccalls> --len 4 \
-        --frames N --fidelity silicon        # value = rendered frames
+Measured with the run-15 method (per-arm `PADTEXT=0` build, that arm's own
+`g_synccalls` from `nm`, `--fidelity silicon`). Renders correctly: `illegal=0`,
+and at MATCHED game-frame counts (233 vs 232) only 29/25,600 pixels differ —
+a one-frame animation phase difference, not damage. The kernel's alignment
+worry (risk 1) is **cleared**: differing pixels are spread evenly across
+`x mod 8` (5,4,8,5,5,4,6,8), not clustered at phrase boundaries.
 
-    fields    baseline   PHRASECLEAR   NOSOUND
-      1500         232           232       232
-      2500         398           399       398
+### ☠️☠️ THE SILICON RISK, IN THE KERNEL'S OWN WORDS
+`gpu_geotex.gas` ~line 145 wrote this experiment down before I ran it, including
+the part that offline testing cannot settle:
 
-### What each arm rules out
-* **68000 — not the path.** `jag_rr`'s attribution fix shows the clear is issued
-  by the **68000** (384 blits, 34,583,955 ticks), not Jerry; the "dsp" bucket was
-  an artifact of blits booking to whichever core runs next, and Jerry's spin loop
-  won that race every time. The 68k sleeps in `STOP` most of the frame, so
-  removing 24.2M of its transfer ticks is **null** — consistent with GCCHOT
-  (−22% 68k instructions, 0 fps).
-* **Jerry — not the path.** 96% busy is an *idle* spin loop (8.57M polls for
-  ~275k samples). `NOSOUND=1` deletes the whole audio subsystem: **null**.
-  ★ That is a SUPERSET ablation, so the null bounds the subset — the idle pump
-  cannot be costing frames either, and the isolating experiment is unnecessary.
-  ★★ **A confounded experiment still answers cleanly when it returns null in the
-  direction that bounds what you care about.** Confounds only matter when the
-  result is non-zero and you must attribute it.
-* **Tom — everything that is left.** 490,029 blits, 84,979,645 transfer ticks.
+> *"2. Whether the Blitter can assemble 8 GATHERED source pixels (XADDINC
+> sampler) into one dest phrase at all. **jagemu will happily apply its formula
+> either way** — in-kernel silicon testing is the only real probe."*
 
-☠️ Run 13's claim ("transfer ticks are not time") is **true but was proven by an
-invalid experiment** (wrong bucket). It has now survived a valid one. Keep both
-facts: a conclusion surviving a later valid test is not the same as the original
-test having been sound.
+So the +11% may be an emulator artifact. jagemu prices a transfer as
+`(dst_accesses + src_accesses) x 5.6` and simply divides dst accesses by 8 in
+phrase mode; it does not model whether real Tom can gather a scattered source
+into one dest phrase. **This goes to the rig as a specific yes/no question, and
+must NOT be written up as a lever until silicon answers it.**
+
+### Why this one and not the others — the arithmetic that predicted it
+Also from the kernel: a 9-px textured span costs **16 launch + 101 transfer =
+~117 ticks**. Launch is 14%, which is independently why RUNBATCH/TRAPEZOID
+measured null ("it only removes launches"). Transfer is 86%, and phrase DEST is
+the only thing that touches transfer. That is the whole campaign in one line:
+every null hit launch or a non-critical master; this hits the 86%.
+
+Confirmed by Tom's own profile (`--pc-histogram --core gpu --gpu-map`):
+`ss_bw` (the Blitter-idle spin) is ~13.4% of Tom cycles, 4,350,445 polls for
+490,029 blits = **8.9 polls per span**, ~116 cycles waiting per span — matching
+the 117-tick figure exactly.
 
 ### What to do next
-1. **Attack SPAN COUNT.** 490,029 spans / ~327 per frame. The open questions:
-   where are they emitted, and what is the count per rendered frame at steady
-   state? `--pc-histogram --core gpu --fidelity silicon` with a `jas --map` of
-   `gpu_geotex.gas` will name the emitter, the same way it named Jerry's loop.
-2. Do **not** re-test: per-pixel cost (FLATFLOOR silicon null), transfer ticks
-   (measured null), 68k work (GCCHOT null), audio (measured null).
-3. `PHRASECLEAR=1` is kept — strictly cheaper, pixel-identical — but it is **NOT
-   a lever** and must not be written up as one.
+1. **Silicon test PHRASEDST** — batched with the rig queue. The question is
+   narrow: does the picture stay correct on real Tom, and does the frame rate
+   move? A wrong answer looks like corrupted spans, not a crash.
+2. If it holds, look at `PHRASESHADE` (same family, already a flag) and at
+   whether spans can be made 8-px aligned to remove risk 1 entirely.
+3. ✅ cobweb `3ebf805` taken, `COBWEB_REV` bumped. Its new
+   `risc_ram_narrow_writes` detector reads **0** for us — no illegal sub-32-bit
+   writes into GPU/DSP RAM.
+
+### Do NOT re-test (all measured null)
+per-pixel cost (FLATFLOOR, silicon) · transfer ticks on the 68k side
+(PHRASECLEAR) · 68k work (GCCHOT) · audio (NOSOUND) · launch batching
+(RUNBATCH/TRAPEZOID, and now explained: launch is only 14% of a span).
 
 ---
 
