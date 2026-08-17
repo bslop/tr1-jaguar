@@ -74,7 +74,19 @@ def tele():
         peek(n) for n in ("g_lax", "g_laz", "g_lay", "g_lafloor", "g_curroom", "g_health"))
 
 
+# ☠️ WIPE THE OUTPUT DIR FIRST. OUT is a fixed path, so a drive that dies in the
+# BOOT phase leaves the previous run's complete set of frames sitting there -
+# a_ring, g_page4, the whole tour - with nothing to distinguish them from frames
+# this run produced. Checked mid-run once and read 54 stale PNGs as evidence the
+# drive had finished; only the mtimes (08:49, four hours earlier) gave it away.
+# Same family as "symbols are per-build": an artifact is evidence only if you
+# know which run made it. Wiping makes a missing frame LOOK missing.
+if os.path.isdir(OUT):
+    for _f in os.listdir(OUT):
+        if _f.endswith(".png"):
+            os.unlink(os.path.join(OUT, _f))
 os.makedirs(OUT, exist_ok=True)
+print("frames -> %s (cleared)" % OUT, flush=True)
 subprocess.run([JE, "instances", "--prune"], capture_output=True)
 srv = subprocess.Popen([JE, "serve", "--rom", ROM, "--sd", SD, "--instance", INST],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

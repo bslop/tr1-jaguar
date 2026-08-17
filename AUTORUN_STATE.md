@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 94
+RUN: 95
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -15,59 +15,64 @@ summarise that checkpoint away.**
 
 ---
 
-## NEXT STEP
-# ✅ POOL CLIMB-OUT CLOSED. THE EXIT WAS NEVER BROKEN - THE **ENTRY** WAS.
+## NEXT STEP# ✅ THE RELEASE PLAYS WITH THE POOL FIX IN. THE FRAME CHECKER WAS CRYING WOLF.
 
-Round trip measured on the gym build: enter -> swim -> **climb out and stay
-out** -> turn round -> walk back in -> swim. That was the last open gameplay
-defect on either level.
+Rebuilt the SHIPPING ROM from the disc with run 93's water fix and drove it:
 
-    up0   y=3424  z=59848  swim=1     entry from a water-surface cell
-    up18  y=3328  z=58270  swim=0     SHE CLIMBS OUT onto the surround
-    up19..24                swim=0     walks on land - this never happened before
-    up25  y=3424  z=58459  swim=1     turned round, walked back in
+    QUALITY=playable VIDEO=0 PADTEXT=136 bash tools/build_cof.sh \
+      "/home/jvilla/Documents/Git/jag_openlara/tr1_psx/Tomb Raider (USA) (v1.6).cue" /tmp/cofout7
+    REL_ROM=/tmp/cofout7/OPENLARA.COF REL_SD=/tmp/cofout7 \
+      REL_ELF=/tmp/cofout7/OPENLARA.elf python3 tools/release_play.py --gym --tour
 
-### ☠️☠️☠️ THE LESSON: THREE RUNS BLAMED THE EXIT BECAUSE THAT IS WHERE THE
-### SYMPTOM SHOWED. THE RE-ENTRY LEFT NO TRACE.
-`g_swim` read **1 on every sample**, so the climb-out looked like it had never
-fired. It had - and the water-entry *fallback* re-captured her on the next
-frame, one frame being far below the sampling rate. Runs 90-92 each proposed a
-clamp inside the exit; each was reasonable from the source and each was wrong.
+Boots -> ring -> **page 4 -> Lara's Home loads** -> 24-step tour, 51,321 units
+travelled, health 1000 throughout, Lara drawn correctly in every frame. Caves 38
+rooms and gym 19 in the image; ROM 1,538,988 B. **No regression from the water
+change** - and it could not have caused one, the Caves have ZERO water rooms.
+☠️ the disc lives at `tr1_psx/`, NOT in a `disc/` dir beside the Dockerfile.
 
-What actually broke it, main.c water entry:
+### ☠️☠️ TWO INSTRUMENTS CRIED WOLF, BOTH BECAUSE A CONSTANT STOOD IN FOR EVIDENCE
+1. **`min-colours 24`** failed 7 of 24 good frames. Measured over the 28 drive
+   frames the mansion runs **20..55 colours, median 27** - the threshold sat
+   INSIDE the legitimate range. What the check exists to catch is runs 53/54's
+   flat luma-76 plane, which is **ONE** colour. Floor is now `FLAT_FIELD_FLOOR
+   = 12` (12x margin) plus an optional RECORDED per-level `.colours_<level>`,
+   exactly as black% already worked. `tools/.colours_gym` = 20, from this drive.
+   `--selftest` now runs **7** cases and proves the new boundary both ways: a
+   near-flat 10-colour field is still caught, a 20-colour mansion frame passes.
+2. **black% vs the gym baseline 36.8%** then failed 11 of 28 (49..86%). Also not
+   a defect: `tools/sightline.py --prefix gym --at 35795,1024,54194,0,<yaw>` says
+   **room 0 is 39% OPEN TO THE SKY** (28 of 72 cells have no ceiling) and the
+   tour NEVER LEFT ROOM 0. A level-wide average cannot bound a capture confined
+   to the most open room in that level. ★ this is the run-69 lesson a third time.
 
-    } else if (g_curroom < 64 && rwater[g_curroom]) {   /* NO HEIGHT TEST */
-        g_swim = 1; g_watery = g_lay - 96;
+### ⬜ NEXT: `HOLEVIS=1` OVER THE SAME TOUR - IT IS THE ONLY THING THAT CAN TELL
+### OPEN SKY FROM A COVERAGE HOLE
+Do NOT try to settle the 86%-black frames (t_11, t_16) from a normal capture: a
+hole and the sky are the same black pixels, which is what cost runs 50-59 and
+what HOLEVIS was built for (clear to WHITE, so uncovered reads unambiguously).
+Build the release flag set with `HOLEVIS=1`, re-run the same `--gym --tour`, and
+measure UNCOVERED% per frame. If it tracks the 39% open fraction, the frames are
+correct and the black baseline should become room-aware (release_play already
+peeks `g_curroom`; the open-cell fraction is computable straight from
+`gym_sect.bin`, see sightline.py's ceiling loop). If it does not, there is a
+real hole and it is the first one found in the mansion since run 59.
 
-The proper path above it tests `g_lay >= sfy - 16` (she is at or under the
-surface). The fallback invents the surface **from her own head** (`g_lay - 96`),
-so its height test is vacuously true: *everyone standing anywhere in a water
-room swims*, and the pool SURROUND is part of room 18. Fix = never fall back
-while she is RESTING on a real, non-water floor. Submerged she floats ABOVE the
-pool bottom (`g_lay < sfy`), so genuine entry is untouched - proved by up25.
-
-### ★★★★★ HOW IT WAS FINALLY CAUGHT - THE METHOD, NOT THE BUG
-A **deliberately temporary** grace period (`g_swexit`, ignore entry for 30
-ticks after an exit) was added purely as an instrument. It made the invisible
-frame visible: with it in, she stayed out for exactly three steps and her stride
-jumped 84 -> 282 units (swim speed -> LAND speed), which is what proved the exit
-fires. The grace was then REMOVED and the real fix verified without it, so the
-passing test is evidence about the fix and not about the scaffold.
-★ When a state variable never shows the transition you expect, suspect the
-SAMPLING before the logic: put in something that HOLDS the state long enough to
-see, then take it out.
-
-### ⬜ NEXT: RE-VERIFY THE RELEASE WITH THE POOL FIX IN
-Both ROMs rebuild and boot clean (caves conf.png PASS, 65 lumas, 1.1% black).
-Not yet done: the driven playthrough over the shipping ROM -
-`tools/release_play.py --tour --play --gym` - to confirm nothing regressed now
-that the shared water path changed. Go/no-go is the **start-vs-end frame diff**,
-not a filmstrip.
+### ⬜ ALSO WORTH DOING: THE TOUR ONLY EVER SEES ONE ROOM
+24 wall-following steps covered 51,321 units and visited **[0]**. A 19-room level
+"playthrough" that never leaves the first room proves much less than its name
+suggests. Seed the tour from the door list (`tools/door_walk.py` already knows
+every doorway) instead of wall-following, or drive it room-to-room.
 
 ### ⚠️ BUILD STATE
-`/tmp/gym.cof` = MVDIAG build with the entry fix. `/tmp/conf.cof` = caves,
-rebuilt this run and boot-checked (the stale NOEMPTYY build from run 89 is gone).
+`/tmp/cofout7/` = the SHIPPING payload built this run WITH the pool fix (COF +
+ELF + .JV + MUSIC.PCM + GYMLOAD.DAT). `/tmp/gym.cof` = MVDIAG build with the
+entry fix. `/tmp/conf.cof` = caves, boot-checked.
 ☠️ `tools/build_conf.sh` takes **caves|gym|both** - not `mrt`.
+☠️ `release_play.py` now WIPES its output dir first: OUT is a fixed path and a
+drive that dies while booting leaves the PREVIOUS run's complete frame set
+sitting there. I read 54 stale PNGs as this run's output; only the mtimes gave
+it away. ☠️ `find -newermt "12:29"` is INVALID here (bfs wants ISO 8601) and
+prints an error to stderr while the pipeline reports 0 - a check that never ran.
 
 ### ⬜ ALSO OPEN
   1. Capture the hardware boot **if the user grants permission** -

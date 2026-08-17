@@ -43,7 +43,22 @@ def load(path):
     return im.size, list(g.getdata())
 
 
-def check(path, size=None, baseline=None, min_colours=24, quiet=False):
+# ☠️ 24 WAS A CONSTANT INSIDE THE MANSION'S LEGITIMATE RANGE. Measured over a
+# 24-step driven tour of Lara's Home plus its four load frames: colours run
+# 20..55, median 27. The threshold therefore FAILED 7 of 24 frames that plainly
+# contain a scene - t_15 has Lara, a pillar and a floor at 20 colours. A checker
+# that cries wolf on a third of good frames gets ignored, which costs more than
+# it ever saved.
+# What this check was BUILT to catch is a FLAT FIELD: runs 53/54 shipped ROMs
+# that rendered a single luma-76 plane - ONE colour. 12 keeps a 12x margin over
+# that failure while clearing every real scene measured. Anything tighter must
+# be EVIDENCE per level, not a guess: `.colours_<level>` beside `.black_<level>`,
+# recorded from a real drive. Same rule the black% check already follows, and for
+# the same reason - our frames are game scenes, not a test card.
+FLAT_FIELD_FLOOR = 12
+
+
+def check(path, size=None, baseline=None, min_colours=FLAT_FIELD_FLOOR, quiet=False):
     """Returns a list of failure strings; empty means the frame is sane."""
     bad = []
     (w, h), px = load(path)
@@ -93,6 +108,17 @@ def check(path, size=None, baseline=None, min_colours=24, quiet=False):
     # 5. BASELINE. Per level, because open-sky rooms are legitimately dark
     #    (run 69). A recorded number, never a constant.
     if baseline:
+        # a RECORDED per-level colour floor, if one has been measured
+        cp = os.path.join(D, "tools", ".colours_" + baseline)
+        if os.path.exists(cp):
+            try:
+                rec = int(open(cp).read().split()[0])
+                if colours < rec - 6:
+                    bad.append("%d distinct luma values vs the %s recorded floor "
+                               "%d (-6 slack) - this level has never rendered "
+                               "that flat" % (colours, baseline, rec))
+            except Exception:
+                pass
         bp = os.path.join(D, "tools", ".black_" + baseline)
         try:
             thresh = float(open(bp).read().strip())
@@ -128,13 +154,18 @@ def selftest():
     random.seed(1)
     cases = [
         ("flat field",      mk("flat.png", lambda x, y: 76),                 "FLAT FIELD"),
+        # ☠️ the threshold moved 24 -> 12, so prove the boundary is still armed:
+        # 10 luma values is a near-flat field and must still be caught.
+        ("near-flat 10",    mk("near.png", lambda x, y: 40 + (x // 32) % 10),  "FLAT FIELD"),
+        # ...and a real mansion frame (20 colours) must now PASS.
+        ("mansion 20",      mk("mans.png", lambda x, y: 20 + (x * 7 + y * 3) % 20), None),
         ("wrong size",      mk("tiny.png", lambda x, y: 76, (64, 1)),        "size 64x1"),
         ("dark right col",  mk("rcol.png", lambda x, y: 0 if x >= 319 else 40 + (x * 7 + y * 3) % 200), "RIGHTMOST COLUMN"),
         ("all white",       mk("white.png", lambda x, y: 255),               "UNCOVERED"),
         ("healthy scene",   mk("good.png", lambda x, y: 20 + (x * 5 + y * 11) % 220), None),
     ]
     for name, path, want in cases:
-        bad = check(path, size=(320, 80), min_colours=24, quiet=True)
+        bad = check(path, size=(320, 80), quiet=True)
         hit = any(want in b for b in bad) if want else not bad
         print("  %-16s %s" % (name, "caught" if hit else "☠️ NOT CAUGHT"))
         if not hit:
@@ -156,7 +187,7 @@ def main():
         w, _, h = sys.argv[sys.argv.index("--size") + 1].partition("x")
         size = (int(w), int(h))
     baseline = sys.argv[sys.argv.index("--baseline") + 1] if "--baseline" in sys.argv else None
-    minc = int(sys.argv[sys.argv.index("--min-colours") + 1]) if "--min-colours" in sys.argv else 24
+    minc = int(sys.argv[sys.argv.index("--min-colours") + 1]) if "--min-colours" in sys.argv else FLAT_FIELD_FLOOR
     bad = check(path, size, baseline, minc)
     for b in bad:
         print("  ☠️ %s" % b)
