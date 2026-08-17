@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 45
+RUN: 46
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,52 +17,56 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ THE CAVES ARE CLEAN: 23/25 CLIMBED, 0 PARTIAL.
+# ✅✅ THE CONFORMANCE SWEEP IS DONE. BOTH LEVELS, EVERY CLASS.
 
-**Every Caves PARTIAL was the harness, not the game.** Hand-driving room 19's
-CLIMB3 showed the climb completing EXACTLY (Y 4608 -> 3840, floor 3840 = a full
-768) while the harness had already quit at 732 and called it PARTIAL.
+    CAVES    23/25 CLIMBED   1 PARTIAL   1 NO-CLIMB   0 spots over 51.2% black
+    MANSION  21/26 CLIMBED   3 PARTIAL   2 NO-CLIMB   0 spots over 36.3% black
 
-Cause: **the pull-up EASES OUT**, so the last units arrive slowly and a
-"Y moved less than 8" test fires just before touchdown. Same failure as run 31's
-too-short window, through a different door.
-★ Fixed by changing the completion test from *velocity* to *landing*:
-`g_lafloor == g_lay` means she is standing on the surface she climbed to.
-Velocity now only decides when to GIVE UP (4 dead samples, threshold 2).
+**Every NO-CLIMB is a WALL (2048/2816) correctly refusing.** The Caves PARTIAL
+is the 1792 JUMPGRAB, and that is physics, not a bug: measured peak jump is
+**774 units** and the ledge is 1018 further up.
 
-    CAVES   before 18/25 CLIMBED, 5 PARTIAL   ->   after 23/25, 0 PARTIAL
-            the 2 NO-CLIMB are WALL (2048) and the out-of-reach 1792 JUMPGRAB
-            (measured: peak jump 774 units, ledge 1018 further up)
-            0 spots over the 51.2% Caves baseline
+### ☠️ THE LAST FIX: A 256 WALKUP IS AN AUTOMATIC STEP
+Hand-driving a "regressed" mansion WALKUP showed she gains the ledge **during
+the WALK phase** with no button (Y -1280 -> -1536, floor following). Pressing
+UP+B afterwards then walks her off the far side and she falls — so reading the
+FINAL Y scored a successful climb as **-290**.
+★ Fixed: the verdict now uses the **BEST height reached** across the whole
+drive, plus the floor at that moment (`bestfl == best` = she actually STOOD on
+it). Mansion 18 -> 21 CLIMBED; Caves unchanged at 23, and the 1792 correctly
+became PARTIAL because the jump does gain real height.
 
-### ⬜ THE MANSION MOVED BOTH WAYS — LOOK BEFORE BELIEVING
-    MANSION before 17/26 CLIMBED, 7 PARTIAL, 2 NO-CLIMB
-            after  18/26 CLIMBED, 2 PARTIAL, 6 NO-CLIMB
-CLIMBED and PARTIAL both improved, but **4 spots moved PARTIAL -> NO-CLIMB**.
-That is not obviously right and must be checked, not assumed: hand-drive one of
-them with telemetry (the method that has resolved every ambiguity here). Either
-they genuinely never leave the ground — in which case the old PARTIAL was
-flattering them — or the new early-exit fires wrongly on the mansion's geometry.
-The 2 remaining PARTIALs are room 12 JUMPGRAB 1024 (rose 512 / 494).
+### ★ SEVEN INSTRUMENT FALSE-DEFECTS — the standing lesson of this campaign
+climb window (31) · 32-bit yaw poke (30) · PADMUTE flag (36) · face-pass blame
+(33) · wrong-level black baseline (42) · velocity completion (44) · final-Y vs
+best-Y (45).
+**Every uniform failure had a uniform cause in the harness, never in the game.**
+Hand-drive ONE case with telemetry before recording any defect. That single
+habit caught all seven.
 
-### ★ SIX INSTRUMENT FALSE-DEFECTS SO FAR — the standing lesson
-climb window (31) · 32-bit yaw poke (30) · PADMUTE (36) · face-pass blame (33) ·
-Caves baseline on the mansion (42) · velocity-based completion (44).
-**Every uniform failure in this project has had a uniform cause in the harness.**
-Hand-drive one case before recording a defect.
-
-### ⬜ REMAINING
-1. The 4 mansion PARTIAL -> NO-CLIMB spots (above).
-2. PSX comparison: does TR1 reach the 1792 ledge? If not, tighten
-   `ledge_census.py`'s JUMPGRAB band (<=1920) to ~1600 so it stops generating
-   impossible spots. `res/` Part 2 = Caves, 3m20 -> 23m24.
+### ⬜ WHAT IS ACTUALLY LEFT
+1. **The 3 mansion PARTIALs** — worth one hand-drive each, but note the pattern
+   above before believing them.
+2. **PSX comparison** — the one thing that can say whether TR1 reaches the 1792
+   ledge. If it does not, tighten `ledge_census.py`'s JUMPGRAB band (<=1920)
+   to ~1600 so it stops generating impossible spots. `res/` Part 2 = Caves,
+   3m20 -> 23m24.
 3. **Re-run `tools/build_cof.sh` end to end** — the recipe gained the gym
-   boundary patch and `--faces` on both prefixes since its last full run.
+   boundary patch and `--faces` on both prefixes since its last full run. This
+   is the release-readiness item.
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
-`beb2c15` does NOT fix the jcc68k regression. `tools/toolchain_smoke.sh` guards
-updates. ROMs: `/tmp/conf.cof` (Caves), `/tmp/gym.cof` (mansion, AUTOGYM, **no
-PADMUTE**).
+`beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,
+breaking gcc/jcc mixed links). `tools/toolchain_smoke.sh` guards updates.
+ROMs: `/tmp/conf.cof` (Caves), `/tmp/gym.cof` (mansion, AUTOGYM, **no PADMUTE**).
+
+### Instruments (all offline, no rig)
+    conformance.py    driven per-spot sweep; best-height verdict, per-level
+                      black baseline, jump drive for JUMPGRAB
+    room_black.py     per-room black% baseline (caves 51.2 max, gym 36.3)
+    floor_coverage.py collision-vs-mesh scan + patch (--prefix, --faces)
+    mrt_boundary_audit.py  seam-floor audit + patch (--prefix)
+    toolchain_smoke.sh     build a ROM and LOOK at it after a toolchain move
 
 ### ⬜ AWAITING THE USER (run-25 checkpoint)
   1. Capture card replugged? 2. Ship Lara's Home? 3. Release or keep polishing?
