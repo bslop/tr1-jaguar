@@ -1023,6 +1023,20 @@ static const uint8_t g_padtext[PADTEXT] = { 1 };
 static const uint8_t g_padding[PADBYTES] __attribute__((used)) = { 1 };
 #endif
 static int g_curroom;                 /* room Lara is standing in (visibility) */
+#ifdef DREWVIS
+/* ★ WHICH ROOMS DID THE RENDERER ACTUALLY DRAW THIS FRAME (bit r = room r).
+   Runs 50-51 killed SIX explanations for the mansion coverage hole by A/B-ing
+   render flags - ALLVIS, XCULL, NEARLOW, the SLIVER cull, plus a missing portal
+   and missing geometry - and every one left the gap at EXACTLY 33.1%. Identical
+   results across unrelated culls means none of them is deciding it, so stop
+   A/B-ing and read what the renderer did.
+   TWO masks, because "not drawn" has two very different causes:
+     g_visrooms  passed the portal-visibility gate (rdepth/prv)
+     g_drewrooms survived every later cull and was submitted
+   In vis but not drew = killed by a cull between them. In neither = the portal
+   chain never admitted it. */
+static uint32_t g_drewrooms, g_visrooms;
+#endif
 static int g_curroom_fwd(void) { return g_curroom; }
 #define LARA_JUMPGRAB 1920            /* AUTO JUMP-REACH ceiling = TR1's own band:
                                            fixed/lara.h:1586 arms the up-jump for a
@@ -8919,6 +8933,16 @@ bootvid_entry:
                have no faces). */
             { int a, b, c2, d2;
               for (i=0;i<roomCount;i++) { rdepth[i]=4; prv[i]=0; } /* 4 = off */
+#ifdef DREWVIS
+                /* ☠️ DO NOT CLEAR PER FRAME. The first version cleared here and
+                   both masks read 0 forever - including the bit for the room
+                   Lara is standing in, which is certainly drawn. The clear sits
+                   in the camera/visibility block and the draw loop runs in a
+                   LATER PIPELINE STAGE (PIPESTAGE=2), so a peek between frames
+                   lands after the clear and before the sets. Accumulate instead:
+                   for "was this room ever drawn from here" that is the more
+                   useful question anyway, and it cannot be defeated by phase. */
+#endif
               rdepth[g_curroom]=0; prv[g_curroom]=2;            /* full rect */
               for (a=0;a<MRT_ADJ_MAX && S_adj[g_curroom][a]!=255;a++) {
                   int n1=S_adj[g_curroom][a];
@@ -9667,6 +9691,11 @@ bootvid_entry:
                     if (rdepth[ri] > 3) continue;
                     if (prv[ri] == 0) continue;    /* no visible window */
 #endif
+#ifdef DREWVIS
+                      g_visrooms |= 1u << ri;
+#endif
+#ifndef NOVISCULL
+#endif
                     /* conservative: cull only if the whole room sphere is behind
                        the camera or entirely past the far clip (never the room
                        you're in / partly in view). */
@@ -9719,6 +9748,9 @@ bootvid_entry:
                     /* PORTAL-WINDOW CLIP: neighbour rooms render only inside
                        the doorway rect they're seen through; invisible
                        doorway = the room isn't drawn AT ALL. */
+#ifdef DREWVIS
+                    g_drewrooms |= 1u << ri;
+#endif
                     { int cx0=0, cx1=319, cy0=0, cy1=VIEW_H-1;
 #ifndef NOPCLIP
                       /* NOPCLIP=1 (2026-07-30): draw neighbour rooms over the

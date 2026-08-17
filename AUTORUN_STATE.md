@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 51
+RUN: 52
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,71 +17,75 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ⬜ THE MANSION HOLE IS REAL AND FIVE EXPLANATIONS ARE NOW DEAD
+# ⬜ THE HOLE IS PER-FACE, INSIDE ROOMS THAT ARE DRAWN. NOT A ROOM CULL.
 
-The room 15/16/17 black band is a **genuine coverage gap**: built with
-`HOLEVIS=1` (paints uncovered pixels white) the band goes **33.1% WHITE** and
-black falls to 2%. The renderer never covers a third of that screen. Frame saved
-at `/tmp/hole15_holevis.png`; ☠️ these are 320x**80**, upscale 3x vertically.
+Run 50 killed five explanations. This run killed the rest, including the one the
+run-50 handoff said to test — and the instrument that killed it is now in-tree.
 
-### ☠️ WHAT IT IS NOT — all measured, not reasoned
-Every one of these left the gap at **33.1%**, unchanged to 0.1%:
+### ★★★★★ `DREWVIS=1` — the renderer now says what it drew
+Two accumulating bitmasks (`g_visrooms`, `g_drewrooms`, bit r = room r) exposed
+at the two ends of the cull chain: passed portal visibility, and actually
+submitted. Peek them with `probe_spot.py`. At the room 15 hole:
 
-    ALLVIS=1     "room whose portal window computes EMPTY is dropped" -> 33.1%
-    XCULL off    the room bounding-radius cull (SKIP=XCULL)           -> 33.2%
-    NEARLOW=1    near plane 64 -> 16, the whole-face rejection        -> 33.1%
+    passed visibility:  rooms 8, 12, 13, 15, 16, 17
+    actually drawn:     rooms 13, 15   <- only the current room and its 1 hop
 
-and two more ruled out from the data:
+That is `HOPBOOT=1` in our own shipping flag set: `g_hopcap` boots to 1, and the
+HOPDIAL check drops everything past one portal hop. (☠️ NOT the frame GOVERNOR —
+that is opt-in and is not compiled into these builds at all. I read `g_hopcap=1`
+and assumed the governor had clamped it; it was our own flag.)
 
-    * the PORTAL EXISTS: gym_portalv has 15->13, 16->13, 17->13 (and 13 back to
-      all of them). Not a missing-portal or vertical-sector-link case.
-    * the GEOMETRY EXISTS: room 13 carries 471 quads over 216 cells (2.23
-      faces/cell, the DENSEST room in the set). The faces are not missing.
+### ☠️☠️ AND OPENING THE DIAL DID NOT FIX THE HOLE
+    HOPBOOT=1   uncovered 32.9%   drew = {13,15}
+    HOPBOOT=4   uncovered 31.9%   drew = {8,12,13,15,16} == the FULL vis set
 
-★★★★★ **Four very different culling changes producing byte-identical coverage is
-itself the finding.** Nothing in the cull path is deciding this. Stop A/B-ing
-render flags — the next step is to make the renderer SAY what it drew.
+Every visible room is submitted and **the gap barely moves**. So the missing
+pixels were never undrawn ROOMS. The faces are lost per-face INSIDE rooms that
+are drawn. Every room-level explanation is now dead:
 
-### ⬜ NEXT: INSTRUMENT THE DRAW SET, DO NOT GUESS AT IT
-Add a peekable counter/bitmask of the rooms submitted this frame (a `uint32_t
-g_drewrooms` ORed with `1<<r` at the point geometry is queued, cleared per
-frame), build the gym ROM, and `probe_spot.py` the room 15 spot. Then it is one
-read:
-  * **bit 13 clear** -> room 13 is never submitted. Walk back from the submission
-    site through `room_link_rect(15,13,...)`; note ALLVIS claims to cover the
-    empty-window case and demonstrably does not, so verify ALLVIS is actually
-    reached before trusting its comment.
-  * **bit 13 set** -> it IS submitted and its faces die later - in the kernel,
-    per-face. Then dump face counts submitted vs drawn for that room.
-This is the "STOP DECODING, START READING" lesson from the 68k campaign applied
-to the renderer.
+    ALLVIS · XCULL · NEARLOW · SLIVER cull · HOPBOOT/hop cull ·
+    missing portal · missing geometry (room 13: 471 quads / 216 cells, densest)
 
-### ☠️ NOTE: room 0's hole is a DIFFERENT shape, do not assume one cause
-Room 0 (77.8% black, `/tmp/hole_room0.png`) shows a lit floor with EVERYTHING
-above it black — no wall at all where a 2560 wall stands. Rooms 15/16/17 show a
-correct upper half with a band missing in the MIDDLE distance and the nearest
-floor strip drawn. Two shapes, possibly two bugs. Room 0 is adjacent only to room
-1, so it is the simpler case and may be the better one to instrument first.
+### ⬜ NEXT: COUNT FACES SUBMITTED vs RASTERISED FOR ROOM 13
+Same method one level down — the kernel is where they die. Add per-room counters
+(faces submitted, faces surviving each kernel reject: backface, off-screen, NEAR,
+degenerate) and read them at this spot. `gpu_geotex.gas` already has the reject
+paths; they just do not count. That names the reject in ONE run instead of
+another six flag A/Bs.
+★ The spot is reproducible: `--at 35328,3072,39424,15,16384` on an AUTOGYM ROM,
+gap ~33% of screen under `HOLEVIS=1`.
 
-### ★ TOOLING ADDED THIS RUN
-  * `build_conf.sh EXTRA="FOO=1"` — append flags for an A/B without editing.
-  * `build_conf.sh SKIP="XCULL"` — REMOVE a flag from the set. ☠️ Needed because
-    `make XCULL=0` still DEFINES XCULL in this Makefile, so the obvious way to
-    turn a feature off leaves it on. Both are verified in the build log.
-  * The verifier now also accepts assembler symbols: NEARLOW is `.if NEARLOW=1`
-    in gpu_geotex.gas and arrives as `-d NEARLOW=1`, so a -D-only check called a
-    correctly-built ROM invalid and would have thrown away a good A/B.
+### ★ THE LESSON THIS COST TWO RUNS
+Six static flag A/Bs all returned **exactly 33.1%**. Identical numbers across
+unrelated changes is not six weak results, it is one strong one: *none of them is
+in the path*. I should have instrumented after the second identical reading, not
+the seventh. ★ When an A/B does not move the number AT ALL, stop A/B-ing — the
+knob is not connected to what you are measuring.
 
-### ✅ STILL TRUE FROM RUN 49 — climbing is closed
+### ★ TOOLING ADDED (runs 50-51)
+    build_conf.sh EXTRA="FOO=1"   append flags for an A/B
+    build_conf.sh SKIP="XCULL"    REMOVE a flag (make XCULL=0 still DEFINES it)
+                                  ☠️ SKIP+EXTRA naming the same flag warns
+                                  "STILL in the compile line" - a false positive,
+                                  check the -D value itself
+    probe_spot.py --set=SYM=VAL   force a variable after seating
+    DREWVIS=1                     the draw bitmasks (off in shipping builds)
+☠️ The masks ACCUMULATE and are zeroed by probe_spot at the seat - do not clear
+them per frame. The first version did and read 0 forever, including for the room
+Lara stands in: the clear is in the camera block, the draw loop runs in a LATER
+PIPELINE STAGE, so a peek lands between them.
+
+### ✅ STILL TRUE — climbing is closed (runs 46-49)
     CAVES    LEDGES 24/24   WALLS 6/6 refused   0 black outliers
     MANSION  LEDGES 24/24   WALLS 6/6 refused   7 black outliers (this hole)
-`FITSTEP=1` is in the shipping set.
 
 ### ⬜ ALSO STILL OPEN
-  * ☠️ `/tmp/cofout4` (the filmed release) predates runs 46-49. **Rebuild before
-    shipping** — no jump-reach solve, neither collision fix, no FITSTEP.
-  * The run-25/50 direction questions are unanswered (capture card, ship Lara's
-    Home, release vs keep polishing). The run-50 report was delivered.
+  * Room 0's hole is a DIFFERENT shape (everything above the floor missing) and
+    may be a second bug. Room 0 is adjacent only to room 1 - simpler to reason
+    about once the per-face counters exist.
+  * ☠️ `/tmp/cofout4` (the filmed release) predates runs 46-49. Rebuild before
+    shipping.
+  * Run-25/50 direction questions unanswered; the run-50 report was delivered.
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,

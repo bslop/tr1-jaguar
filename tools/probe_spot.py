@@ -26,7 +26,7 @@ INST = "probe"
 BOOT = 1300
 SETTLE = 20
 
-WATCH = ["g_gunst", "g_lay", "g_lafloor", "g_curroom", "g_floorroom", "g_fwdblk", "g_autoj", "g_autojv",
+WATCH = ["g_hopcap", "g_gov_on", "g_visrooms", "g_drewrooms", "g_gunst", "g_lay", "g_lafloor", "g_curroom", "g_floorroom", "g_fwdblk", "g_autoj", "g_autojv",
          "g_jumped", "g_lavy", "g_hang", "g_vault", "g_lax", "g_laz"]
 
 
@@ -87,7 +87,11 @@ def main():
         ctl("run", BOOT, timeout=600)
         # seat exactly as conformance.py does - quiesce, zero motion, place, settle
         ctl("release"); ctl("run", 20)
-        for k in ("g_lavy", "g_fally", "g_jumped", "g_lajf", "g_hang", "g_autoj"):
+        # ☠️ ZERO THE DRAW MASKS AFTER SEATING. They accumulate (see main.c),
+        # so a bit set during boot or at the previous spot would be read as
+        # "drawn HERE". Clearing at the seat makes them attributable.
+        for k in ("g_lavy", "g_fally", "g_jumped", "g_lajf", "g_hang", "g_autoj",
+                  "g_visrooms", "g_drewrooms"):
             if k in sy:
                 poke(sy[k], 0)
         poke(sy["g_curroom"], room)
@@ -97,6 +101,17 @@ def main():
         if "g_layaw" in sy:
             poke16(sy["g_layaw"], yaw)
         ctl("run", SETTLE)
+        # --set SYM=VAL: force a variable AFTER seating. Added to test whether a
+        # value the game computes for itself is causing what you are looking at
+        # (the draw-distance governor clamping g_hopcap to 1, run 51).
+        for a in sys.argv:
+            if a.startswith("--set="):
+                k, v = a[6:].split("=")
+                if k in sy:
+                    poke(sy[k], int(v))
+                    print("set %s = %s" % (k, v))
+                else:
+                    print("☠️ --set %s: not in this build" % k)
 
         print("seated: " + "  ".join("%s=%s" % (w, peek(sy[w])) for w in have[:3]))
         print("%-4s %s" % ("step", "  ".join("%-9s" % w for w in have)))

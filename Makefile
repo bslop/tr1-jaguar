@@ -1047,6 +1047,14 @@ CFLAGS   += -DFITSTEP
 CXXFLAGS += -DFITSTEP
 endif
 
+# DREWVIS=1: expose g_visrooms / g_drewrooms, bitmasks of the rooms that passed
+# portal visibility and that were actually submitted this frame. Diagnostic for
+# coverage holes - peek them with tools/probe_spot.py instead of A/B-ing culls.
+ifdef DREWVIS
+CFLAGS   += -DDREWVIS
+CXXFLAGS += -DDREWVIS
+endif
+
 # GYMTEST=1 / CAVETEST=1: boot straight into Lara's Home / the Caves, skipping
 # the title ring. ☠️☠️ BOTH #ifdefs HAVE EXISTED IN main.c FOR AGES AND NEITHER
 # WAS EVER PLUMBED HERE - so -DGYMTEST never reached the compiler and a GYMTEST
