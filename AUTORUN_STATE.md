@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 107
+RUN: 108
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,53 +54,52 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ✅ THE FRAME-RATE TRADE, MEASURED TODAY, SO THE USER CAN JUST DECIDE.
+# ✅ ENEMIES AND PICKUPS STILL DRAW AFTER THE FLOOR-QUERY REWRITE - MEASURED.
 
-The run-100 checkpoint asked him to choose between silicon validation, frame
-rate and new content. Frame rate was the option with a stale number attached
-(+12%, recorded weeks ago). Re-measured on the CURRENT tree, same 7 Caves room
-centres, one boot per arm, only the render height differing:
+Runs 100-101 rewrote the core floor query and nothing had re-checked the
+entities since. New counter `g_entdrawn` (under DREWVIS) = how many entities
+went into the displist this frame:
 
-    room   120-line (shipping)   80-line (VRESN=80)   gain
-    r0     11.43                 14.29                +25.0%
-    r8     12.14                 14.29                +17.6%
-    r12     8.57                 10.00                +16.7%
-    r17    15.00                 15.00                 +0.0%
-    r22     7.14                  7.86                +10.0%
-    r30    10.00                 12.14                +21.4%
-    r34     8.57                 10.00                +16.7%
-    MEAN   10.41                 11.94               **+14.7%**
+    medikit seat, room 25    **4** entities drawn
+    wolf seat,    room 22    **8** entities drawn   <- 6 BRIDGES + 2 WOLVES
 
-Both arms captured clean at their own size (320x120 and 320x80, illegal 0), and
-`/tmp/vres_ab.png` shows the same scene from both, each scaled to the 240-line
-window the OP actually fills - which is what the TV shows. **The 80-line image is
-visibly coarser vertically and completely legible.** That is the whole trade and
-it is a taste call, not a technical one; it has been sent to the user.
+It discriminates (4 vs 8 by location, and 8 is exactly what room 22 contains),
+so it is measuring something real rather than reporting a constant. No
+regression. `ndrawn` was a local, so nothing could read it before.
 
-### ☠️ HOW TO BUILD THE TWO ARMS - VRESN CANNOT DO 120
-`VRESN=120` is REJECTED by the Makefile: VSCALE=7680/N must be a whole number
-(OP VSCALE is 3.5 fixed point), so only **96 80 64 60** exist. The shipping
-120 comes from `LOWRES=1`, which is already in the conformance BASE. So:
+### ☠️☠️ TWO WAYS TO ANSWER THIS THAT DO NOT WORK - I TRIED BOTH FIRST
+1. **`entity_check` on a MOBILE entity proves nothing.** It stands Lara at the
+   entity's SPAWN point after a 1300-field boot, and a wolf HUNTS - by capture
+   time it is somewhere else. I stared at a 3x zoom of the wolf seat and could
+   not find a wolf; that is not evidence of absence. It is still valid for
+   STATIC entities (pickups), which cannot wander.
+2. **A build A/B with `SKIP="ENEMIES ENEMYTEX"` is camera-confounded.**
+   66% of pixels differed - the two builds pitch the CAMERA differently, which
+   is obvious the moment you look at them side by side and invisible in the
+   percentage. A cross-build pixel diff can only isolate a small feature if the
+   builds agree on everything else, and these do not.
+★ The dark smudge by Lara's hip that I nearly called a wolf appears in BOTH
+arms. It is scenery.
 
-    120-line (shipping height):  SKIP="VRESN" EXTRA="DREWVIS=1" tools/build_conf.sh caves
-    80-line:                     EXTRA="DREWVIS=1" tools/build_conf.sh caves
+### ☠️ INDEX PROBE COLUMNS BY NAME, NOT POSITION
+`probe_spot`'s column order changes with the flag set - adding DREWVIS shifts
+everything right. I read `$7` as `g_curroom` and got `g_gunst`, which printed
+"room=0" for a seat that was really room 25. The analysis now does
+`hdr.index("g_curroom")`. The `--raw=NAME=addr` columns are safe because they
+are named, which is why the entity number itself was never in doubt.
 
-★ The two ROMs came out the SAME SIZE (1,294,060 B both). Checksums differ and
-the script printed `VRESN: confirmed absent`, which is the only reason the A/B
-is trustworthy - equal file sizes are not evidence of anything either way.
-☠️ The 120-line arm "FAILS" build_conf.sh's checkshot: that check asserts a
-320x80 frame, and this arm is 320x120 by design. The size check doing its job.
-
-### ⬜ NEXT - EVERYTHING LEFT NEEDS THE USER
-  1. **The run-100 direction question, now with a current number.** Silicon
-     validation / +14.7% at a visible cost / new content.
+### ⬜ NEXT - STILL GATED ON THE USER, NOTHING EMULATOR-ANSWERABLE IS OPEN
+  1. **The run-100 direction question**, now with live numbers: silicon
+     validation / **VRESN=80 = +14.7%** at a visible cost (`/tmp/vres_ab.png`,
+     sent to him) / new content.
   2. **Hardware** - `start` reports `capture /dev/video0 ok` and the Jaguar idle,
      against the prompt's standing "physically unplugged". `HW_TESTCARD=1` +
-     `tools/testcard_check.py` are ready for that session. Do not claim the rig.
-  3. Emulator-answerable gameplay work is DONE - both levels sweep clean, the
-     release is rebuilt and driven, every doorway accounted for.
-  ☠️ Do not start an open-ended campaign while these are pending; prefer small
-  verifiable work (see `user_goal_and_endpoint`).
+     `tools/testcard_check.py` are built and ready for that session. Do not
+     claim the rig.
+  3. Gameplay: both levels sweep clean, every doorway accounted for, the release
+     is rebuilt and driven, entities verified. There is no known defect open.
+  ☠️ Do not start an open-ended campaign while the direction question is
+  pending - see `user_goal_and_endpoint`.
 
 ### ⚠️ BUILD STATE
 `/tmp/cofout8/` = the SHIPPING payload with ALL THREE gameplay fixes (COF +

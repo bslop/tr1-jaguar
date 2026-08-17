@@ -1139,6 +1139,7 @@ static int g_curroom;                 /* room Lara is standing in (visibility) *
    In vis but not drew = killed by a cull between them. In neither = the portal
    chain never admitted it. */
 static uint32_t g_drewrooms, g_visrooms;
+static volatile int g_entdrawn, g_entdrawn_rooms;  /* entities submitted this frame */
 /* ★ RENDERED-FRAME COUNTER. `frame_count` is FIELDS (it ticks 12 per 12-field
    step, so it measures the VBL, not the game) and `g_pipeframe` is a stage
    index that never leaves 1 - neither can price a rendering change. This ticks
@@ -10073,6 +10074,19 @@ bootvid_entry:
                 /* props join the SAME dispatch (they don't depend on Jerry):
                    door then item, full-screen clips, after all rooms */
                 RP(2);
+#ifdef DREWVIS
+                /* ☠️ COUNT THE ENTITIES ACTUALLY SUBMITTED. "Do enemies and
+                   pickups still render" cannot be answered from a screenshot:
+                   entity_check stands Lara at an entity's SPAWN point after a
+                   1300-field boot, by which time a wolf has hunted its way
+                   somewhere else, and a build A/B with ENEMIES off is
+                   camera-confounded (measured: 66% of pixels differ because the
+                   two builds pitch the camera differently). `ndrawn` is a local,
+                   so nothing could read it. This is the room count at the moment
+                   the entity section starts; g_entdrawn below is the difference,
+                   which is exactly "how many entities went into the displist". */
+                g_entdrawn_rooms = ndrawn;
+#endif
 #ifdef ENTITIES
                 /* real doors: only those in the room Lara is standing in,
                    and only while still low enough to be visible.  The
@@ -10306,6 +10320,9 @@ bootvid_entry:
                     ndrawn++;
                 }
 #endif /* DEMO_PROPS */
+#ifdef DREWVIS
+                g_entdrawn = ndrawn - g_entdrawn_rooms;
+#endif
                 RP(3);
 #ifdef ABLADDER
                 if (1) {   /* g_abrooms=0 must still dispatch Lara alone */
