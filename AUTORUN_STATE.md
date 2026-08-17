@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 25
+RUN: 26
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,52 +17,57 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**✅ THE 350 PHANTOM FLOORS ARE WALLED, VERIFIED, AND IN THE RELEASE CHAIN.**
+**✅✅ END-TO-END CONFIRMED: the climb works AND lands somewhere rendered.**
+Task #10 (second ledge grab) is closed; #8 (ivy drop) is very likely closed with
+it and just needs the same check at that location.
 
-    tools/floor_coverage.py            report
-    tools/floor_coverage.py --patch    wall them (floorY -> 0x7FFF, in place)
+Driven at a post-patch census spot (room 12, CLIMB3 rise 768, X 45568 Y 7680
+Z 53760, yaw 0):
 
-    before  OPENING 418  WALL 1184  floor 2424     scan: 350 of 2424 (14.4%)
-    after   OPENING 418  WALL 1534  floor 2074     scan: 0 of 2074 (0.0%)
-    mrt_sect.bin 24720 B, unchanged                backup: mrt_sect.bin.precov
+    spawn        Y 7680  floor 7680
+    walk (UP)    Y 7680 constant, Z advancing        flat ground
+    UP+B held    7658 7590 7522 7455 7387 7093 7003  smooth, ~70/step
+                 6912  floor -> 6912                 LANDS, exactly 7680-768
+    screen       0.7% black (was 81-97% before the wall patch)
 
-Verified after patching, all four:
-* **Level not sealed** — driven from the level start, Lara walks Z 3584 -> 8282
-  (4.6 sectors) in room 0 with no blocking. This was the real risk: the earlier
-  boundary work notes that mis-walling doorcells "SEALS OFF parts of the level".
-* **Renders normally** — 2.0% black, maxluma 255.
-* **Free** — rendered frames 232 / 398, identical to baseline.
-* **OPENING count untouched** (418 before and after), so no doorway was walled.
+★ **The wall patch is validated by its effect on the census itself**: spot count
+dropped to 26 and every room-11 entry vanished — those were the phantom floors
+that put run 21's test in a black void. The census is trustworthy again.
 
-Wired into `tools/build_cof.sh` immediately AFTER the boundary patch.
-☠️ **Order is load-bearing**: this pass skips `0x7FFE` OPENING cells, which the
-boundary patch creates. Running it first would wall real doorways and seal the
-level.
+☠️ **Hold the buttons through the whole pull-up.** My first pass released at
+Y 7387 and she stalled mid-climb (floor still 7680) — that looked like a failed
+climb and was purely my input. Releasing aborts it, as in the original game.
+☠️ Keep holding UP after landing and she walks straight off the far side
+(Y 6948 -> 7380, floor 7424). Expected; not a bug.
 
 ### What to do next
-1. **Re-run `tools/build_cof.sh` end to end.** It has now gained RCLIPFIX (run
-   20) and the coverage patch (this run) since its last full run. ~20 min,
-   video is the slow part; then diff `/tmp/cofout` against the container.
-2. **Re-check task #8 (ivy drop)** — it is plausibly the same cause and may now
-   be fixed for free. Use the driven telemetry method; if the blackness is gone,
-   close it.
-3. ⬜ **The 350 is still a LOWER BOUND.** `floor_coverage.py` only flags cells
-   OUTSIDE the mesh bbox (certain, cheap). Holes INSIDE the bbox need per-face
-   coverage — a second pass, and the natural follow-up if any blackness remains.
-4. **RIG, batched** — `PHRASEDST=1` yes/no, title-music, enemy skins, mansion,
-   PHRASECLEAR, RCLIPFIX, and now the collision fix.
+1. **Re-run `tools/build_cof.sh` end to end.** Now THREE recipe changes since
+   its last full run: RCLIPFIX (run 20), the collision coverage patch (run 24),
+   and everything they imply. ~20 min, video is the slow part. Then rebuild the
+   container and diff `/tmp/dockout` against `/tmp/cofout`.
+2. **Task #8 (ivy drop)** — same driven method at that location; expect it to be
+   fixed already. If blackness remains there, it is an INSIDE-the-bbox hole and
+   needs the per-face coverage pass (see 3).
+3. ⬜ **Per-face coverage pass.** `floor_coverage.py` flags only cells outside
+   the mesh bbox — certain but a LOWER BOUND. Holes inside the bbox need
+   per-face XZ coverage. Build it only if a real symptom survives.
+4. **RIG, batched** — `PHRASEDST=1` yes/no (the only silicon-blocked question
+   left), title-music, enemy skins, mansion, PHRASECLEAR, RCLIPFIX, collision.
 
-☠️ `ledge_census.py` reads raw sector data, so before this patch it generated
-test spots on phantom floors (that is how run 21 ended up in a black room).
-Re-run it now that they are walls — its output should be trustworthy.
+### ⬜ AWAITING THE USER (run-25 checkpoint, unanswered)
+Three direction questions were put to him and none is answered yet; do not act
+on them unilaterally:
+  1. Can the capture card be replugged? (biggest unblock by far)
+  2. Ship Lara's Home in the release? (fits, works, costs 254KB)
+  3. Is this the release, or keep polishing?
+Nothing is pushed to `origin` (public `tr1-jaguar`). Keep it that way.
 
 ### Reference — offline movement telemetry (no rig needed)
     jagemu serve --rom <rom> --instance N ; ctl N run 1250
-    ctl N input up | up,b | release ; ctl N run 12..40 between samples
-    symbols are PER-BUILD - read g_lax/g_lay/g_laz/g_lafloor/g_curroom/
-    g_cam[xyz]/g_synccalls from that arm's own `nm`.
-☠️ Room blob header is **16 bytes** (`>HHHHH` then `>hhh`), verts at +16 as
-`>hhhH`; the sector cell is `floor:h, ceiling:h, slantX:b, slantZ:b`.
+    ctl N input up | up,b | release ; ctl N run 15..40 between samples
+    symbols are PER-BUILD - read them from that arm's own `nm`.
+☠️ Room blob header is 16 B (`>HHHHH` then `>hhh`), verts at +16 as `>hhhH`;
+sector cell is `floor:h, ceiling:h, slantX:b, slantZ:b`.
 
 ---
 
