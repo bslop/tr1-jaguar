@@ -107,6 +107,20 @@ end)
     # assets that must not be committed (see .gitignore) and generated headers.
     git -C "$HERE" add -u 2>/dev/null
     git -C "$HERE" add AUTORUN_STATE.md tools/.lastrun 2>/dev/null
+    # ☠️ `git add -u` ONLY STAGES FILES GIT ALREADY KNOWS. Every instrument this
+    # campaign was built on — conformance.py, build_conf.sh, floor_coverage.py,
+    # room_black.py and the recorded baselines — was written by a run, staged by
+    # nothing, and sat UNTRACKED for six runs. The state file survives a context
+    # ending; the tools it tells the next run to use were backed up nowhere.
+    # Pick up new tools/ files by name, still never `add -A`.
+    git -C "$HERE" add tools/*.py tools/*.sh 2>/dev/null
+    git -C "$HERE" add tools/.black_* tools/.toolchain_baseline 2>/dev/null
+    # Say plainly if anything is still untracked, rather than passing silently.
+    UNTR=$(git -C "$HERE" ls-files --others --exclude-standard | head -8)
+    if [ -n "$UNTR" ]; then
+        echo "note: still untracked (add by name if it is work, .gitignore if not):"
+        echo "$UNTR" | sed 's/^/    /'
+    fi
     if git -C "$HERE" diff --cached --quiet; then
         echo "run $N: nothing to commit"
     else
