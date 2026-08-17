@@ -884,6 +884,14 @@ static int g_autojv;                  /* solved launch speed for the armed ledge
                                          has to travel between them. */
 static int g_autoj;                   /* AUTO JUMP-REACH armed (UP at a wall
                                          with a grabbable ledge above)     */
+#ifdef MVDIAG
+/* ☠️ VOLATILE, or they do not exist. A `static int` that is only ever WRITTEN is
+   dead by definition and gcc discards it - the first MVDIAG build had no
+   g_mvveto symbol in the ELF at all, so there was nothing to peek. Any variable
+   whose only reader is a debugger has to say so. */
+static volatile int g_mvveto;   /* which move-gate clause refused (see MVDIAG) */
+static volatile int g_mvnf;     /* the floor the refused destination reported  */
+#endif
 static int g_fwdblk;                  /* forward held but BLOCKED this frame
                                          (gates the auto-reach probe)      */
 #ifdef VIDDIAG
@@ -8179,6 +8187,31 @@ bootvid_entry:
                      the frame) only run at actual wall contact - probing
                      every UP-held frame measurably dropped the GAME's fps
                      (user 2026-08-07). */
+#ifdef MVDIAG
+                  /* ★ MAKE THE GATE SAY WHY IT REFUSED, instead of me inferring
+                     it. Run 80 left a real defect - a switch fires, its door
+                     swings fully open (angle 66 of a 64 cap) and Lara still
+                     cannot walk through - and I had eliminated three of the four
+                     veto clauses BY INFERENCE FROM MY OWN MODEL of them. That is
+                     the trap jag_viewpoint handed over: a check performed in the
+                     units you assumed is self-consistent across a wrong premise.
+                     So RE-EVALUATE the clauses after the fact and record which
+                     one vetoes. Re-evaluation, not restructuring: the shipping
+                     gate above is untouched, so this cannot change behaviour.
+                       1 room_wall_at   2 room_floor_mr failed
+                       3 ent_door_blocks   4 step-up   5 nothing refuses now */
+                  if (mv > 0 && g_lax == mx0) {
+                      int nf2 = 0;
+                      g_mvveto =
+                          room_wall_at(rsect[g_curroom], nx, g_laz)          ? 1 :
+                          !room_floor_mr(rsect, roomCount, nx, g_laz, &nf2)  ? 2 :
+#ifdef ENTITIES
+                          ent_door_blocks(g_curroom, g_lax, g_laz, nx, g_laz) ? 3 :
+#endif
+                          (g_lafloor - nf2 > LARA_STEPUP)                    ? 4 : 5;
+                      g_mvnf = nf2;
+                  }
+#endif
                   g_fwdblk = (mv > 0 && g_lax == mx0 && g_laz == mz0);
               }
 #ifdef MV_SIDE

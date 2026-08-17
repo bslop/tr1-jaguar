@@ -1061,6 +1061,14 @@ CFLAGS   += -DHOPDEPTH=$(HOPDEPTH)
 CXXFLAGS += -DHOPDEPTH=$(HOPDEPTH)
 endif
 
+# MVDIAG=1: expose g_mvveto/g_mvnf - which move-gate clause refused a blocked
+# step. Diagnostic; the shipping gate is untouched (the clauses are re-evaluated
+# afterwards, never restructured).
+ifdef MVDIAG
+CFLAGS   += -DMVDIAG
+CXXFLAGS += -DMVDIAG
+endif
+
 # GYMTEST=1 / CAVETEST=1: boot straight into Lara's Home / the Caves, skipping
 # the title ring. ☠️☠️ BOTH #ifdefs HAVE EXISTED IN main.c FOR AGES AND NEITHER
 # WAS EVER PLUMBED HERE - so -DGYMTEST never reached the compiler and a GYMTEST

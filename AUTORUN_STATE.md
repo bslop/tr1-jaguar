@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 81
+RUN: 82
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,85 +17,87 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ☠️☠️ THE SWITCH WORKS, THE DOOR OPENS FULLY, AND SHE STILL CANNOT WALK THROUGH.
+# ☠️ THE DOOR IS NOT THE BUG. ALL FOUR MOVE-GATE CLAUSES PASS AND SHE STILL STANDS.
 
-This is a REAL gameplay defect in the shipping level, found by driving the
-mechanic end to end for the first time (`probe_spot.py --phases`, new this run):
+`MVDIAG=1` (new this run) makes the move gate REPORT which clause vetoed a
+blocked step, instead of me eliminating them by inference. At the Caves 11->12
+door, with fresh addresses from THIS build:
 
-    --at 50451,7680,57856,11,-16384  --phases "up:4,-:1,b:8,-:1,up:24"
+    up0..up3  walks 50169 -> 49441
+    b5..b11   swact 45 (switch pull anim), swpull[10]=1, door angle 6 -> 36
+    b12       swact 0 (anim completed and RELEASED), door 42
+    up14..23  **veto = 5**, door **66** (fully open, cap 64), x pinned 49441
 
-    up0..up3   walks 50169 -> 49441            (stops at the door, as before)
-    b8         door angle 21   (SWITCH WORKS - g_dooff[9] climbing by DOOR_ANG_STEP)
-    b12        door angle 42   (past DOOR_ANG_CLEAR 40)
-    up16       door angle 63
-    up20..up37 door angle **66** (capped; DOOR_ANG_OPEN is 64) - fully open
-               x pinned at **49441** for all 37 steps. She never passes.
+    veto legend: 1 wall · 2 no floor · 3 door blocks · 4 step-up · **5 NOTHING refuses**
 
-### ☠️ WHAT IS ALREADY RULED OUT
-    the sector data   room 11 cell 0 is OPEN, room 12 beyond is floor 7680,
-                      SAME LEVEL as her 7680 - no wall, no step (run 79)
-    ent_door_blocks   skips a door once `g_dooff[e] >= DOOR_ANG_CLEAR` (40), and
-                      the angle is 66
-    the switch        it fires and drives the swing - that half WORKS
-So the blocker is a THIRD thing in the move gate, and `g_fwdblk=1` proves the
-gate is being consulted and refusing.
+So: the switch fires, its animation completes and releases, the door swings fully
+open, **and every clause in the gate passes** - yet `g_lax` never changes and
+`g_fwdblk` is 1. The door and the switch are both EXONERATED. So is the sector
+data (run 79) and the door-clearance check.
 
-### ⬜ NEXT: MAKE THE MOVE GATE SAY WHY IT REFUSED
-Stop guessing which clause fails - the gate has four and I have eliminated three
-by inference, which is exactly the shape that cost ten runs on the mansion holes.
-Add a diagnostic (behind a flag, e.g. `MVDIAG`) that records WHICH clause vetoed
-the last blocked move:
-    1 room_wall_at(rsect[g_curroom], nx, nz)
-    2 room_floor_mr returned 0
-    3 ent_door_blocks
-    4 g_lafloor - nf > LARA_STEPUP
-Store it in a peekable byte and read it at x=49441. One run, one answer.
-★ SUSPICION, to test not to assume: the door is a HINGED PANEL and the collision
-is an "oriented plane-crossing test" (`project_switch_door_collision_fix`). A
-panel swung 90 degrees may lie ACROSS the corridor instead of along it - i.e. the
-door opens INTO the passage. If so, `ent_door_blocks`' clearance check
-(`g_dooff >= 40 -> skip`) is right but the panel geometry is wrong, and the fix is
-in the swing direction, not the gate.
-☠️ Entity 10 is a SWITCH in the SAME cell (49664,7680,57856) - check whether
-switch entities are also treated as blocking panels before blaming the door.
+### ⬜ NEXT: THE DESTINATION EQUALS HER POSITION. INSTRUMENT nx AND spd.
+`veto=5` with no movement leaves exactly one shape: the gate assigned
+`g_lax = nx` and **nx was already g_lax**, i.e. the step computed to zero.
+    nx = g_lax + (SIN(g_layaw) * (spd*mv)) >> 16
+    spd = RUN_SPEED_TR1 * g_ticks >> 1     (TIMESTEP)
+Both x AND z are pinned, and a unit vector cannot have both components zero, so
+**spd is 0** or the shift underflows. Add `nx`, `spd`, `g_ticks` and `g_layaw` to
+MVDIAG and read them at x=49441 - one run, one answer.
+☠️ Do NOT go back to reading the source and reasoning about it. Three eliminations
+by inference (sector, door, switch) each looked sound and each cost a run; the
+peekable byte settled all three in one probe.
+★ Suspect worth having in mind but NOT assuming: `g_swact > 0` forces `mv = 0`
+(main.c:4717 and :8117). It reads 0 in the telemetry above, so it is not the
+cause - but note there are `g_swact = 99; /* DEBUG: never expire */` lines at
+:7324 and :8794. **:8794 is behind `#ifdef SWDEBUG` (inactive), :7324 is NOT** -
+check what guards :7324 before trusting that it cannot fire.
 
-### ★ `probe_spot.py --phases "keys:steps,..."` (new)
-    --phases "up:4,-:1,b:8,-:1,up:24"      ("-" releases everything)
-One fixed key set for a whole run cannot work a switch: holding `up,b` to reach
-one and throw it leaves her **completely immobile** (run 79 - ACTION held during a
-walk is a different state from ACTION pressed while standing at the switch).
+### ★ `MVDIAG=1` and `probe_spot.py --phases` (both new, runs 80-81)
+    --phases "up:4,-:1,b:8,-:1,up:10"     ("-" releases; one key set cannot work
+                                           a switch - holding up,b leaves her
+                                           completely immobile)
+☠️ **A `static int` that is only WRITTEN does not exist.** The first MVDIAG build
+had no `g_mvveto` symbol at all - gcc discarded it as dead. Anything whose only
+reader is a debugger must be `volatile`.
+☠️☠️ **SYMBOL ADDRESSES ARE PER-BUILD and I tripped on my own rule this run**: I
+read `g_dooff` at the previous build's address and got `door=0` for the whole
+run, which flatly contradicted run 80 and would have "proved" the door never
+opens. Re-read every address from the ELF that came out of the build under test.
+    this build: g_mvveto 0x154ba8 · g_mvnf 0x154ba4 · g_swact 0x154b78
+                g_dooff 0x140502 (int16[60], entity 9 at +18)
+                g_swpull 0x14057e (uint8[60])
+
+### ★ FROM jag_viewpoint: A SCREENSHOT IS EVIDENCE ONLY WHEN SOMETHING READS ITS PIXELS
+Their "missing" 1-pixel border was never missing - rows 0/223 and columns 0/319
+measure 100% white and always did; a 1px line is invisible in a downscaled view.
+They invented a phantom bug from a *working* image minutes after writing down
+"measure, don't eyeball" from the OLP trap. Their response was to stop relying on
+discipline: `make verify` runs a ~90-line `checkshot.py` that asserts geometry,
+all four border edges, per-band channel isolation and that each ramp ramps (13/13).
+⬜ **WORTH COPYING HERE.** Our equivalent of their border was the rightmost pixel
+column, black in EVERY scene for months (`RCLIPFIX`) because a right-exclusive
+span end was clamped to an INCLUSIVE clip value. An assertion over a rendered
+edge would have caught it immediately. We currently eyeball black%/maxluma against
+a remembered baseline - which has already produced one phantom defect (run 67's
+"LOADING screen" read off a contact sheet).
 
 ### ⏳ STILL AWAITING THE USER: WHAT DOES THE TV SHOW?
-`/tmp/cofout7/OPENLARA.COF` has run on the real Jaguar since run 75 (`OK!`).
-A power cycle is only decisive if you can SEE the GD menu return; our capture is
-dead upstream, so for us the ladder collapses to the TV.
-
-### ★ FROM jag_viewpoint - a verification trap worth carrying
-They found their black screen: **`OLP` takes the BYTE address WORD-SWAPPED**
-(`(addr>>16)|(addr<<16)`), while the object's own DATA/LINK fields use `addr>>3`
-un-swapped - so writing OLP the same way as the fields you just wrote is the
-natural mistake and yields a correct list with a black screen.
-★★★★★ **The expensive half: they had "verified" OLP and been REASSURED.** They
-read the register back, computed `value << 3 == &op_list`, and concluded it was
-fine - **a round-trip check performed in the units you assumed is self-consistent
-across a wrong premise and proves nothing.** Verify a register against shipping
-code or the docs, never against your own encoding of it.
-This is the same failure as our own recurring one (the tool measuring itself);
-worth reading `MVDIAG` above in that light - do not "verify" the gate against my
-own model of it, make the gate report.
+`/tmp/cofout7/OPENLARA.COF` on the real Jaguar since run 75 (`OK!`). Capture is
+dead upstream, so the ladder collapses to the TV.
 
 ### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (50-59) · pickups (65) · mid-walk LOADING (67) ·
     caves black wedges (69, OPEN SKY) · caves room crossing (72, FIXED) ·
     gym room 18 (73/78, the POOL - swimming WORKS) ·
-    7 "dead doors" (74, balconies) · caves 11->12 geometry (79 - it is the DOOR)
+    7 "dead doors" (74, balconies) · caves 11->12 geometry (79) ·
+    the DOOR and the SWITCH themselves (81 - both work; veto=5)
 
 ### ✅ WHAT IS DONE
     climbing   CAVES 24/24 ledges, 6/6 walls · MANSION 24/24, 6/6
-    walking    CAVES 50/58 doors · MANSION 9/18 · crossing works on both
+    walking    CAVES 50/58 doors · MANSION 9/18
     swimming   the mansion POOL: enter, swim, room 18, renders correctly
-    switches   the 11->12 switch FIRES and swings its door fully open
-    ☠️ doors   ...but the passage stays blocked - see above
+    switches   fire, animate, release, and swing their door fully open
+    ☠️ but     she cannot walk through afterwards - cause narrowed, see above
     enemies    BEAR and WOLVES render on shipping flags
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
     release    /tmp/cofout7 - on the real Jaguar since run 75, verdict pending
