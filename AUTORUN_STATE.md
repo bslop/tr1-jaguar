@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 55
+RUN: 56
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,64 +17,67 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ☠️☠️ THE HOLE IS NOT FACE REJECTION. THE 45% WAS A CORRELATE, NOT A CAUSE.
+# ✅ THE HOLE IS MISSING GEOMETRY, NOT A RENDERER BUG. FIVE RUNS TO GET HERE.
 
-Run 52 localised the hole to the screen-space reject stage on a controlled 45%
-vs 5%. That correlation was real and it was **not causal**. Only intervening
-settled it.
+Along Lara's line of sight at the probe spot there are **19 faces in the whole
+level**, and every one of them spans y -1024..2560 - entirely ABOVE her feet at
+y=3072. Nothing exists between room 13's lowest faces and the floor she stands
+on. **The vertical riser between the two floor levels is absent from the mesh**,
+so no cull, window or clip was ever going to fill those pixels.
 
-    build: SKIP="HOPBOOT XCULL"
-           EXTRA="HOLEVIS=1 HOPBOOT=4 ALLVIS=1 NOBFCULL=1 CULLCOUNT=1 BEXCNT=1 WCCNT=1"
-    spot:  --at 35328,3072,39424,15,16384
+    # the query, reusable - walk every room's quads, keep centroids in the
+    # +X corridor at her z, print each room's y span
+    35400 <= centroid_x <= 41000 and 38900 <= centroid_z <= 39950
+      -> room 13: 19 faces, y span -1024 .. 2560     (she is at y=3072)
 
-                          screen-space   drawn    uncovered
-    baseline                  45%         32%      32.9%
-    XCULL off                 35%         41%      28.2%
-    screen-backface off       26%         55%      29.2%
-    ALLVIS + hop 4            --           --      33.0%
-    ALL OF THE ABOVE           7%         61%      26.1%
+### ✅ THE WORLD PLANE CULL IS EXONERATED - it was the last suspect
+Built an offline model of it and **validated it against the hardware**: 21% of
+room 13's faces culled offline vs the ~19% `worldcull` the ROM counts. With that
+model:
+  * planes are internally consistent - all 471 quads in room 13 and all 117 in
+    room 15 share one winding convention (a uniform "disagreement" with my cross
+    product is MY sign convention, not a defect - a 100% result is a convention,
+    a 5% result is a bug);
+  * the SLACK is a constant **6144** subtracted from d, and since the test is
+    `cull iff N.C < d`, lowering d culls FEWER faces. The margin errs toward
+    keeping geometry, so it cannot be over-culling.
+  * ☠️ `nz` is stored as 65472 in a 32-bit field and that is NOT a sign bug -
+    `imult` takes the low 16 bits as signed, so it reads as -64. Checked because
+    it looked exactly like one.
 
-**Screen-space rejection falls 45% -> 7% - the clean-room rate - and drawn faces
-nearly double, and the hole closes only 7 of its 33 points.** Frame saved at
-`/tmp/hole_maxcoverage.png` (320x80, upscale 3x). A quarter of that screen has no
-geometry submitted that would cover it, no matter what you stop culling.
-★ A view containing a big empty region ALSO contains lots of edge-on and distant
-faces, which is why the reject rate tracked the hole without causing it. **A
-correlation that survives a control can still not be the cause - the only test
-that settles it is removing the suspect and seeing whether the effect moves.**
+### ⬜ NEXT: WHY DOES THE EXTRACTOR DROP THE RISER?
+The question is now about level conversion, not rendering:
+  1. Does the ORIGINAL TR1 room data carry that face? Read Lara's Home room 13/15
+     out of the source level with the extractor's own reader and look for quads
+     spanning y 2560..3072 in that corridor.
+  2. If TR1 has it and we do not, find where the converter drops it -
+     the likely candidates are portal-boundary handling (a face coincident with a
+     portal may be discarded) or a room-bounds clip.
+  3. If TR1 does NOT have it either, then the original relies on the player never
+     being able to stand where the census put her, and the honest fix is a
+     collision one: room 15's floor at 3072 next to room 13's at 2560 with no
+     wall between them is a place TR1 never lets you see from.
+     ★ That is worth checking FIRST - it is cheap, and if true this hole is not
+     a bug to fix but a place to make unreachable.
 
-### ⬜ NEXT: THE WORLD-SPACE PLANE CULL IS THE ONE SUSPECT LEFT
-It is the ONLY cull I could not disable, and it is still killing **19%** of faces
-in the max-coverage build (`worldcull` 436 of 2292). Geometry: she stands in room
-15 at y=3072 and room 13's floor along her view is at 1536-2560 - i.e. ABOVE her.
-The band is the vertical RISER between the two floor levels. If those riser faces
-carry a baked plane that points away from her, the world cull drops them and
-nothing later can bring them back.
+### ☠️ THE SHAPE OF THIS HUNT - worth reading before starting another
+Runs 50-55 eliminated, with measurements: ALLVIS, room-level and kernel XCULL,
+NEARLOW, SLIVER, HOPBOOT/hop, missing portal, undrawn rooms, VRESN/resolution,
+screen-space backface, empty-y+area as a whole, and the world plane cull.
+  * Run 52 found a 45%-vs-5% controlled correlation and called it the cause. It
+    was not. **Removing the suspect (run 54) closed 7 of 33 points** while the
+    reject rate fell to the clean-room level. A correlation that survives a
+    control still is not a cause.
+  * Six static A/Bs returned EXACTLY 33.1%. Identical numbers across unrelated
+    changes is one strong result, not six weak ones: none of them was in the path.
+  * The thing that finally worked was asking what geometry EXISTS, which is a
+    question about the data and needed no build at all.
 
-Do it OFFLINE - do not chase the broken flag (below). Parse `gym_geom.bin`:
-  * room blob header 16B: `>HHHHH` vcount,qcount,tcount,atlasW,atlasH then
-    `>hhh` offX,0,offZ; verts at +16 as `>hhhH`;
-  * face records carry a 12B plane prefix `{(ny<<16)|nx, nz, d}` (gpu_geotex.gas
-    :400), quads 36B / tris 30B with FACE_PLANES=1;
-  * the kernel culls iff `N.C < d` with C = camera, room-local.
-Evaluate that for room 13's faces with C at the probe spot and count how many
-land in the band. If the riser faces are culled, the fix is in the extractor's
-plane baking (sign/winding), not in the kernel.
-
-### ☠️☠️ TWO KERNEL DIAGNOSTIC FLAGS ARE BROKEN - THEY BUILD AND DO NOT RENDER
-    NOEMPTYY=1   GPU halted, flat luma-76 field   (run 53)
-    NOSDCULL=1   GPU halted, HOLEVIS 100% WHITE = nothing drawn at all
-Both are "replace the jump with a nop" diagnostics whose comments claim the
-instruction count is preserved. Both report **illegal=0**, so the crash check
-passes and the ROM looks fine to anything that does not LOOK at it.
-★ `NOBFCULL=1` and `ALLVIS=1` DO work - those two are safe to use.
-★ Always screenshot a diagnostic build before trusting a number from it:
-`illegal=0` is not "it rendered".
-
-### ✅ RULED OUT WITH NUMBERS (runs 50-54) - DO NOT RE-TEST
-    ALLVIS · room-level XCULL · kernel XCULL · NEARLOW · SLIVER · HOPBOOT/hop ·
-    missing portal · missing room geometry · undrawn rooms · VRESN/resolution ·
-    screen-space backface · empty-y+area as a whole (7% residual proves it)
+### ☠️☠️ TWO KERNEL DIAGNOSTIC FLAGS BUILD AND DO NOT RENDER
+    NOEMPTYY=1   GPU halted, flat luma-76 field
+    NOSDCULL=1   GPU halted, HOLEVIS 100% white = nothing drawn
+Both report **illegal=0**. `NOBFCULL=1` and `ALLVIS=1` are safe.
+★ `illegal=0` is not "it rendered" - screenshot every diagnostic build.
 
 ### ★ INSTRUMENTS (all off in shipping builds)
     DREWVIS=1                     g_visrooms / g_drewrooms room bitmasks
@@ -85,14 +88,17 @@ passes and the ROM looks fine to anything that does not LOOK at it.
                                   screen-space = staged - bexit - rastered
     probe_spot.py --raw=N=0xADDR / --set=SYM=VAL
     build_conf.sh EXTRA= / SKIP=
-☠️ All counters ACCUMULATE - take DELTAS between steps, never absolutes.
+☠️ Counters ACCUMULATE - take DELTAS. Geometry layout for offline work: room blob
+header 16B `>HHHHH`+`>hhh`, verts `>hhhH` at +16, quads 36B = 12B plane
+`{(ny<<16)|nx, nz, d}` + 4 u16 idx + 8 u16 UV; tris 30B.
 
 ### ✅ STILL TRUE — climbing is closed (runs 46-49)
     CAVES    LEDGES 24/24   WALLS 6/6 refused   0 black outliers
     MANSION  LEDGES 24/24   WALLS 6/6 refused   7 black outliers (this hole)
 
 ### ⬜ ALSO STILL OPEN
-  * Room 0's hole is a different shape (everything above the floor missing).
+  * Room 0's hole is a different shape (everything above the floor missing) -
+    run the line-of-sight query above at that spot FIRST, it is one command.
   * ☠️ `/tmp/cofout4` (the filmed release) predates runs 46-49. Rebuild before
     shipping.
   * Run-25/50 direction questions unanswered; the run-50 report was delivered.
