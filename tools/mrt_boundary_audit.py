@@ -19,6 +19,12 @@ Never writes anything. The fix lives elsewhere (surgical mrt_sect patch).
 import os, struct, sys
 
 D = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# ☠️ PREFIX: this tool was Caves-only - every path said "mrt". Lara's Home has
+# the SAME collision classes and had never been audited, purely because the
+# filenames were hardcoded. Set with --prefix gym (and point TRLEVEL at
+# GYM.PSX, since the PSX-truth side must match the baked side).
+PREFIX = "mrt"
+
 LEVEL = os.environ.get("TRLEVEL",
     "tr1_psx/extracted/PSXDATA/LEVEL1.PSX")
 TILE_PAGE_BYTES = 256*256//2
@@ -118,8 +124,8 @@ def make_fd_walkers(floors, nfloor):
     return sector_portal, sector_slant
 
 def parse_baked():
-    mrt = open(os.path.join(D, "mrt.bin"), "rb").read()
-    sect = open(os.path.join(D, "mrt_sect.bin"), "rb").read()
+    mrt = open(os.path.join(D, PREFIX + ".bin"), "rb").read()
+    sect = open(os.path.join(D, PREFIX + "_sect.bin"), "rb").read()
     n = struct.unpack(">H", mrt[0:2])[0]
     baked = []
     for i in range(n):
@@ -167,7 +173,7 @@ def load_entity_cells():
     track Lara and never derive Y from the sector floor)."""
     import re
     bridges, others = set(), set()
-    path = os.path.join(D, "mrt_spawn.h")
+    path = os.path.join(D, PREFIX + "_spawn.h")
     for m in re.finditer(r"\{\s*(\d+),\s*\d+,\s*\d+,\s*(-?\d+),\s*-?\d+,"
                          r"\s*(-?\d+),", open(path).read()):
         t, x, z = int(m.group(1)), int(m.group(2)), int(m.group(3))
@@ -194,8 +200,12 @@ def recompute_doorcells(rm):
     return cells
 
 def main():
+    global PREFIX
     only = None; do_patch = False
-    for a in sys.argv[1:]:
+    av = sys.argv[1:]
+    if "--prefix" in av:
+        PREFIX = av[av.index("--prefix") + 1]
+    for a in av:
         if a.startswith("--rooms"):
             only = [int(x) for x in a.split("=", 1)[1].split(",")]
         if a == "--patch":
@@ -285,7 +295,7 @@ def main():
         # SURGICAL in-place patch: floorY -> 0x7FFE ("room below supplies the
         # floor" — literally TR1's pitRoom semantic). Same size, so the ROM
         # layout does not move and the A10 roll stays lit.
-        sect_path = os.path.join(D, "mrt_sect.bin")
+        sect_path = os.path.join(D, PREFIX + "_sect.bin")
         bak = sect_path + ".prepatch"
         if not os.path.exists(bak):
             open(bak, "wb").write(open(sect_path, "rb").read())
@@ -294,7 +304,7 @@ def main():
         for off, ri, sx_i, sz_i in patch_list:
             buf[off] = 0x7F; buf[off+1] = 0xFE
         open(sect_path, "wb").write(buf)
-        print(f"PATCHED {len(patch_list)} cells in mrt_sect.bin "
+        print(f"PATCHED {len(patch_list)} cells in {PREFIX}_sect.bin "
               f"(size {len(buf)}, unchanged)")
 
 if __name__ == "__main__":

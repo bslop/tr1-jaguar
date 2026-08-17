@@ -192,6 +192,14 @@ python3 tools/floor_coverage.py --faces --patch 2>&1 | tail -2 \
 # share of them is where a driven sweep found a 97%-black standing spot.
 # Runs unconditionally: under GYMSD the gym data is not linked, so patching its
 # sector file is harmless, and the moment GYMSD comes off it is already right.
+# ☠️ THE MANSION NEEDS THE BOUNDARY PATCH TOO, AND IT MUST RUN FIRST.
+# mrt_boundary_audit.py was Caves-only purely because its paths were hardcoded;
+# --prefix gym + TRLEVEL=GYM.PSX audits Lara's Home and finds 102 phantom seam
+# floors of 182 seam cells. ORDER IS LOAD-BEARING: this pass creates 0x7FFE
+# OPENING doorcells and the coverage pass deliberately skips those, so running
+# coverage first would wall real doorways and seal the mansion.
+TRLEVEL="$PSX/GYM.PSX" python3 tools/mrt_boundary_audit.py --prefix gym --patch 2>&1 \
+    | tail -1 || echo "   note: gym boundary patch failed"
 python3 tools/floor_coverage.py --prefix gym --faces --patch 2>&1 | tail -1 \
     || echo "   note: floor_coverage gym patch failed"
 
