@@ -65,6 +65,36 @@ try:
     print("booting to the ring...", flush=True)
     ctl("run", 8200, timeout=3600)
     ctl("frame", os.path.join(OUT, "a_ring.png"))
+    def tour_loop(n=30):
+        """Wall-follow: walk, and when she stops, turn the SAME way and retry.
+        ☠️ Alternating the turn direction just reverses her (measured run 68:
+        56,802 units, no new ground). Same-way turning makes a dead end a
+        corner."""
+        stuck, dist = 0, 0
+        px, pz = peek("g_lax"), peek("g_laz")
+        rooms = set()
+        for i in range(n):
+            ctl("input", "up")
+            ctl("run", 120, timeout=1800)
+            ctl("release"); ctl("run", 20)
+            nx, nz = peek("g_lax"), peek("g_laz")
+            moved = abs((nx or 0) - (px or 0)) + abs((nz or 0) - (pz or 0))
+            dist += moved
+            if moved < 64:
+                stuck += 1
+                ctl("input", "right")
+                ctl("run", 45 + 25 * (stuck % 4))
+                ctl("release"); ctl("run", 10)
+            else:
+                stuck = 0
+            px, pz = nx, nz
+            r = peek("g_curroom")
+            if r is not None:
+                rooms.add(r)
+            ctl("frame", os.path.join(OUT, "t_%02d.png" % i))
+            print("  %2d moved %-6d total %-7d %s" % (i, moved, dist, tele()), flush=True)
+        print("ROOMS VISITED: %s   distance %d" % (sorted(rooms), dist), flush=True)
+
     if "--gym" in sys.argv:
         # LARA'S HOME is ring PAGE 4 (main.c:6729) and PAD_RIGHT advances the
         # page (main.c:6694), so rotate 4 then select. ☠️ Under GYMSD the menu
@@ -84,7 +114,10 @@ try:
         for i, n in enumerate((900, 1800, 1800, 1800)):
             ctl("run", n, timeout=1800)
             ctl("frame", os.path.join(OUT, "g_%d.png" % i))
-            print("  captured g_%d after +%d fields" % (i, n), flush=True)
+            print("  captured g_%d after +%d fields  %s" % (i, n, tele()), flush=True)
+        if "--tour" in sys.argv:
+            print("touring Lara's Home", flush=True)
+            tour_loop(24)
         raise SystemExit
 
     # ☠️ THE RING NEEDS **TWO** PRESSES. The first opens the PASSPORT at its
@@ -101,7 +134,7 @@ try:
     # ☠️ "Start Game" runs the SNOW CUTSCENE before the level. The first pass
     # captured only that and looked like the game had not started. Run long
     # enough to get through it.
-    if "--tour" in sys.argv:
+    if "--tour" in sys.argv and "--gym" not in sys.argv:
         # ☠️ PRESSING UP FOREVER STOPS AT THE FIRST WALL. The --play drive walked
         # 16 sectors and then sat at x=74704 z=21444 for nine straight samples,
         # which looks like a hang and is just a corridor turning. Watch her

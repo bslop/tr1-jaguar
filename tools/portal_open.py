@@ -106,6 +106,48 @@ def main():
             per_room[r] = per_room.get(r, 0) + n
         total += n
 
+    # ☠️ --audit: is every DOORWAY actually passable? A room with openings can
+    # still have a dead door, and "rooms with zero openings" is a WEAK metric - it
+    # called gym room 18 sealed when room 18 is the POOL, a water volume under a
+    # surface (room 14's cells over it read floor 3585: bit 0 is the extractor's
+    # WATER-SURFACE mark, main.c `w = fy & 1`). A vertical portal needs no
+    # horizontal opening at all.
+    # So check the thing that matters: for each portal, does EACH side have a
+    # passable cell touching the plane? Passable = a real floor or 0x7FFE.
+    if "--audit" in sys.argv:
+        def passable(r, cx, cz):
+            soff, xS, zS, ix, iz = meta[r]
+            if not (0 <= cx < xS and 0 <= cz < zS):
+                return False
+            return struct.unpack_from(">H", sect, cell_off(r, cx, cz))[0] != WALL
+
+        bad = 0
+        for (r, dst, xs, ys, zs) in portals(pfx):
+            x0, x1, y0, y1, z0, z1 = min(xs), max(xs), min(ys), max(ys), min(zs), max(zs)
+            if y0 == y1 and x0 != x1 and z0 != z1:
+                continue                      # HORIZONTAL plane = vertical portal
+            sides = []
+            for who in (r, dst):
+                soff, xS, zS, ix, iz = meta[who]
+                ok = False
+                if z0 == z1:
+                    cz = (z0 - iz) // CELL
+                    for cx in range((x0 - ix) // CELL, (x1 - ix + CELL - 1) // CELL):
+                        ok = ok or passable(who, cx, cz) or passable(who, cx, cz - 1)
+                elif x0 == x1:
+                    cx = (x0 - ix) // CELL
+                    for cz in range((z0 - iz) // CELL, (z1 - iz + CELL - 1) // CELL):
+                        ok = ok or passable(who, cx, cz) or passable(who, cx - 1, cz)
+                sides.append(ok)
+            if not all(sides):
+                bad += 1
+                print("  ☠️ DEAD DOOR %d -> %d  (passable: %s side %s, %s side %s)"
+                      % (r, dst, r, sides[0], dst, sides[1]))
+        print("%s: %d dead doors out of %d wall-portals"
+              % (pfx, bad, sum(1 for (r, d, xs, ys, zs) in portals(pfx)
+                               if not (min(ys) == max(ys) and min(xs) != max(xs) and min(zs) != max(zs)))))
+        return
+
     sealed = []
     for r in range(nroom):
         soff, xS, zS, ix, iz = meta[r]
