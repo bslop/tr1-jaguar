@@ -66,6 +66,27 @@ def main():
     print("spot room %d at (%d,%d,%d) facing (%.2f,%.2f); corridor %d long, +-%d wide"
           % (room, x, y, z, fx, fz, reach, half))
 
+    # ☠️ IS THIS ROOM OPEN TO THE SKY? Report it BEFORE the geometry list,
+    # because a black region in an open room is CORRECT - TR1 has no skybox and
+    # renders open cells black. Caves room 0 is 38% open, Lara's Home room 0 is
+    # 39%, and BOTH produced "coverage holes" that cost runs before anyone
+    # checked. ★ HOLEVIS proves nothing was DRAWN there; it does not prove
+    # something SHOULD have been. Uncovered is not the same as broken.
+    try:
+        _idx = open(os.path.join(D, pfx + ".bin"), "rb").read()
+        _sect = open(os.path.join(D, pfx + "_sect.bin"), "rb").read()
+        _, _soff = struct.unpack_from(">II", _idx, 8 + room * 8)
+        _soff &= 0x7FFFFFFF
+        _xS, _zS = struct.unpack_from(">HH", _sect, _soff)
+        _sky = sum(1 for _i in range(_xS * _zS)
+                   if struct.unpack_from(">h", _sect, _soff + 12 + _i * 6 + 2)[0] == -32768)
+        _tot = _xS * _zS
+        print("room %d: %d of %d cells have NO CEILING (%.0f%%)%s"
+              % (room, _sky, _tot, 100.0 * _sky / _tot,
+                 "  <- OPEN TO THE SKY: black above is CORRECT" if _sky * 3 > _tot else ""))
+    except Exception as _e:
+        print("(could not read ceilings for room %d: %s)" % (room, _e))
+
     hits = {}
     for rm in rooms(pfx):
         for ii in rm["faces"]:

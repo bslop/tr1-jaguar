@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 69
+RUN: 70
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,67 +17,58 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ A DRIVEN PLAY-THROUGH OF THE RELEASE. 54,000 UNITS, FULL HEALTH, NO ANOMALY.
+# ✅ THE CAVES BLACK WEDGES ARE **SKY**. NOT A DEFECT. THREAD CLOSED.
 
-`release_play.py --tour` walks the shipping ROM and **turns when she stops**,
-which is the difference between a capture that ends at the first wall and one
-that explores. With the release ELF it logs position every step.
+Run 68 flagged large black wedges during normal Caves play. Chased properly this
+run, and the answer is the same one the mansion gave:
 
-    54,225 units covered over 30 samples, x 72765..76733  z 4900..21495
-    health 1000 THROUGHOUT, floor tracks 2600..3626, no falls, no reloads
-Sheet: `/tmp/release_tour_sheet.png` - the canyon from a dozen angles, textured,
-HUD drawn, Lara animating.
+    worst tour frame t_08, 27.9% black, at x=75744 z=17519 y=3556 (room 0)
+    HOLEVIS at that exact spot   ->  35.2% UNCOVERED, 0.2% black
+    sightline in all 4 directions ->  39-130 faces, lowest y 3584..4096
+                                      (BELOW her feet - geometry IS there)
+    mrt room 0 ceilings          ->  45 of 120 cells have NO CEILING (38%)
 
-☠️ TWO WRONG TURNS WORTH KNOWING, both measured:
-  * **Alternating the turn direction just reverses her.** The first tour
-    ping-ponged along one corridor (z 15396 <-> 21480), covered 56,802 units and
-    saw NO new ground. Turning the SAME way every time (wall-following) turned a
-    dead end into a corner and produced a genuine 2D sweep.
-  * **`g_curroom` stayed 0 for the entire tour and that is CORRECT.** I nearly
-    filed it as stuck room-tracking. Room 0 is 6x20 cells spanning
-    x 71680..77824, z 2048..22528 - the whole tour fits inside it. The Caves
-    opening is ONE long corridor. ★ Check the room's extent before calling a
-    constant room index a bug.
+The Caves opening is an **open-topped canyon**, and TR1 has no skybox: open cells
+render black. Lara's Home room 0 is 39% open and produced exactly the same false
+alarm in runs 56-59. Two levels, same trap, twice.
 
-### ⬜ NEXT: BLACK WEDGES IN NORMAL CAVES PLAY - and this time I have the coords
-Most tour frames carry **large black wedges** below and beside the walkable
-surface (clearest in `t_06`, `t_12`). Some of it must be legitimate - the canyon
-is open-topped and TR1 has no sky there - but the wedges that sit BELOW the floor
-line have the shape of the missing-geometry family from runs 50-59.
-★ This is a far better starting point than that hunt had: **every tour frame has
-an exact position in the log**, so point the tool at it instead of guessing:
+### ★★★★★ HOLEVIS PROVES NOTHING WAS DRAWN. IT DOES NOT PROVE SOMETHING SHOULD
+### HAVE BEEN. "Uncovered" is not "broken".
+That distinction is now IN THE TOOL: `sightline.py` prints the room's no-ceiling
+count FIRST, before any geometry list, and says outright
+`<- OPEN TO THE SKY: black above is CORRECT` when a third or more of the room is
+open. Check that line before treating any black region as a hole.
 
-    tools/sightline.py --prefix mrt --at 72790,2602,21444,0,0 --half 4500
+### ⬜ NEXT - nothing is known-broken; pick by appetite
+  1. **Hand the release over.** `/tmp/cofout6` is current, verified into gameplay
+     on BOTH levels, ships with symbols, and now has a 54,000-unit play-through
+     capture at full health with no anomalies. The run-25/50 direction questions
+     are unanswered and **"is this the release?" is the blocking one.**
+  2. Bats (ents 1, 11, 31) unseen: AIRBORNE at y -2432; a floor stand-off leaves
+     them out of frame. Needs an air teleport or camera pitch. Cosmetic.
+  3. A longer/multi-room play-through capture if a demo video is wanted - the
+     tour currently stays in room 0 because room 0 IS the whole opening corridor
+     (6x20 cells). Driving into room 1 needs it to get past z=20480.
+  4. ☠️ Driven mechanics tests need the rig and a human at the TV. Do NOT claim
+     the rig - the capture card is unplugged.
 
-If the geometry is simply absent (as in mansion room 15), it is closed the same
-way and cheaply. If geometry EXISTS and is not drawn, that is a NEW finding in
-the CAVES - the level the demo actually ships on - and worth the runs.
-☠️ Do NOT start from the renderer. Runs 50-59 spent ten runs on culls before
-asking what geometry was there; `sightline.py` exists so that never repeats.
-
-### ⬜ ALSO OPEN - nothing known-broken
-  * Bats (ents 1, 11, 31) unseen: AIRBORNE at y -2432, a floor stand-off leaves
-    them out of frame. Needs an air teleport or camera pitch.
-  * ☠️ Driven mechanics tests need the rig and a human at the TV. Do NOT claim
-    the rig - the capture card is unplugged.
-  * **The release is CURRENT, verified into gameplay on both levels, ships with
-    symbols, and now has a play-through capture** -> `/tmp/cofout6`. The
-    run-25/50 direction questions remain unanswered; "is this the release?" is
-    the blocking one.
-
-### ☠️ CLOSED - DO NOT REOPEN
-    mansion holes (runs 50-59): room 15 = MISSING GEOMETRY, room 0 = OPEN SKY.
-    pickups (run 65): they WORK - `g_pickups` is DEMO_PROPS, not compiled in.
-    mid-walk LOADING (run 67): never existed; a contact-sheet misread.
+### ☠️ CLOSED - DO NOT REOPEN (five threads, all closed with measurements)
+    mansion holes (50-59)   room 15 = MISSING GEOMETRY; room 0 = OPEN SKY
+    pickups (65)            they WORK; `g_pickups` is DEMO_PROPS, not compiled in
+    mid-walk LOADING (67)   never existed; a contact-sheet misread
+    caves black wedges (69) OPEN SKY, 38% of room 0 has no ceiling
+    ★ THE PATTERN: four of the five were me reading a PICTURE and inferring
+    STATE. The ones that resolved fast all started from DATA - the sector table,
+    the entity table, the symbol map.
 
 ### ★ INSTRUMENTS (all off in shipping builds)
+    sightline.py                    what geometry is NEARBY + IS THE ROOM OPEN
     release_play.py --tour          wall-following play-through WITH TELEMETRY
     release_play.py --play/--gym    straight walk / select Lara's Home
-                                    (REL_ROM/REL_SD/REL_ELF override the paths)
     entity_check.py                 stand next to any entity and photograph it
     probe_spot.py --raw= / --set=   per-spot telemetry; teleport anywhere
-    sightline.py                    what geometry is NEARBY - not what is VISIBLE
     room_cycles.py --prefix=gym     per-room kernel cycles (fill NOT included)
+    HOLEVIS=1                       paints UNCOVERED pixels white
     DREWVIS=1 / HOPDEPTH=N ; CULLCOUNT=1 BEXCNT=1 WCCNT=1
                                     $1C0000 staged  $1C0004 rastered
                                     $1C0010 bexit   $1C0014 worldcull
@@ -89,7 +80,7 @@ asking what geometry was there; `sightline.py` exists so that never repeats.
    the 30 Hz LOGIC tick).
 
 ### ✅ WHAT IS DONE
-    climbing   CAVES   LEDGES 24/24  WALLS 6/6 refused  0 black outliers
+    climbing   CAVES   LEDGES 24/24  WALLS 6/6 refused
                MANSION LEDGES 24/24  WALLS 6/6 refused
     enemies    BEAR and WOLVES render in-game on shipping flags
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
