@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 42
+RUN: 43
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,53 +17,49 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ ALL FOUR COLLISION CLASSES NOW APPLY TO BOTH LEVELS.
+# ✅ ROOM 12 IS NOT A DEFECT — and the threshold that accused it is now fixed.
 
-`mrt_boundary_audit.py` was Caves-only **purely because its paths were
-hardcoded** — `mrt.bin` / `mrt_sect.bin` / `mrt_spawn.h`. Added `--prefix`; with
-`TRLEVEL=GYM.PSX` it audits Lara's Home and finds **102 phantom seam floors of
-182 seam cells**, never patched until now.
+New tool `tools/room_black.py <rom> <elf> [--prefix gym]`: teleports Lara to
+every room's centre and records black%. Works on any prefix straight from the
+sector data (ROOMTOUR needs a generated `roomtour_tab.h`, built for `mrt` only).
 
-    gym_sect.bin, applied IN ORDER from the raw extraction:
-      boundary  168 cells -> 0x7FFE OPENING
-      coverage  178 cells -> 0x7FFF WALL   (was 244 before the boundary pass —
-                                            it correctly skips the new doorways)
-      final: OPENING 186, WALL 877, floor 939, size 12312 unchanged
-    mansion renders 3.1% black, maxluma 255; sweep unchanged at 17/26.
+    mansion  19 rooms   median  9.1%   MAX 36.3%   (rooms 10, 11 at ~36%)
+    caves    38 rooms   median  1.7%   MAX 51.2%
 
-☠️ **ORDER IS LOAD-BEARING** and is now encoded in `build_cof.sh`: boundary
-creates OPENING doorcells, coverage deliberately skips those. Coverage first
-would wall real doorways and seal the level.
+**Room 12's centre reads 21.2%** and its sweep spots 21-38% — squarely inside
+normal for the mansion. The "17.4%" it was being judged against was a CAVES
+ROOMTOUR figure. Two different levels, two different lightings.
+★ That would have been the FIFTH false defect in this project from trusting a
+number past its range. The pattern is now explicit enough to state as a rule:
+**a threshold measured on one level is not evidence about another.**
 
-### The four classes, both levels, complete
-    1 seam floors        Caves 403   mansion 168
-    2 wall-border ring   Caves 350   mansion  \ 178 combined, post-boundary
-    3 zero headroom      Caves  40   mansion  /
-    4 face holes         Caves  49   mansion  /
-All found by DRIVING; none by static analysis alone.
+`conformance.py` now reads `tools/.black_<prefix>` instead of hardcoding 20%.
+Re-reported: the mansion drops from 9 flagged spots to **2**, both marginal
+(36.8 and 37.9 against a 36.3 max).
 
-### ⬜ ROOM 12 — now much more likely NOT a defect
-Its 21-38% black has survived **all four** collision passes unchanged. Combined
-with the frame (a lit interior with what reads as an opening), the remaining
-work is to prove it with a **mansion-specific baseline** rather than the 17.4%
-CAVES number the harness still prints. `ROOMTOUR` needs `roomtour_tab.h`, which
-is generated for `mrt` only — either extend that generator, or poke Lara to each
-of the 19 gym room centres and record black% per room.
-★ Do not judge it against the Caves figure. That mistake has already produced
-four false defects in this project.
+☠️ The max-based threshold is still sharp enough to catch real holes: the Caves
+room-22 void measured **60.4%**, above the 51.2% Caves max, so it would have
+been flagged; today's worst normal Caves spot is 20.8%.
+
+### WHERE BOTH LEVELS STAND
+    CAVES    18/25 CLIMBED, 2 NO-CLIMB (both correct WALL refusals)
+    MANSION  17/26 CLIMBED, 2 NO-CLIMB (both correct WALL refusals)
+    All four collision classes applied to both; no unexplained voids left.
 
 ### ⬜ REMAINING
-1. Mansion black% baseline, then judge room 12 (and Caves room 3 at 20.8%).
-2. **Jump drive** in `conformance.py` — it only does a standing pull-up, so
-   Caves JUMPGRAB 1792 and the mansion 1024s cannot be fairly judged.
+1. **Jump drive** in `conformance.py` — it only does a standing pull-up, so
+   Caves JUMPGRAB 1792 and the mansion 1024s are untested rather than failing.
+   This is the last real gap in coverage.
+2. The 7 mansion PARTIALs — check whether they are genuinely short or just the
+   climb window again (that produced a false defect in run 31).
 3. Compare against `res/` PSX footage (Part 2 = Caves, 3m20 -> 23m24).
-4. Re-run `tools/build_cof.sh` end to end — the recipe has gained the gym
+4. **Re-run `tools/build_cof.sh` end to end** — the recipe has gained the gym
    boundary patch and `--faces` on both prefixes since its last full run.
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression. `tools/toolchain_smoke.sh` guards
-updates. Working ROMs: `/tmp/conf.cof` (Caves 18/25), `/tmp/gym.cof` (mansion
-17/26, AUTOGYM, **no PADMUTE** — that flag mutes the pad).
+updates. Working ROMs: `/tmp/conf.cof` (Caves), `/tmp/gym.cof` (mansion,
+AUTOGYM, **no PADMUTE** — that flag mutes the pad and reads as "nothing climbs").
 
 ### ⬜ AWAITING THE USER (run-25 checkpoint)
   1. Capture card replugged? 2. Ship Lara's Home? 3. Release or keep polishing?
