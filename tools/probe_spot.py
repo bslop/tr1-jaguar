@@ -74,6 +74,18 @@ def main():
         os.makedirs(shots, exist_ok=True)
 
     sy = nm(elf)
+    # ★ RAW DRAM COUNTERS. gpu_geotex.gas keeps its per-face tallies at fixed
+    # addresses, not symbols, so --raw NAME=0xADDR reads them alongside the
+    # variables. The kernel's own attribution algebra (gpu_geotex.gas:1369):
+    #     total faces = worldcull + staged
+    #     near-plane  = bexit
+    #     screen-space= staged - bexit - rastered
+    #     drawn       = rastered
+    for a in sys.argv:
+        if a.startswith("--raw="):
+            k, v = a[6:].split("=")
+            sy[k] = int(v, 0)
+            WATCH.append(k)
     have = [w for w in WATCH if w in sy]
     missing = [w for w in WATCH if w not in sy]
     if missing:
