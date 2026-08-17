@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 93
+RUN: 94
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -16,51 +16,58 @@ summarise that checkpoint away.**
 ---
 
 ## NEXT STEP
+# ✅ POOL CLIMB-OUT CLOSED. THE EXIT WAS NEVER BROKEN - THE **ENTRY** WAS.
 
-# ⬜ POOL CLIMB-OUT: HALF FIXED AND FULLY DIAGNOSED. TWO CLAMPS CONSPIRE.
+Round trip measured on the gym build: enter -> swim -> **climb out and stay
+out** -> turn round -> walk back in -> swim. That was the last open gameplay
+defect on either level.
 
-### ☠️☠️ FIRST, A CORRECTION: RUN 91's "DISPROOF" WAS ITSELF INVALID
-Run 90 hypothesised the climb-out's floor query returns room 18's POOL BOTTOM
-instead of the deck. Run 91 "disproved" it (fy2 read 3328, the deck) - **but that
-test seated her at z=58300, a DECK cell, so the water entry took the FALLBACK path
-and the whole configuration was wrong.** Seated over a real water cell (z=59904,
-`g_floorwater` set, proper entry), the query returns **5632 - the pool bottom -
-exactly as run 90 said.**
-⭐ **A disproof is only as good as its setup.** I have now been wrong in both
-directions on the same question, each time from a confidently-read number.
+    up0   y=3424  z=59848  swim=1     entry from a water-surface cell
+    up18  y=3328  z=58270  swim=0     SHE CLIMBS OUT onto the surround
+    up19..24                swim=0     walks on land - this never happened before
+    up25  y=3424  z=58459  swim=1     turned round, walked back in
 
-### ✅ FIX 1 (kept, measured): THE CLIMB-OUT QUERIES IN LEDGE MODE
-The default floor search prefers a floor at or BELOW her feet; the climb-out needs
-one ABOVE. `g_flr_grab = 1` around that call is the existing ledge mode (run 47).
-    before: ahead = 5632 (pool bottom)   after: ahead = **3328 (the deck)**
-Contained to the climb-out query. This half is correct and verified.
+### ☠️☠️☠️ THE LESSON: THREE RUNS BLAMED THE EXIT BECAUSE THAT IS WHERE THE
+### SYMPTOM SHOWED. THE RE-ENTRY LEFT NO TRACE.
+`g_swim` read **1 on every sample**, so the climb-out looked like it had never
+fired. It had - and the water-entry *fallback* re-captured her on the next
+frame, one frame being far below the sampling rate. Runs 90-92 each proposed a
+clamp inside the exit; each was reasonable from the source and each was wrong.
 
-### ☠️ FIX 2 (attempted, REVERTED): THE FLOOR GUARD STILL PINS HER
-    { if (room_floor_mr(... g_lax, g_laz, &fy2) && g_lay > fy2 - 160)
-          g_lay = fy2 - 160; }
-This holds her 160 above the floor UNDER her; at the edge that floor is the deck
-(3328), so she rides at **3168 - above the ledge** - and `fy2 < g_lay` can never
-hold even with fix 1 in place. Measured exactly, every step.
-I tried skipping the guard when the floor is above the water line
-(`fy2 > g_watery &&`). **It changed nothing - she stayed at 3168** - so either
-g_watery is not what I assume at that point, or something else also sets her
-height. **Reverted rather than left in shipping code with an unexplained effect.**
+What actually broke it, main.c water entry:
 
-### ⬜ NEXT: INSTRUMENT `g_watery` AT THE GUARD, THEN RETRY
-One probe answers it: record `g_watery` and `fy2` AT the guard (not at the entry)
-during a VALID water entry, and see why `fy2 > g_watery` did not gate. Then
-re-apply fix 2. ☠️ Seat at **z=59904** (a real water cell) - a deck-cell seat
-invalidates the whole test, which is what cost run 91.
+    } else if (g_curroom < 64 && rwater[g_curroom]) {   /* NO HEIGHT TEST */
+        g_swim = 1; g_watery = g_lay - 96;
 
-### ☠️ PER-BUILD SYMBOLS BIT TWICE MORE THIS RUN
-Reused `g_swim`'s address and read **swim=0** while she was plainly swimming;
-reused `g_wwatery`'s and read **watery=1**. Both clean, plausible, wrong. Every
-probe address must come from the ELF of the build under test - re-derive with
-`eval $(m68k-neogeo-elf-nm ... | awk ...)` at the top of every probe.
+The proper path above it tests `g_lay >= sfy - 16` (she is at or under the
+surface). The fallback invents the surface **from her own head** (`g_lay - 96`),
+so its height test is vacuously true: *everyone standing anywhere in a water
+room swims*, and the pool SURROUND is part of room 18. Fix = never fall back
+while she is RESTING on a real, non-water floor. Submerged she floats ABOVE the
+pool bottom (`g_lay < sfy`), so genuine entry is untouched - proved by up25.
+
+### ★★★★★ HOW IT WAS FINALLY CAUGHT - THE METHOD, NOT THE BUG
+A **deliberately temporary** grace period (`g_swexit`, ignore entry for 30
+ticks after an exit) was added purely as an instrument. It made the invisible
+frame visible: with it in, she stayed out for exactly three steps and her stride
+jumped 84 -> 282 units (swim speed -> LAND speed), which is what proved the exit
+fires. The grace was then REMOVED and the real fix verified without it, so the
+passing test is evidence about the fix and not about the scaffold.
+★ When a state variable never shows the transition you expect, suspect the
+SAMPLING before the logic: put in something that HOLDS the state long enough to
+see, then take it out.
+
+### ⬜ NEXT: RE-VERIFY THE RELEASE WITH THE POOL FIX IN
+Both ROMs rebuild and boot clean (caves conf.png PASS, 65 lumas, 1.1% black).
+Not yet done: the driven playthrough over the shipping ROM -
+`tools/release_play.py --tour --play --gym` - to confirm nothing regressed now
+that the shared water path changed. Go/no-go is the **start-vs-end frame diff**,
+not a filmstrip.
 
 ### ⚠️ BUILD STATE
-`/tmp/gym.cof` = MVDIAG build WITH fix 1 and the water diagnostics.
-`/tmp/conf.cof` = still the NOEMPTYY (broken) build from run 89 - rebuild first.
+`/tmp/gym.cof` = MVDIAG build with the entry fix. `/tmp/conf.cof` = caves,
+rebuilt this run and boot-checked (the stale NOEMPTYY build from run 89 is gone).
+☠️ `tools/build_conf.sh` takes **caves|gym|both** - not `mrt`.
 
 ### ⬜ ALSO OPEN
   1. Capture the hardware boot **if the user grants permission** -
@@ -71,7 +78,8 @@ probe address must come from the ELF of the build under test - re-derive with
     mansion holes (50-59) · pickups (65) · mid-walk LOADING (67) ·
     caves black wedges (69) · caves room crossing (72) · swimming IN (78) ·
     7 "dead doors" (74) · caves 11->12 + switch/door (79-82) ·
-    all mansion door failures (85) · all Caves door failures (86-88)
+    all mansion door failures (85) · all Caves door failures (86-88) ·
+    **mansion pool climb-out (93)**
 
 ### ✅ WHAT IS DONE
     climbing   CAVES 24/24 ledges, 6/6 walls · MANSION 24/24, 6/6

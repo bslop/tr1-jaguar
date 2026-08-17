@@ -921,6 +921,16 @@ static volatile int g_wfy2, g_wfw, g_wlay, g_wwatery;
    floor UNDER her, not ahead. Suspected to be what pins her float height.
    Record its inputs rather than trusting the reading of the source. */
 static volatile int g_wunder, g_wlaypre, g_wlaypost;
+/* run 93: read g_watery AT THE GUARD, not at entry. Narrowing the guard with
+   `fy2 > g_watery` changed nothing, and the only way that makes sense is if
+   g_watery is not what I assume THERE. Measure it where the test would run. */
+static volatile int g_wgwatery;
+/* ☠️ SHE CLIMBS OUT AND IS DRAGGED STRAIGHT BACK IN. The only `g_swim = 0`
+   is the successful climb-out, yet g_watery was seen changing MID-SWIM to
+   `deck - 96`, which can only happen if the entry ran again with g_swim==0.
+   The fallback keys on `rwater[g_curroom]`, and after climbing onto the
+   surround she is STILL IN ROOM 18 (the water room), so it re-captures her
+   the next frame. Net effect: the pool has no exit. */
 #endif
 static int g_fwdblk;                  /* forward held but BLOCKED this frame
                                          (gates the auto-reach probe)      */
@@ -8074,12 +8084,30 @@ bootvid_entry:
                  through the Caves. Query the floor under her fresh and read the
                  clean g_floorwater flag (set from the stored, pre-slope bit). */
               if (!g_swim) {
-                  int sfy;
-                  if (room_floor_mr(rsect, roomCount, g_lax, g_laz, &sfy) &&
-                      g_floorwater && sfy < 0x7000 && g_lay >= sfy - 16) {
+                  int sfy, gotf;
+                  gotf = room_floor_mr(rsect, roomCount, g_lax, g_laz, &sfy);
+                  if (gotf && g_floorwater && sfy < 0x7000 && g_lay >= sfy - 16) {
                       g_swim = 1; g_watery = sfy; g_lay = sfy;
                       g_lavy = 0; g_airfr = 0;
-                  } else if (g_curroom < 64 && rwater[g_curroom]) {
+                  /* ☠️ THE POOL HAD NO EXIT, AND THE CLIMB-OUT WAS NEVER THE
+                     BUG. It fires correctly - measured: she leaves the water,
+                     lands on the surround at y=3328 and walks three steps at
+                     LAND speed (282/step, not the swim 84). Then THIS fallback
+                     drags her straight back in, because it tests only "is
+                     g_curroom a water room" and the pool SURROUND is part of
+                     room 18. The proper path above tests `g_lay >= sfy - 16`;
+                     the fallback invents the surface as `g_lay - 96`, i.e. from
+                     her own head, so its height test is vacuously true and
+                     everyone in the room swims. ★ Three runs blamed the exit
+                     because that is where the symptom showed. The re-entry left
+                     no trace: g_swim read 1 on every sample, so the exit looked
+                     like it had never fired at all.
+                     So: never fall back while she is RESTING on a real, non-
+                     water floor. Submerged she floats ABOVE the pool bottom
+                     (g_lay < sfy), so genuine entry is untouched. */
+                  } else if (g_curroom < 64 && rwater[g_curroom] &&
+                             !(gotf && sfy < 0x7000 && !g_floorwater &&
+                               g_lay >= sfy - 16)) {
                       /* fallback: floor query resolved inside the water room */
                       g_swim = 1; g_watery = g_lay - 96;
                       g_lavy = 0; g_airfr = 0;
@@ -8131,7 +8159,7 @@ bootvid_entry:
                   }
                   if (g_lay < g_watery) g_lay = g_watery;
                   #ifdef MVDIAG
-                  g_wlaypre = g_lay;
+                  g_wlaypre = g_lay; g_wgwatery = g_watery;
 #endif
                   /* ⬜ THIS CLAMP IS WHAT PINS HER FLOAT HEIGHT AT A POOL EDGE. It holds her
                      160 above the floor UNDER her, and near the edge that floor IS the deck
