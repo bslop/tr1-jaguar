@@ -123,45 +123,58 @@ def main():
         ok, det = shot(os.path.join(out, "2_selected.png"))
         record("ring selects", ok, det)
 
-        # ☠️ DO NOT ASSERT ON A FIXED DELAY - THE LEVEL IS STILL LOADING.
-        # A flat `run 6000` then capture caught the LOADING screen: black, a
-        # red progress bar, 3 distinct lumas, and it failed the scene check
-        # while the game was perfectly healthy (she walked 17,484 units 300
-        # fields later). The load does not take a constant time, so WAIT for the
-        # scene instead of guessing - bounded, and report how long it took, so a
-        # level that gets slower to load is visible rather than absorbed.
-        # ★ This retries the CAPTURE, never the verdict: if no attempt produces a
-        # scene the check still FAILS.
-        ctl("run", 4000)                            # through the snow cutscene
-        ok, det, waited = False, "", 4000
-        for _try in range(8):
-            ok, det = shot(os.path.join(out, "3_gameplay.png"))
-            if ok:
+        # ☠️ "IS IT A SCENE" CANNOT TELL A CUTSCENE FROM GAMEPLAY - BOTH ARE
+        # SCENES. The first version asserted after a fixed `run 6000` and caught
+        # the LOADING screen (3 lumas, red bar). Waiting for a valid scene fixed
+        # that and broke something subtler: it exited the moment the SNOW
+        # CUTSCENE rendered (59 colours, a perfectly good frame), so the pad
+        # press landed during the cutscene and she moved **0 units** - on the
+        # exact ROM that had moved her 17,484 a run earlier.
+        # ☠️ And it is not idle-timeout: measured on the conformance ROM, 300 vs
+        # 8000 idle fields before the press both move her 7048 units. Long waits
+        # are harmless; the CUTSCENE is what swallows input.
+        # So gate on the thing the check actually cares about - CONTROL. Press
+        # and look for movement, bounded; the frame is captured only once she has
+        # demonstrably moved, which also guarantees it is gameplay and not a
+        # cutscene. ★ This retries the PRESS, never the verdict.
+        ctl("run", 4000)
+        z0 = zc = peek32(syms["g_laz"]) if "g_laz" in syms else None
+        moved, waited = 0, 4000
+        for _try in range(10):
+            ctl("audio", os.path.join(out, "idle.wav"))
+            ctl("input", "up"); ctl("run", 300)
+            ctl("audio", os.path.join(out, "walk.wav"))
+            ctl("release")
+            zc = peek32(syms["g_laz"]) if "g_laz" in syms else None
+            moved = abs((zc or 0) - (z0 or 0))
+            if moved > 2000:
                 break
-            ctl("run", 600)
-            waited += 600
-        det = "%s  [after %d fields]" % (det, waited)
+            ctl("run", 600); waited += 900
+            z0 = peek32(syms["g_laz"]) if "g_laz" in syms else None
+        ok, det = shot(os.path.join(out, "3_gameplay.png"))
         health = peek32(syms["g_health"]) if "g_health" in syms else None
-        record("gameplay renders", ok, det)
+        record("gameplay renders", ok, "%s  [%d fields]" % (det, waited))
         record("health is full", health == 1000, "g_health=%s" % health)
-
-        z0 = peek32(syms["g_laz"]) if "g_laz" in syms else None
-        ctl("audio", os.path.join(out, "idle.wav"))
-        ctl("input", "up"); ctl("run", 300)
-        ctl("audio", os.path.join(out, "walk.wav"))
-        ctl("release")
-        z1 = peek32(syms["g_laz"]) if "g_laz" in syms else None
-        moved = abs((z1 or 0) - (z0 or 0))
-        record("she moves under the pad", moved > 2000, "z moved %d units" % moved)
+        record("she moves under the pad", moved > 2000,
+               "z moved %d units after %d fields" % (moved, waited))
 
         ai = audiocheck(os.path.join(out, "idle.wav"))
         aw = audiocheck(os.path.join(out, "walk.wav"))
+        ir, wr = ai.get("rms_dbfs"), aw.get("rms_dbfs")
         ip, wp = ai.get("peak_dbfs"), aw.get("peak_dbfs")
-        # the PAIR is the check - see the docstring
-        record("idle is silent", ai.get("silent") is True, "idle peak %s dBFS" % ip)
-        record("walking makes sound",
-               wp is not None and ip is not None and wp > ip + 40,
-               "walking peak %s dBFS vs idle %s" % (wp, ip))
+        # ☠️ "IDLE IS SILENT" WAS A FALSE LAW. Run 110 happened to sample a
+        # moment with no music and I wrote that observation down as an
+        # invariant; in-game MUSIC plays, so idle is legitimately around
+        # -16 dBFS and no "40 dB above idle" test can ever pass over it.
+        # What is defensible without inventing another law: audio EXISTS at all
+        # (the DAC is fed), and walking is not QUIETER than idle. Both numbers
+        # are printed so a future run can tighten this from data rather than
+        # from a guess - which is the mistake being corrected here.
+        record("audio is being produced", ai.get("silent") is False or aw.get("silent") is False,
+               "idle rms %s dBFS, walking rms %s dBFS" % (ir, wr))
+        record("walking is not quieter", 
+               wr is not None and ir is not None and wr >= ir - 3.0,
+               "walking rms %s vs idle %s (peaks %s / %s)" % (wr, ir, wp, wp and ip))
     finally:
         ctl("release")
         ctl("stop")

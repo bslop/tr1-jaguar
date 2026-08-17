@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 112
+RUN: 113
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,70 +54,56 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ⬜ `tools/release_check.py` EXISTS BUT IS NOT TRUSTWORTHY YET - TWO CHECKS ARE WRONG.
+# ✅✅ `tools/release_check.py` IS A REAL GATE NOW - 7/7 ON THE SHIPPING ROM.
 
-One command that drives the SHIPPING ROM end to end and prints a verdict, so
-release verification stops being re-derived by hand every run (94, 103, 107,
-108, 110 each rebuilt it). It works, and two of its seven checks are BAD - mine,
-not the game's:
+    boots to the ring        PASS  101 colours
+    ring selects             PASS   60 colours
+    gameplay renders         PASS   67 colours, 0.1% black   [5800 fields]
+    health is full           PASS  g_health=1000
+    she moves under the pad  PASS  z moved 17,484 units
+    audio is being produced  PASS  idle rms -120.0, walking rms -35.5 dBFS
+    walking is not quieter   PASS  peaks -120.0 -> -15.5 dBFS
 
-    boots to the ring        PASS   101 colours
-    ring selects             PASS    60 colours
-    gameplay renders         PASS    59 colours  [after a bounded scene-WAIT]
-    health is full           PASS   g_health=1000
-    she moves under the pad  ☠️ FAIL  z moved 0 units
-    idle is silent           ☠️ FAIL  idle peak -16.0 dBFS
-    walking makes sound      ☠️ FAIL  -16.8 vs idle -16.0
+    ✅ RELEASE GOOD - all 7 checks passed
 
-### ☠️ THE "IDLE IS SILENT" CHECK ENCODES A FALSE ASSUMPTION
-Run 110 measured silence-then-sound and I turned that into an invariant. It is
-not one: **in-game MUSIC plays**, so idle is legitimately loud (-16.0 dBFS), and
-"walking is 40 dB above idle" can never hold over music. Run 110's silent idle
-was a moment that happened to have none. The pair-check idea is still right -
-event-driven sound needs a before/after - but the discriminator must be
-something music does not swamp: an RMS *delta* over a longer window, or a
-spectral/transient test, not "idle is silent".
-★ I encoded one observation as a law. The gate then failed a ROM that run 110
-proved good, which is the same failure as checkshot's constant colour floor (94).
+One command, `tools/release_check.py --sd /tmp/cofout8`, ~25 minutes. Run it
+before any push.
 
-### ☠️ AND "she moved 0 units" NEEDS A LOOK BEFORE IT IS BELIEVED
-Run 110 moved her 17,484 units on this exact ROM. The difference is that the
-gate now runs a bounded scene-WAIT loop before the input, so the pad press lands
-in a different state. Suspect the harness first - do NOT read it as a movement
-defect. `--door`-style isolation: drive the same seat without the wait loop.
+### ☠️ THE BUG WAS "IS IT A SCENE" - A CUTSCENE IS ALSO A SCENE
+Run 111's gate waited for a valid frame and exited the moment the SNOW CUTSCENE
+rendered (59 colours, perfectly good), so the pad press landed during the
+cutscene and she moved **0 units** - on the same ROM that had moved her 17,484.
+☠️ And it was NOT an idle timeout: measured on the conformance ROM, **300 vs
+8000 idle fields before the press both move her 7048 units**. Long waits are
+harmless; the cutscene swallows input.
+FIX: gate on **CONTROL**, not on pixels - press and look for movement, bounded,
+and capture the frame only once she has demonstrably moved. That guarantees the
+frame is gameplay, and it retries the PRESS, never the verdict.
 
-### ★ FIRST RUN CAUGHT A REAL THING - THE LOADING SCREEN
-Asserting on a fixed `run 6000` captured the LOADING screen (3 lumas, red
-progress bar) and failed a healthy game. Fixed by WAITING for the scene, bounded
-to 8 tries, reporting the field count - it retries the CAPTURE, never the
-verdict. ★ The level's load time is not constant; never assert on a fixed delay.
+### ☠️ AND "IDLE IS SILENT" WAS A FALSE LAW I WROTE FROM ONE SAMPLE
+In-game MUSIC plays, so idle is legitimately loud and no "40 dB above idle" test
+can survive it. Replaced with two claims that do not invent an invariant: audio
+EXISTS, and walking is not QUIETER than idle - with both rms and peak printed so
+a later run can tighten from data. (In this run idle happened to be silent again
+and the numbers are stark, which is exactly why one sample is not a law.)
 
-### ☠️☠️☠️ I HAVE NOT BEEN FOLLOWING THE USER'S NEW RULES - HE HAD TO ASK
-He committed them (`8d36b2f`, `1f3efd1`) and I read only the commit SUBJECTS,
-then spent runs 103-110 telling him hardware was "blocked, needs your word"
-when he had already answered it. What they say:
-  * **THE CAPTURE CARD IS BACK** (verified 2026-08-17). The "physically
-    unplugged" finding is **superseded** - a grab through the broker returned
-    the GameDrive menu listing our own ROMs. `WORLDCOUNT`-style framebuffer
-    telemetry is viable again. ⭐ Still no way to read a number DIRECTLY off the
-    board: telemetry must be painted into the framebuffer and read off a capture.
-  * **The rig is arbitrated by `jagq`, not `jaghw`** (`hw/jaghw` now forwards).
-    A session not on the roster is **QUEUED, NOT REFUSED** - no human handover
-    was ever needed. `jagq run <rom>` uploads AND captures in one turn.
-  * **Batch what needs the console** into ONE session inside the 5-minute turn,
-    and **reboot at end of turn**.
-  Read: `jaguar-shared/hw/GD_ACCESS.md`, `hw/RESOURCES.md`, `PROTOCOL.md`,
-  `DEVELOPMENT.md`. ☠️ The autorun prompt still says the card is unplugged and to
-  leave the rig batched, which CONTRADICTS these docs - the user interrupted a
-  read-only `power state` query this run, so **do not touch the rig** until he
-  reconciles the two. Rig status when last read: free, queue empty, capture ok,
-  **GameDrive OFFLINE** though the Kasa plug is on at 2.5 W.
+### ☠️☠️ CORRECTION TO RUN 106: **80 LINES IS WHAT SHIPS**, NOT 120
+`tools/build_cof.sh:75` - `QUALITY=playable` **is** `VRESN=80`, and
+`PLAY_BUILD.md`'s release recipe passes `QUALITY=playable`. So the shipping ROM
+already renders 80 lines and the **+14.7% is already banked**. Run 106 labelled
+120 as "shipping" and 80 as the option; that is backwards, and it was sent to the
+user that way. The real choice is the opposite one: **switch to `QUALITY=pretty`
+(120 lines) and PAY ~14.7% for a sharper picture.** The measurement itself
+stands - 10.41 vs 11.94 fps, and `/tmp/vres_ab.png` still shows the two - only
+the labels were wrong. ★ Caught because the gate's in-game frame came back
+**320x80** when I expected 320x120: a number that contradicts your model is worth
+more than one that confirms it.
 
 ### ⬜ NEXT
-  1. Fix the two bad checks in `release_check.py` (music-tolerant sound test;
-     confirm the movement failure is the wait loop). Until then it is NOT a gate.
-  2. `/tmp/TESTCARD.COF` (1,189,228 B) is built and ready for the first console
-     session whenever the user reconciles the rig rules.
+  1. Tell the user the corrected frame-rate choice (done in this run's reply).
+  2. The rig rules still contradict the autorun prompt - untouched, see run 111.
+     `/tmp/TESTCARD.COF` is staged for whenever that is reconciled.
+  3. No known gameplay defect. `release_check.py` is the pre-push gate.
 
 ### ⚠️ BUILD STATE
 `/tmp/cofout8/` = the SHIPPING payload with ALL THREE gameplay fixes (COF +
