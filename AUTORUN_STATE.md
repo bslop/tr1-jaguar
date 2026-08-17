@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 61
+RUN: 62
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,60 +17,60 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅✅ THE RELEASE IS REBUILT AND VERIFIED **INTO GAMEPLAY** FOR THE FIRST TIME
+# ✅✅✅ THE RELEASE IS VERIFIED INTO GAMEPLAY ON **BOTH** LEVELS
 
-`/tmp/cofout5` - 7 files, `OPENLARA.COF` **1,538,700 B**, built with the pinned
-toolchain, `-DFITSTEP` confirmed in the compile line. It carries everything from
-runs 46-49 that had never been in a release ROM:
+`/tmp/cofout5` - 7 files, `OPENLARA.COF` **1,538,700 B**, pinned toolchain,
+`-DFITSTEP` in the compile line. Driven from a cold boot with
+`tools/release_play.py`, no compile-time shortcuts:
 
-    jump_reach_vel + LARA_JUMPGRAB 1920 + LARA_GRABTOP   (TR1 jump-reach solve)
-    g_flr_upwin + ledge-mode "prefer the floor ABOVE"    (ledge probe window)
-    climb_fits + LARA_FIT_HEIGHT                         (TR1 headroom rule)
-    FITSTEP                                              (headroom on the 256 step)
+    CAVES         ring -> A (passport "Start Game") -> A -> snow cutscene
+                  -> **caves, 1.1% black** (the recorded in-game baseline)
+    LARA'S HOME   ring -> RIGHT x4 to page 4 -> A
+                  -> **mansion interior, 3.2-3.5% black**, checkerboard floor,
+                     windows, Lara undeformed
+Frames: `/tmp/release_ring.png`, `/tmp/release_ingame.png`,
+`/tmp/release_gym_ingame.png`.
 
-### ★ VERIFIED ALL THE WAY IN, NOT JUST TO THE TITLE
-Run 46 filmed the boot and stopped at the ring, which is where the previous
-"release verified" claim ended. Driven this time with `tools/release_play.py`:
+★ This is the SHIPPING path, not a test hook. `AUTOGYM`/`GYMTEST` skip the menu
+exit; this is a real A-press on ring page 4, so it exercises the loading screen,
+level setup and the whole handover. And the release carries every fix from runs
+46-49 - the TR1 jump-reach solve, the ledge-probe window, `climb_fits`,
+`FITSTEP` - which had never been in a release ROM together.
 
-    boot 8200 fields -> TITLE RING
-    press A          -> PASSPORT opens at "Start Game"   ☠️ TWO presses needed
-    press A          -> SNOW CUTSCENE (Start Game runs an FMV first)
-    +5000 fields     -> **CAVES, 1.1% black / maxluma 238**
-
-1.1% is exactly the recorded in-game baseline, and the frame shows Lara standing
-in the level, undeformed. Saved: `/tmp/release_ring.png`, `/tmp/release_ingame.png`.
-☠️ Two things cost a pass each to learn, both now in the script:
-  * **the ring needs TWO A presses** - one press left every later frame identical
-    and read as "the input did nothing";
-  * **"Start Game" plays a cutscene before the level** - 900-field captures saw
-    only snow and looked like the game had not started.
+### ☠️ DRIVING THE RING: TWO TRAPS, BOTH NOW IN THE SCRIPT
+  * **The ring swallows input while it spins.** At 60 fields per press only 2 of
+    4 RIGHT presses registered; the ring sat on "Sound" (page 2) while the script
+    believed it was on page 4 and reported a dead selection. It needs ~200 fields
+    per press (the ring also PACES itself to ~10fps). The script now captures
+    after EVERY press so the page is READ, never assumed.
+  * **The passport needs TWO A presses** (ring -> "Start Game" -> start), and
+    "Start Game" plays an FMV before the level.
 ★ `jagemu video` has NO input, so a filmstrip can never get past the ring. Any
-"does the game run" check has to be a ctl session.
+"does the game run" check must be a ctl session.
 
-### ⬜ NEXT: pick one, the forensics thread is closed
-  1. **Hand the release to the user.** It is current, it is verified into
-     gameplay, and the run-25/50 direction questions are still unanswered -
-     including "is this the release?". `/tmp/cofout5` is what he would flash.
-  2. **PS1 parity on mechanics** rather than pixels: the caves audit
-     (`project_caves_mechanics_audit`) still lists driven tests not run -
-     r17's dead doors among them. `tools/drive.sh` drives the pad and captures
-     in ONE jaghw lease, but ☠️ that needs the rig and a human at the TV.
-  3. **Lara's Home is shippable but unproven in the release path** - AUTOGYM
-     builds work, but nobody has selected Lara's Home from the ring in this ROM.
-     Same script, navigate the ring to page 4 first.
+### ⬜ NEXT: THE OFFLINE WORK HAS CONVERGED - this is a good place to stop
+Everything the emulator can settle is settled. What remains needs either the rig
+or a decision from the user:
+  1. **The release is CURRENT and verified on both levels.** `/tmp/cofout5` is
+     what he would flash. The run-25/50 direction questions are still unanswered,
+     and "is this the release?" is now answerable with a real ROM behind it.
+  2. **Driven mechanics tests** (`project_caves_mechanics_audit` still lists
+     r17's dead doors and others) - `tools/drive.sh` needs the rig and a human at
+     the TV. ☠️ Do not claim the rig.
+  3. If more offline work is wanted, the honest candidates are SMALL: the census
+     invents spots TR1 would never reach (room 15's riser came from one), so
+     tightening `ledge_census.py` against reachability would stop manufacturing
+     non-bugs.
 
-### ☠️ THE MANSION HOLE THREAD IS CLOSED (runs 50-59) - do not reopen
-    room 15  MISSING GEOMETRY - no riser between two floor levels; a spot the
-             census invented, TR1 may never let you stand there
-    room 0   LARGELY OPEN SKY - 28 of 72 cells carry the no-ceiling sentinel,
-             and rooms 13/17 are 6-7 PORTAL HOPS away (behind walls), so the
-             run-56 "fix" drew through walls at 6.3x kernel cycles
-`HOPDEPTH`/`ALLVIS` stay OFF; shipping verified byte-identical at HOPDEPTH=3.
+### ☠️ CLOSED - DO NOT REOPEN
+    mansion holes (runs 50-59): room 15 = MISSING GEOMETRY, room 0 = LARGELY
+    OPEN SKY (28/72 cells have no ceiling; rooms 13/17 are 6-7 PORTAL HOPS away,
+    so the run-56 "fix" drew through walls at 6.3x kernel cycles).
+    `HOPDEPTH`/`ALLVIS` stay OFF; shipping verified byte-identical at HOPDEPTH=3.
 
 ### ★ INSTRUMENTS (all off in shipping builds)
-    release_play.py               drive the RELEASE past the ring into the level
-    sightline.py                  what geometry is NEARBY - not what is VISIBLE;
-                                  cross-check against the portal graph
+    release_play.py [--gym]       drive the RELEASE into either level
+    sightline.py                  what geometry is NEARBY - not what is VISIBLE
     room_cycles.py --prefix=gym   per-room kernel cycles (fill NOT included)
     DREWVIS=1 / HOPDEPTH=N        room bitmasks / portal depth
     CULLCOUNT=1 BEXCNT=1 WCCNT=1  $1C0000 staged  $1C0004 rastered
@@ -84,7 +84,7 @@ in the level, undeformed. Saved: `/tmp/release_ring.png`, `/tmp/release_ingame.p
 ### ✅ WHAT IS DONE
     climbing   CAVES   LEDGES 24/24  WALLS 6/6 refused  0 black outliers
                MANSION LEDGES 24/24  WALLS 6/6 refused
-    release    CURRENT and verified into gameplay -> /tmp/cofout5
+    release    CURRENT, both levels verified into gameplay -> /tmp/cofout5
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,

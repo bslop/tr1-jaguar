@@ -28,6 +28,28 @@ try:
     print("booting to the ring...", flush=True)
     ctl("run", 8200, timeout=3600)
     ctl("frame", os.path.join(OUT, "a_ring.png"))
+    if "--gym" in sys.argv:
+        # LARA'S HOME is ring PAGE 4 (main.c:6729) and PAD_RIGHT advances the
+        # page (main.c:6694), so rotate 4 then select. ☠️ Under GYMSD the menu
+        # deliberately REFUSES this item because its blobs are stubs - the
+        # release is built WITHOUT GYMSD, so a refusal here would be a real bug.
+        # ☠️ THE RING SWALLOWS INPUT WHILE IT SPINS. At 60 fields per press only
+        # 2 of 4 registered and the ring sat on "Sound" (page 2) while the script
+        # believed it was on page 4. The ring also PACES itself to ~10fps, so a
+        # press needs the spin to finish: 200 fields, and capture each step so
+        # the page is READ, never assumed.
+        for i in range(4):
+            ctl("input", "right"); ctl("run", 30); ctl("release"); ctl("run", 200)
+            ctl("frame", os.path.join(OUT, "g_step%d.png" % i))
+        ctl("frame", os.path.join(OUT, "g_page4.png"))
+        print("rotated to ring page 4 (Lara's Home)", flush=True)
+        ctl("input", "a"); ctl("run", 30); ctl("release")
+        for i, n in enumerate((900, 1800, 1800, 1800)):
+            ctl("run", n, timeout=1800)
+            ctl("frame", os.path.join(OUT, "g_%d.png" % i))
+            print("  captured g_%d after +%d fields" % (i, n), flush=True)
+        raise SystemExit
+
     # ☠️ THE RING NEEDS **TWO** PRESSES. The first opens the PASSPORT at its
     # "Start Game" page (verified: the capture showed the open book with
     # "A Select / Start Game / B Back"); the second actually starts. One press
