@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 74
+RUN: 75
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,79 +17,81 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅✅✅ THE RELEASE IS WALKABLE. CAVES TOUR NOW CROSSES THREE ROOMS.
+# ✅ MANSION DOORS: 10 OF 12 TESTABLE ONES CROSS. THE "FAILURES" WERE MY HARNESS.
 
-★ USER RULED (run 73): **Lara's Home IS in the release** - keep debugging the
-mansion. It is in scope, not a bonus.
+★ USER RULED (run 73): **Lara's Home IS in the release.** It is in scope.
 
-Rebuilt with the portal fix -> **`/tmp/cofout7`** (COF 1,538,700 B + OPENLARA.elf).
-The portal pass ran inside the pipeline, and in the full build order it does more
-than my standalone run did (it sees the walls the boundary/coverage passes leave):
+`tools/door_walk.py` (new) walks every doorway and asserts `g_curroom` becomes
+the destination. Boots ONCE for the level - 32 doors at a 4-minute boot each is
+why this had never been done. Result on the patched gym ROM:
 
-    mrt: rooms with zero openings -> 0
-    gym: rooms with zero openings 13 -> 1   (room 18 only; that is CORRECT, below)
+    16 of 32 wall-portals are WALKABLE AT FLOOR LEVEL and get tested
+    **10 crossed**, 2 FAILED, 4 UNTESTABLE
 
-Driven from a cold boot, `release_play.py --tour`:
+### ☠️☠️ THREE HARNESS BUGS, EACH OF WHICH FAKED A LEVEL FULL OF DEAD DOORS
+  1. **Inverted yaw on Z-plane portals.** Standing at smaller z it faced -Z, i.e.
+     AWAY from the door. 9 of 10 doors "failed" while she walked off backwards.
+     The X-plane case was correct, which is why one door passed and hid it.
+     Forward is (SIN,COS): yaw 0 = +Z, 16384 = +X, -16384 = -X, -32768 = -Z.
+  2. **A bad seat is not a door failure.** Rooms overlap, so a stand-off point can
+     resolve to a different room than the one under test (four gym doors seat into
+     room 12). Now reported UNTESTABLE.
+  3. ★★★★★ **A PORTAL HAS A HEIGHT.** This was the big one. 7 doors "failed"
+     because I placed her at the portal's XZ centre on whatever floor she had and
+     ignored the portal's Y extent. Example measured: the 3->1 plane is z=53247
+     and the floor beyond it is **-1280** while she stands on **1280** - a
+     2560-unit step up, ten clicks, which the move gate refuses exactly as TR
+     does. Those are balconies and ledges, not broken doorways. The tool now
+     requires her feet at the doorway's own floor (within 512 of the portal's
+     lowest y) and the floor beyond within LARA_STEPUP.
+★ The tell that saved this: run 73's tour crossed gym 1->0 for real, so a tool
+reporting that door dead was measuring itself. **When a new instrument disagrees
+with a thing you have already SEEN work, the instrument is wrong.**
 
-    CAVES    **ROOMS VISITED [0,1,2]**, 81,280 units, health 1000 throughout
-             (before the fix: confined to room 0, oscillating)
-    MANSION  loads from ring page 4, crosses room 1 -> 0, 31,277 units, full
-             health. ROOMS VISITED [0] because gym room 0's ONLY exit is back
-             through room 1 and a wall-follower never retraces its own door.
+### ⬜ NEXT
+  1. **The 2 remaining failures are probably still the stand point**: 2->5 and
+     2->6 both show her moving only **164/188 units** - she is wedged where she
+     is placed, not refused at the door (a refused door shows ~1260, the full
+     stand-off). Try a stand-off of 768, or step along the portal's span instead
+     of using its centre, before believing them.
+  2. **4 UNTESTABLE doors** (7->9, 7->2, 8->10, 8->11) all seat into room 12.
+     Pick the stand point from a cell the SOURCE room owns exclusively.
+  3. **Run it on the Caves too** - `--prefix mrt`, 62 wall-portals, never tested
+     door by door. Room crossing there is fixed (run 72) but only 0->1->2 has
+     been walked.
+  4. **The pool**: swim down through the room 14 water surface and confirm
+     `g_curroom` becomes 18.
 
-### ☠️ gym room 18 IS NOT SEALED - it is the POOL
-Room 18 has NO wall cells at all (every cell floor 5632/6144) and its only portal
-is a **HORIZONTAL plane at y=3583** spanning x and z - a VERTICAL portal. Room
-14's cells above it read floor **3585**, an ODD value: `main.c` does `w = fy & 1`,
-so **bit 0 is the extractor's WATER-SURFACE mark**. Room 18 is the water volume
-under a surface, entered by swimming down. A vertical portal needs no horizontal
-opening, so "rooms with zero openings" is a WEAK metric and it cried wolf here.
-
-### ★ `portal_open.py --audit` - the metric that actually means something
-For every WALL portal, does EACH side have a passable cell touching the plane?
-    mrt: **0 dead doors** of 62 wall-portals
-    gym: **0 dead doors** of 32 wall-portals
-Vertical (horizontal-plane) portals are skipped - they are a different mechanism.
-Run this after any asset regen; it is the cheap structural check on both levels.
-
-### ⬜ NEXT: THE MANSION NEEDS DEPTH, AND THE TOUR CANNOT PROVE IT
-0 dead doors is DATA. Behaviour is not proven past gym 1 -> 0. The wall-follower
-is the wrong instrument (it cannot go back through the door it entered by), so:
-  1. **Per-portal walk tests.** For each gym wall-portal, teleport her a couple
-     of cells back from the plane on side A facing it, walk, and assert
-     `g_curroom` becomes B. That is the Caves method from run 72 applied to all
-     32 doors - `probe_spot.py` already does everything needed, it just needs a
-     driver loop over `portal_open.py`'s portal list.
-  2. **The pool** is worth its own check now that it is understood: swim down
-     through the room 14 water surface and confirm `g_curroom` becomes 18 and the
-     water rendering behaves (`project_water` records the water work).
-  3. Bats unseen (airborne). Cosmetic.
-  4. ☠️ The rig read NOT ENUMERATED again this run - the Jaguar is off. Do NOT
-     claim it; driven mechanics tests still need a human at the TV.
+### ☠️ COBWEB: NEW COMMIT READ, PIN STANDS
+`6f56d3e jcc68k: honour unsigned integer literal suffixes` - a real wrong-code
+fix (`1u` was typed plain `int`, so `(0u-1u)` wrapped to -1 and `(1u-6u)>>8`
+folded as an arithmetic shift). **Our pin (59e5896) predates it, so our jcc68k
+has the bug - and it is NOT reachable in the four TUs jcc68k compiles for us**
+(blit.c, gpu.c, video.c, vidpanel.c): no u-literal subtractions, no right shifts
+of u-expressions, and the four oversized literals (0xA5000000u, 0xFFFFFFFFu,
+0xA5A5A5A5u) are only assigned or compared where the int converts back to
+unsigned with identical bits. None of the 6 commits since the pin touches the
+16-bit-parameter mixed-link ABI regression that forced it, so **the pin stays.**
 
 ### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (50-59) · pickups (65) · mid-walk LOADING (67) ·
-    caves black wedges (69, OPEN SKY) · caves room crossing (72, FIXED)
+    caves black wedges (69, OPEN SKY) · caves room crossing (72, FIXED) ·
+    gym room 18 "sealed" (73 - it is the POOL, water-surface bit 0)
 
 ### ★ INSTRUMENTS
+    door_walk.py <rom> <elf> --prefix P   walk every doorway, assert the room flips
     portal_open.py --prefix P [--patch|--audit]   open portal cells / audit doors
-                                    (--patch runs LAST in build_cof.sh)
-    release_play.py --tour [--gym]  wall-following play-through with telemetry
-    release_play.py --play/--gym    straight walk / select Lara's Home
-                                    (REL_ROM/REL_SD/REL_ELF override paths)
-    probe_spot.py --raw= / --set=   per-spot telemetry; teleport anywhere
-    sightline.py                    geometry NEARBY + open-to-sky count
-    entity_check.py                 photograph any entity
-    room_cycles.py --prefix=gym     per-room kernel cycles
-    HOLEVIS=1 / DREWVIS=1 / HOPDEPTH=N / CULLCOUNT=1 BEXCNT=1 WCCNT=1
+    release_play.py --tour [--gym]        play-through with telemetry
+    probe_spot.py --raw= / --set= · sightline.py · entity_check.py
+    room_cycles.py --prefix=gym · HOLEVIS=1 / DREWVIS=1 / HOPDEPTH=N
 ☠️ Parse probe output BY COLUMN NAME.  ☠️ SYMBOLS ARE PER-BUILD.
-☠️ Define helpers BEFORE the branch that calls them - a `--gym --tour` run died
-   on NameError because tour_loop was defined further down the file.
+☠️ REBUILD THE ROM AFTER AN ASSET PATCH - I nearly filed the gym doors as broken
+   while testing a ROM built before portal_open existed.
 ☠️ FPS cannot be measured offline.
 
 ### ✅ WHAT IS DONE
     climbing   CAVES 24/24 ledges, 6/6 walls · MANSION 24/24, 6/6
-    walking    CAVES crosses 0->1->2 in the RELEASE · 0 dead doors either level
+    walking    CAVES crosses 0->1->2 in the RELEASE · MANSION 10/12 doors cross
     enemies    BEAR and WOLVES render on shipping flags
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
     release    **/tmp/cofout7** - current, walkable, both levels, with symbols
