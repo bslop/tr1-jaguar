@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 31
+RUN: 32
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,60 +17,60 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**STANDING TASK (user, 2026-08-16):** *"test the entire level and home. Try out
-every ledge/jump/obstacle/room/etc. Notate what works and doesn't work in
-comparison to the PSX version. Then fix the Jaguar version."* + "continue on
-your next 25 cycles".
+**✅ THE HARNESS WORKS AND THE FIRST FULL CAVES SWEEP IS DONE — 26 spots.**
+`python3 tools/conformance.py /tmp/conf.cof /tmp/conf.elf --out DIR`
 
-### `tools/conformance.py` — built, refuses to lie, ONE bug left
-It teleports, walks in, holds UP+B, and reports CLIMBED / PARTIAL / NO-CLIMB /
-UNTESTABLE with black% and a JSON dump. Two real improvements landed this run:
+### ☠️ THE BUG THAT BROKE IT FOR THREE RUNS: A 32-BIT POKE OF A 16-BIT VAR
+`g_layaw` is at 0x19084e, `g_curroom` at 0x190850. Writing 4 bytes of yaw
+**stomped the room two bytes later** — room went to garbage, the floor lookup
+failed, and Lara fell out of the world or refused to move.
+★ **Every poke returned `ok:true, wrote:4`**, which is exactly why it survived
+so long: the writes all landed, just two bytes too wide. A poke helper must know
+the WIDTH of what it writes; defaulting to 32 bits silently corrupts neighbours.
+Fixed with `poke16()`. Now every spot seats exactly (`y == floor == target`).
 
-* **`seat()`** — quiesce, zero `g_lavy/g_fally/g_jumped/g_lajf`, place, settle,
-  then **VERIFY** (`floor == g_lay` and within 256 of the target). Anything else
-  is reported **UNTESTABLE**. ★ It no longer manufactures the bug it reports:
-  the old "room 11 = 97% black" readings were the harness overshooting, and
-  that same spot seats cleanly at 0.6%.
-* **HOME recovery waypoint** — once Lara is outside the world, poking a good
-  position does not bring her back; re-seating at the level start first does.
-  Without it, ONE bad spot early poisoned every later spot.
+### THE RESULTS — 15 CLIMBED / 7 PARTIAL / 4 NO-CLIMB
 
-### ☠️ THE REMAINING BUG — and the exact next diagnostic
-The seat sequence **works perfectly by hand** on a fresh instance:
+    WALKUP   (256)   6/6 CLIMBED           ✅ works
+    CLIMB2   (512)   5/6 CLIMBED, 1 at 494 ✅ works (the 494 is within noise)
+    CLIMB3   (768)   0/6 CLIMBED           ☠️ ALL SIX PARTIAL
+                     rose 496, 429, 429, 338, 406, 496 - never the full 768
+    JUMPGRAB (1024)  1/1 CLIMBED           ✅
+    JUMPGRAB (1536)  3/3 CLIMBED           ✅
+    JUMPGRAB (1792)  0/2 - rose 0          ⬜ probably a HARNESS limit, not a
+                     bug: the harness only drives UP+B (a standing pull-up).
+                     TR1 needs a RUNNING JUMP + grab at 1792. Add a jump drive
+                     before calling this a defect.
+    WALL     (2048)  0/2 - rose 0          ✅ correct, 2048 is not climbable
 
-    poke room=11,x=52736,y=7680,z=56832 ; run 20
-    -> A. Y=3072 floor=3072   B. Y=7680 floor=3072   C. Y=7680 floor=7680
+### ★ THE REAL DEFECT: CLIMB3 (768) NEVER COMPLETES
+Six for six, in two different rooms (12 and 14), she rises 338-496 and stops -
+roughly the CLIMB2 ceiling. In PSX TR1 a 768 ledge is a normal standing pull-up.
+**This is the thing to fix next.** Start at the climb height cap / class
+selection: `checkClimb()` bands are <=256 WALKUP, <=640 CLIMB2, <=896 CLIMB3,
+<=1920 JUMPGRAB. Suspect the CLIMB3 branch either is not selected or reuses
+CLIMB2's rise. `PROBE_AHEAD=256` and the run-1 climb-ticks fix are already in.
 
-But inside the harness loop the same pokes **do not land** — `seat()` debug
-shows `want(y=7680) -> y=3072`, i.e. Lara never moves. `peek` works fine in the
-same loop (it reads 3072 correctly), so the transport is alive.
+### ⬜ ALSO FOUND: three spots above the 17.4% black baseline
+    room 22 JUMPGRAB  60.5%   <- well above anything the ROOMTOUR sweep saw
+    room 14 CLIMB3    23.2%
+    room 3  WALKUP    20.8%
+Frames are in `/tmp/confall/s0NN.png`. Look at the 60.5% one first - that is the
+signature both earlier collision voids produced.
 
-**NEXT: print `poke()`'s JSON response.** `ctl()` currently discards it. Add
-`if os.environ.get("CONF_DEBUG"): print(out)` inside `poke()` and run
-`--limit 3`. Either the poke is being rejected (address/format) or it is
-accepted and something re-writes the value during `run` — those two need
-different fixes and are one print apart.
-Also worth trying: poke ONCE and read back immediately (no `run`) inside the
-loop, to separate "write rejected" from "overwritten by the game".
+### Still to do for the user's request
+1. Fix CLIMB3.
+2. Add a jump drive so JUMPGRAB 1792 is a real test, not a harness limit.
+3. **Run the sweep in Lara's Home** (`/tmp/conf.cof` has it - built without
+   GYMSD). Its sector grid has never been walked.
+4. Compare against PSX footage in `res/` (Part 2 = Caves, 3m20 -> 23m24).
 
-Already ruled out: `g_layprev` (added, no change), motion-state zeroing (added,
-no change), stale room (recovery waypoint fixed floor -256 -> 3072).
+### Housekeeping
+⬜ **cobweb is 4 commits behind** (59e5896 -> bf31dee), including jag_rr's
+"book blits to the master that issued them" - the attribution fix I asked for.
+Take it and bump `COBWEB_REV`.
 
-### Then the sweep the user actually asked for
-1. All ~26 census spots in the Caves (WALKUP/CLIMB2/CLIMB3/JUMPGRAB).
-2. **Lara's Home** — `/tmp/conf.cof` is built WITHOUT GYMSD so the mansion is in
-   it; it has never been walked.
-3. Compare with the PSX footage in `res/` — **Part 2 = Caves, 3m20 -> 23m24**.
-4. Fix what fails.
-
-### Reference
-    /tmp/conf.cof + /tmp/conf.elf     harness ROM (no GYMSD, RCLIPFIX=1)
-    ROOMTOUR=1 ROOMTOUR_HOLD=60       render sweep; baseline max 17.4% black
-    tools/floor_coverage.py           static collision scan (no-mesh + headroom)
-☠️ Symbols are PER-BUILD. ☠️ Never gate a wait on `pgrep` of a pattern your own
-command contains — hung the shell again in run 29; use a PID lockfile.
-
-### ⬜ AWAITING THE USER (run-25 checkpoint, still unanswered)
+### ⬜ AWAITING THE USER (run-25 checkpoint)
   1. Capture card replugged? 2. Ship Lara's Home? 3. Release or keep polishing?
 Nothing pushed to `origin` (public `tr1-jaguar`).
 
