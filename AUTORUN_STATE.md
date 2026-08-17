@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 90
+RUN: 91
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,63 +17,62 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ EVERY BUILD AND EVERY DRIVEN CAPTURE NOW ASSERTS ITS OWN FRAME.
+# ☠️☠️ YOU CAN GET INTO THE MANSION POOL BUT NOT OUT OF IT.
 
-    build_conf.sh    boots the ROM it just built and runs checkshot on the frame
-    release_play.py  all 10 capture sites go through checkshot instead of just
-                     printing statistics for a human to eyeball
+Swimming IN works (run 78). Climbing OUT does not, in either configuration tested.
+For a demo that is a trap: fall in and the only exit is a reset.
 
-☠️ **FALSIFIED IN BOTH DIRECTIONS, which is the point of adding it at all:**
-    good ROM      conf.png 320x80, black 1.1%, 65 lumas   -> PASS
-    NOEMPTYY=1    frame comes back **720x1**              -> FAIL, loudly
-`NOEMPTYY` is a known render-nothing build that reports `illegal=0`; the old
-"print black% and maxluma for a human" check passed it twice (runs 53/54).
-★ The 720x1 is a better symptom than the flat field I expected: the VIDEO MODE
-itself is degenerate, not just the picture. Worth remembering as a signature.
-☠️ build_conf's check is deliberately NON-FATAL - a diagnostic build may
-legitimately not render, and refusing to emit the ROM would stop you
-investigating why. It prints and continues.
+    seat in the pool, swim at the deck, hold UP (and UP+ACTION):
+    she swims to the pool wall and STOPS, `g_swim` stays 1, room stays 18.
 
-### ⚠️ `/tmp/conf.cof` IS CURRENTLY A **NOEMPTYY (BROKEN)** BUILD
-Left over from the falsification above. Rebuild before using it:
-`tools/build_conf.sh caves` (add `EXTRA="MVDIAG=1"` if you want the gate/room
-diagnostics).
+### ✅ TWO FACTS ESTABLISHED (not inferred)
+  1. **`g_watery` is derived from where she ENTERED, not from the water surface.**
+     main.c has two entry paths - `g_watery = sfy` (the surface cell) and a
+     fallback `g_watery = g_lay - 96`. She hits the fallback, so the water line
+     read **3232** while the sector data puts the real surface at **3584** (room
+     14's cells over the pool read floor 3585; bit 0 is the water-surface mark).
+     She therefore floats ~350 units too high - ABOVE the 3328 deck she is trying
+     to climb onto.
+  2. **Forcing the true water line is NOT sufficient.** With
+     `set:g_watery=3584, set:g_lay=3584` she floats correctly at 3584 and swims
+     the length of the pool - straight PAST the deck row at z=57856 - to the room
+     boundary at 57348, and the climb-out still never fires.
+
+### ☠️ THE CLIMB-OUT CONDITION, for whoever takes this (main.c ~8098)
+    if (!g_floorwater && g_lay <= g_watery + 64 &&
+        fy2 < g_lay && fy2 >= g_watery - 900)
+With the forced water line all four LOOK satisfiable at the deck (fy2 3328 is
+above her 3584; 3328 >= 2684; 3584 <= 3648; the deck cell is even so not water).
+⬜ **HYPOTHESIS, UNTESTED - do not record it as the cause:** `fy2` may not be the
+deck at all. `room_floor_mr` is called with the swim-time `g_flr_limit` still set,
+so the search may be restricted to reachable rooms and return room 18's own
+**pool bottom (5632/6144)** instead of room 14's deck - and 5632 is BELOW her, so
+`fy2 < g_lay` fails and she swims on. Note the successful-climb branch explicitly
+clears `g_flr_limit = 0`, which is a hint that it matters here.
+★ **Do not read the source and reason about it - instrument it.** Add `fy2` and
+`g_floorwater` to MVDIAG inside the water block and read them while she swims past
+the deck. That is one build and one probe, and it has settled every one of these.
 
 ### ⬜ NEXT
-  1. **Capture the hardware boot if the user grants permission.** ☠️ Under the new
-     rules this is now upload -> observe -> `jag_gd.sh endturn`, ALL INSIDE ONE
-     5-MINUTE TURN: an uploaded ROM stops when the turn ends, so "upload now, look
-     later" no longer exists. Without the capture permission this needs a human at
-     the TV during that same five minutes.
-  2. The 8 untestable door seats - they resolve into an overlapping room; the
-     ranking prefers an exclusively-owned stand cell but has no fallback when none
-     is exclusive.
-  3. Climb OUT of the pool (swimming in works, run 78).
-  4. `HW_TESTCARD` - a 68k-only colour-bar ROM. ☠️ Note bubsy3d's version could not
-     discriminate a wedged console from a dead chain; jag_resident's GameDrive-menu
-     capture does, and needs none of our code. Build the test card for what it IS
-     good for: proving our own video setup, once the board is known alive.
+  1. The pool climb-out (above) - a real defect, and the only one currently open.
+  2. Capture the hardware boot **if the user grants permission**. ☠️ Now
+     upload -> observe -> `jag_gd.sh endturn` inside ONE 5-minute turn, because an
+     uploaded ROM stops at turn end.
+  3. The 8 untestable door seats; `HW_TESTCARD`.
 
-### ★ THE METHOD THAT KEEPS PAYING
-    ASK THE SUBJECT, DO NOT MODEL IT - three Python reimplementations of the floor
-      search were each wrong differently; `MVDIAG` answered first try. `g_roomseen`
-      likewise beat sampling, which cannot win a race with a thin transit room.
-    A CHECK MUST BE ABLE TO COME OUT THE OTHER WAY - `checkshot --selftest` (5/5)
-      and the NOEMPTYY falsification above exist for this reason.
-    A NEW EXPLANATION THAT OVERTURNS A PROVEN ONE IS A RED FLAG - run 87's bogus
-      "FACING" verdict was caught only because it contradicted 11->12's shut door.
-    SIZE A BITMASK TO THE SET - 32 bits for 38 rooms aliased 34 onto bit 2.
+### ⚠️ `/tmp/conf.cof` IS A **NOEMPTYY (BROKEN)** BUILD from run 89's falsification
+Rebuild before use. `/tmp/gym.cof` is a good MVDIAG build.
 
 ### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (50-59) · pickups (65) · mid-walk LOADING (67) ·
-    caves black wedges (69) · caves room crossing (72) · gym room 18 (73/78) ·
-    7 "dead doors" (74) · caves 11->12 + switch/door (79-82) ·
+    caves black wedges (69) · caves room crossing (72) · gym room 18 exists (73) ·
+    swimming IN (78) · 7 "dead doors" (74) · caves 11->12 + switch/door (79-82) ·
     all mansion door failures (85) · all Caves door failures (86-88)
 
 ### ✅ WHAT IS DONE
     climbing   CAVES 24/24 ledges, 6/6 walls · MANSION 24/24, 6/6
     walking    CAVES 51 doors · MANSION 9 · zero defects either level
-    swimming   the mansion POOL: enter, swim, room 18, renders correctly
+    swimming   enter/swim/room 18/renders - ☠️ but NO EXIT (above)
     switches   fire, animate, open the door, and she walks through
     enemies    BEAR and WOLVES render on shipping flags
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
