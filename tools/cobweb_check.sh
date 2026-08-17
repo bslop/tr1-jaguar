@@ -85,3 +85,15 @@ if [ -s "$BEFORE" ] && $JAS "$HERE/gpu_geotex.gas" -o "$AFTER" $KFLAGS >/dev/nul
 fi
 rm -f "$BEFORE" "$AFTER"
 echo "cobweb: now at $(git -C "$CW" rev-parse --short HEAD)"
+
+# ☠️☠️ THE BYTE-COMPARE ABOVE IS NOT A SAFETY CHECK ON ITS OWN. It re-assembles
+# ONE .gas file. cobweb bf31dee changed jcc68k instead and produced a ROM that
+# runs flawlessly and draws NOTHING - and this script called it "safe".
+# Build a ROM and look at it.
+if [ -x "$HERE/tools/toolchain_smoke.sh" ]; then
+    echo "cobweb: running the ROM smoke test (this builds, ~15 min)"
+    "$HERE/tools/toolchain_smoke.sh" || {
+        echo "☠️ TOOLCHAIN UPDATE REJECTED BY THE SMOKE TEST."
+        echo "   Pin cobweb back and bisect in a git worktree."
+        exit 1; }
+fi

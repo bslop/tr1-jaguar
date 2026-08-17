@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 35
+RUN: 36
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,63 +17,54 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ THE BLACK-ROM REGRESSION IS SOLVED: IT WAS THE TOOLCHAIN, NOT US.
+**✅ THE GUARD THAT WOULD HAVE SAVED FOUR RUNS NOW EXISTS AND HAS FIRED.**
 
-**cobweb `bf31dee` breaks this project. `59e5896` is good.** Same source, same
-assets, bisected in a git worktree:
+`tools/toolchain_smoke.sh` — after any toolchain move it **builds a ROM,
+screenshots it, and compares black% + max luma to a recorded baseline**.
 
-    59e5896  ->  1.1% black, maxluma 217   WORKING
-    bf31dee  -> 100.0% black, maxluma 0    BROKEN
+    tools/toolchain_smoke.sh              check (build ~15 min)
+    tools/toolchain_smoke.sh --baseline   record the current result as good
+    baseline recorded: black 1.1%, ROM 1,292,812 B  (toolchain 59e5896)
 
-Ruled out along the way: the emulator (a pre-update ROM still renders under the
-NEW jagemu), `jas` (all six kernels assemble **byte-identical** both ways), the
-sector data, the atlas, and the gym assets.
+Wired into `cobweb_check.sh --update`, which now REFUSES an update whose ROM
+does not draw. Threshold verified against real data:
 
-**It is `jcc68k`.** Its output changed for every C file - video.c 270 lines,
-jerry.c 115, gpu.c 79, blit.c 8. The blit.c diff is readable:
+    bad toolchain   black 100.0% lum   0 -> FAILS ✅
+    good toolchain  black   1.1% lum 217 -> passes
+    scene variation black   4.3% lum 230 -> passes
 
-    -  move.w 24(a6),d0        +  move.w 26(a6),d0     (x3)
-                               +  and.l  #$FF,d0       (x2, new)
+### ☠️ `beb2c15` DOES NOT FIX THE REGRESSION
+`"jcc68k: an odd-sized global sent every runtime helper to an odd address"`
+sounded exactly like our bug. It is not — with it the ROM is **still 100%
+black**. The 16-bit parameter offset change (`24(a6)` -> `26(a6)`) is separate
+and still present. **Stay pinned to 59e5896** (Dockerfile + cobweb_check).
+Updated `jaguar-shared/COBWEB_ISSUES_JCC68K_ABI.md` (ecd4df1) to say so, since
+the commit message invites exactly the wrong conclusion.
 
-A **16-bit parameter read moved by +2**. `26(a6)` may be the *more* correct half
-of a big-endian 4-byte slot - which is the danger: **this project links
-gcc-compiled main.c with jcc68k-compiled blit/video/gpu/jerry**, so if one side
-moves and the other does not, every cross-boundary call passes garbage. A
-`blit_span(..., uint16_t c)` taking its colour from the wrong half gives exactly
-what we saw: full-speed renderer, nothing visible.
+★ Note `cobweb_check --update` reported "renderer byte-identical — safe" for
+**both** broken revisions. Both true, both useless. That is the whole lesson.
 
-### ACTIONS TAKEN
-* `Dockerfile` ARG and `tools/cobweb_check.sh` both **pinned to 59e5896**, with
-  the reason in the script so no future run silently updates past it.
-* Written up in `jaguar-shared/COBWEB_ISSUES_JCC68K_ABI.md` (b5736f3) - the
-  owner's question is stated plainly: *did the calling convention change, or
-  only the callee's read?*
-
-### ★★★★★ THE LESSON, AND IT COST FOUR RUNS
-`cobweb_check.sh --update` said **"renderer byte-identical - safe"** and that
-was TRUE and USELESS: it only re-assembles `gpu_geotex.gas`. It says nothing
-about the C compiler, which is what actually broke.
-**A toolchain-safety check must exercise what the toolchain builds.**
-⬜ Next: make `--update` screenshot a ROM and compare black%, not just cmp a
-kernel. That is the fix that would have caught this in run 32 instead of 36.
-
-### TO REBUILD A WORKING ROM RIGHT NOW
-    git -C ../../../../cobweb worktree add /tmp/cobweb-old 59e5896
+### TO BUILD A WORKING ROM
+    git -C ../../../../cobweb worktree add /tmp/cobweb-old 59e5896   # once
     cargo build --release --manifest-path /tmp/cobweb-old/sim/Cargo.toml
-    make <flags> COBWEB_DIR=/tmp/cobweb-old
-Verified: 1,292,812 B, 1.1% black, maxluma 217.
-☠️ Do NOT `git checkout` an old rev in the SHARED cobweb tree - four sessions
-build from it. Use a worktree.
+    make <flags> COBWEB_DIR=/tmp/cobweb-old      # or export it
+☠️ Never `git checkout` an old rev in the SHARED cobweb tree — four sessions
+build from it. The worktree at /tmp/cobweb-old is deliberate.
 
-### Then resume the user's standing request
+### Resume the user's standing request
 "Test the entire level and home... notate what works vs PSX, then fix."
-* `tools/conformance.py` works; Caves sweep was **20/26 CLIMBED, 2 PARTIAL,
-  4 NO-CLIMB** (run 32). Re-run it once the toolchain is settled.
-* Still to do: jump-drive for JUMPGRAB 1792, sweep Lara's Home, compare against
-  `res/` PSX footage (Part 2 = Caves, 3m20 -> 23m24).
-* ⬜ Room 22 cell (17,11) is a REAL geometry hole (zero faces, 60-73% black at
-  every yaw). `floor_coverage.py --faces` finds 49 such cells but **walling them
-  is the wrong remedy** - it is opt-in and off by default.
+1. **Re-run the Caves sweep** with a good-toolchain ROM:
+   `python3 tools/conformance.py <rom> <elf> --out DIR`. Last result (run 32,
+   valid): **20/26 CLIMBED, 2 PARTIAL, 4 NO-CLIMB**.
+2. **Add a jump drive** so JUMPGRAB 1792 is a real test rather than a harness
+   limit (it only holds UP+B today).
+3. **Sweep Lara's Home** — needs a no-GYMSD ROM and census spots for the gym
+   rooms (`ledge_census.py` reads `mrt_*` only today).
+4. Compare against `res/` PSX footage (Part 2 = Caves, 3m20 -> 23m24).
+5. ⬜ Room 22 cell (17,11) is a REAL geometry hole — zero faces cover it,
+   60-73% black at every yaw. `floor_coverage.py --faces` finds 49 such cells
+   but **walling them is the wrong remedy** (opt-in, off by default). A hole
+   wants GEOMETRY, not less collision.
 
 ### ⬜ AWAITING THE USER (run-25 checkpoint)
   1. Capture card replugged? 2. Ship Lara's Home? 3. Release or keep polishing?
