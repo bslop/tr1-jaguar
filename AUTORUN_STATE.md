@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 96
+RUN: 97
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,63 +17,64 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ☠️☠️☠️ THE MANSION HAS A REAL COVERAGE HOLE. RUN 94's "IT IS OPEN SKY" WAS WRONG.
+# ⬜ THE HOLE IS AT THE **FACE** LEVEL. TWO ROOM-LEVEL KNOBS RULED OUT BY A/B.
 
-HOLEVIS=1 over the spot run 94 flagged (the 86%-black driven frame), 16 yaws
-from ONE seat, measured with the new `tools/holevis_scan.py`:
+Seat (35795, 1024, 54194) room 0 of Lara's Home, 16 yaws, HOLEVIS. Same valid
+seat as run 95 (`g_lay=g_lafloor=1024`, `g_curroom=g_floorroom=0`).
 
-    mean 53.0% of the frame UNCOVERED; worst 83.0%
-    uncovered pixels reach the BOTTOM ROWS in 15 of 16 directions
+### 1. ROOMS ARE ADMITTED, THEN DROPPED - AND THE SHIPPING ROM SHIPS THE DIAL AT 1
+`g_visrooms`/`g_drewrooms` are **BITMASKS**, not counts (`|= 1u << ri`):
 
-★ Sky cannot reach the bottom of the frame while she is standing on a floor.
-Room 0 IS 39% open to the sky - that part of run 94 is true - but an open
-ceiling cannot put white pixels under the horizon, so it does not explain this.
-I called it sky from a black frame, which is the exact mistake HOLEVIS exists to
-prevent; the room's open fraction was a plausible story that fit the number I
-had. **The correction is what matters: this is a hole, and it is large.**
+    vis = 31 = rooms {0,1,2,3,4}      drew = 3 = rooms {0,1}   <- only two ever
 
-☠️ THE SEAT IS VALID - checked, because run 91 died on this: `g_lay=1024
-g_lafloor=1024 g_curroom=0 g_floorroom=0` at (35795, 54194). She is standing on
-a real floor in room 0, not wedged and not falling.
+Cause found: `g_hopcap = 1`, the portal-hop draw-distance cap. It is **not** the
+GOVERNOR (that is `#ifdef GOVERNOR` and `g_gov_on` is not even in this build) -
+it is `HOPBOOT=1`, and ☠️ **`tools/build_cof.sh:95` sets HOPBOOT=1 too**, so the
+SHIPPING ROM draws the current room plus one hop. main.c's own default is
+`#define HOPBOOT 4` (uncapped).
 
-### ✅ RULED OUT BY MEASUREMENT: `ALLVIS`
-The Makefile has ALLVIS=1 for exactly this shape of bug (a room whose portal
-window computes EMPTY is dropped whole, leaving a doorway-shaped hole) and it is
-in **neither** flag set, so it looked like the answer. Built it, re-captured the
-same 16 frames from the same seat:
+### 2. ☠️ BUT UNCAPPING IT DOES NOT FILL THE SCREEN - SO THAT IS NOT THE HOLE
+Poked `g_hopcap=4` live (+ `g_hop_cached_a=-1`, or room_withinK answers from a
+stale cache) on the SAME ROM, same seat, same yaws:
 
-    mean uncovered  53.0% OFF  ->  53.2% ON     (+0.2%, i.e. nothing)
+    drew      3 (rooms 0,1)  ->  15 (rooms 0,1,2,3)     two more rooms DRAWN
+    uncovered 53.0%          ->  53.7%                  NO IMPROVEMENT
 
-★ A knob that changes NOTHING is evidence about the INPUT, not the knob - the
-same lesson as the guns. The rooms are being admitted; something inside them is
-not being drawn. Do NOT re-test ALLVIS.
+★ Two more rooms are submitted and the screen is no emptier and no fuller. With
+run 95's ALLVIS result (53.0 -> 53.2), that is **two independent room-level knobs
+that change what is drawn and do not change what is covered**. The gap is not
+about which ROOMS get in. Do not re-test ALLVIS or the hop cap.
+☠️ ALIGN THE FRAMES BEFORE COMPARING: adding `set:` phases shifts every shot
+index. My first read compared s00 against a different yaw and showed a fake +0.7.
 
-### ⬜ NEXT: `DREWVIS=1` AT THIS EXACT SEAT - VISIBLE vs DREWN
-The probe printed `not in this build, so not shown: g_visrooms, g_drewrooms` -
-those counters are compiled out, and they are precisely the ones that split the
-remaining possibilities:
-  * `g_visrooms` high, `g_drewrooms` low  -> rooms admitted then dropped later
-  * both high but the screen stays white  -> the rooms ARE drawn and their FACES
-    are being rejected (near-plane whole-face rejection is a KNOWN open bug and
-    lands exactly here - see project_near_plane_face_pop, NEAR is 32 in main.c
-    and 64 in the kernel)
-Build `EXTRA="HOLEVIS=1 DREWVIS=1"`, re-run the same probe line (below), and read
-both counters per yaw. Reproduce with:
+### 3. WHERE IT ACTUALLY IS: 63% OF STAGED FACES NEVER RASTERISE
+With `CULLCOUNT=1` the kernel counters come alive. ☠️ THEY ARE CUMULATIVE - take
+DELTAS between steps, the raw numbers only ever grow:
 
-    tools/build_conf.sh gym          # EXTRA="HOLEVIS=1 DREWVIS=1"
-    python3 tools/probe_spot.py /tmp/gym.cof /tmp/gym.elf \
-      --at 35795,1024,54194,0,0 --shots /tmp/holevis \
-      --phases "set:g_layaw=0x0000:2,set:g_layaw=0x2000:2,set:g_layaw=0x4000:2,\
-set:g_layaw=0x6000:2,set:g_layaw=0x8000:2,set:g_layaw=0xA000:2,\
-set:g_layaw=0xC000:2,set:g_layaw=0xE000:2"
+    per capture interval:  staged ~1900   rastered ~700   => ~63% dropped
+
+### ⬜ NEXT: ATTRIBUTE THAT 63%, THEN TEST `NEARCLIP=1`
+`bexit` and `worldcull` both read **0** - they need their own flags, `BEXCNT=1`
+and `WCCNT=1`. ☠️ A COUNTER THAT IS NOT COMPILED IN READS 0, AND 0 LOOKS LIKE AN
+ANSWER: I read "staged=0 rast=0 bexit=0 worldcull=0" off a CULLCOUNT-less build
+and nearly filed it as "no faces staged". This is the same failure cobweb just
+fixed in jagemu (`b12182f`: don't report a confident 0.0% for a core that was
+never profiled). Rebuild with:
+
+    EXTRA="HOLEVIS=1 DREWVIS=1 CULLCOUNT=1 BEXCNT=1 WCCNT=1" tools/build_conf.sh gym
+
+then re-run the probe line in §4 and split the 63% into world-plane cull vs
+bottom-exit vs backface/screen reject. **Prime suspect: near-plane whole-face
+rejection** - a known open bug (`project_near_plane_face_pop`: one vertex past
+NEAR drops the whole face; NEAR is 32 in main.c and 64 in the kernel), and the
+kernel has a `NEARCLIP` flag that is in NEITHER flag set. A/B it the same way.
+
+### 4. THE PROBE LINE (same seat, reuse it verbatim)
+    python3 tools/probe_spot.py /tmp/gym.cof /tmp/gym.elf --at 35795,1024,54194,0,0 \
+      --phases "set:g_layaw=0x0000:2,set:g_layaw=0x6000:2,set:g_layaw=0xC000:2" \
+      --raw=staged=0x1C0000 --raw=rastered=0x1C0004 \
+      --raw=bexit=0x1C0010 --raw=worldcull=0x1C0014 --shots /tmp/holevis
     python3 tools/holevis_scan.py /tmp/holevis/*.png --prefix gym --room 0
-
-### ★ NEW TOOL: `tools/holevis_scan.py`
-Gives HOLEVIS frames a VERDICT instead of a percentage. Splits uncovered pixels
-above/below the horizon and reports how many rows up from the bottom edge they
-reach, because that is what separates legitimate sky from a ground hole. ☠️ It
-REFUSES a set that is 0% uncovered rather than reporting a clean bill of health -
-on a non-HOLEVIS build every frame is 0% and that would look like success.
 
 ### ⚠️ BUILD STATE
 `/tmp/cofout7/` = the SHIPPING payload built this run WITH the pool fix (COF +
