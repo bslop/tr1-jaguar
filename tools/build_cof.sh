@@ -97,7 +97,14 @@ ROWDIET=1 STATICS=1 BANKDIET=1 LOWRES=1 FLIPASM=1 DIVZGUARD=1 MOVESET=1 \
 SPANSHADE=1 SHADEEXCL=1 TIMESTEP=1 ANIMRATE=1 OPDBL=1 LPLANES=1 \
 VCBIG=1 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 ENEMYTEX=1 BLOBCACHE=1 \
 JCENT=1 JOVL=1 SECTLONG=1 INLINEMUL=1 OFFHOIST=1 VPACK=1 NOPCLIP=1 \
-TRAPFLOOR=1 GUNS=1 BOOTVID=1 JVFASTKICK=1 PROBE_AHEAD=256 RCLIPFIX=1}"
+TRAPFLOOR=1 GUNS=1 BOOTVID=1 JVFASTKICK=1 PROBE_AHEAD=256 RCLIPFIX=1 \
+FITSTEP=1}"
+
+# FITSTEP=1: TR1's headroom rule on the automatic <=256 step-up, so Lara stops
+# walking up into gaps she does not fit in (Lara's Home had 105 of 304 step-up
+# pairs shorter than she is). Only evaluated on a step UP - level ground and
+# drops short-circuit past it - so it costs nothing on a flat frame. Measured
+# on both levels: ledges 24/24 unchanged, walls 6/6 refused vs 4/6 and 2/6.
 
 # RCLIPFIX=1: paint the LAST PIXEL COLUMN. Spans are right-EXCLUSIVE
 # (SHADEEXCL) but xr was clamped to CLIPX1, which gpu_geotex_setclip sets

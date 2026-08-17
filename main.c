@@ -8124,13 +8124,33 @@ bootvid_entry:
 #ifdef ENTITIES
                       !ent_door_blocks(g_curroom, g_lax, g_laz, nx, g_laz) &&
 #endif
-                      g_lafloor - nf <= LARA_STEPUP) g_lax = nx;
+                      #ifdef FITSTEP
+                        /* ☠️ AND SHE HAS TO FIT WHERE SHE IS STEPPING. TR1's
+                           checkClimb tests (floor - ceiling >= LARA_HEIGHT) on
+                           the TARGET; a 256 step never reaches that code here
+                           because the walk itself performs it. Only checked for
+                           a step UP: level ground and drops are not climbs, and
+                           demanding 762 of clearance to walk anywhere would wall
+                           her out of low corridors she is meant to use. */
+                        (g_lafloor - nf <= 0 || climb_fits(rsect, nx, g_laz, nf)) &&
+#endif
+                        g_lafloor - nf <= LARA_STEPUP) g_lax = nx;
                   if (!room_wall_at(rsect[g_curroom], g_lax, nz) &&
                       room_floor_mr(rsect, roomCount, g_lax, nz, &nf) &&
 #ifdef ENTITIES
                       !ent_door_blocks(g_curroom, g_lax, g_laz, g_lax, nz) &&
 #endif
-                      g_lafloor - nf <= LARA_STEPUP) g_laz = nz;
+                      #ifdef FITSTEP
+                        /* ☠️ AND SHE HAS TO FIT WHERE SHE IS STEPPING. TR1's
+                           checkClimb tests (floor - ceiling >= LARA_HEIGHT) on
+                           the TARGET; a 256 step never reaches that code here
+                           because the walk itself performs it. Only checked for
+                           a step UP: level ground and drops are not climbs, and
+                           demanding 762 of clearance to walk anywhere would wall
+                           her out of low corridors she is meant to use. */
+                        (g_lafloor - nf <= 0 || climb_fits(rsect, g_lax, nz, nf)) &&
+#endif
+                        g_lafloor - nf <= LARA_STEPUP) g_laz = nz;
                   /* pressed against something: forward held but she moved on
                      NEITHER axis. Gates the auto jump-reach probe below so
                      its two extra floor searches (the priciest 68k call in

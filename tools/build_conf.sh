@@ -57,13 +57,16 @@ LOWRES=1 FLIPASM=1 DIVZGUARD=1 MOVESET=1 SPANSHADE=1 SHADEEXCL=1 TIMESTEP=1 \
 ANIMRATE=1 OPDBL=1 LPLANES=1 AUTOSTART=1 VCBIG=1 BOOTVID=1 JVFASTKICK=1 \
 INLINEMUL=1 OFFHOIST=1 VPACK=1 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 \
 ENEMYTEX=1 BLOBCACHE=1 JCENT=1 JOVL=1 SECTLONG=1 NOPCLIP=1 VRESN=80 \
-TRAPFLOOR=1 GUNS=1 PROBE_AHEAD=256 RCLIPFIX=1"
+TRAPFLOOR=1 GUNS=1 PROBE_AHEAD=256 RCLIPFIX=1 FITSTEP=1"
 
 build_one() {
     local name="$1" extra="$2"
     echo "==> building $name ROM"
     rm -rf build            # ☠️ stale objects survive a flag change otherwise
-    if ! make $BASE $extra > "/tmp/build_$name.log" 2>&1; then
+    # EXTRA=... appends flags for an A/B without editing this file. They are
+    # verified below like every other flag, so a typo shows up as "NOT in the
+    # compile line" instead of quietly measuring the baseline twice.
+    if ! make $BASE $extra ${EXTRA:-} > "/tmp/build_$name.log" 2>&1; then
         echo "☠️ $name build FAILED — tail of /tmp/build_$name.log:"
         tail -12 "/tmp/build_$name.log"
         return 1
@@ -72,7 +75,7 @@ build_one() {
     cp build/openlara.elf "/tmp/$name.elf"
     echo "    /tmp/$name.cof  $(stat -c%s /tmp/$name.cof) B"
     # Verify the flag actually landed rather than trusting the command line.
-    for f in $extra; do
+    for f in $extra ${EXTRA:-}; do
         case "$f" in
             *=1) k="${f%=1}"
                  grep -q -- "-D$k" "/tmp/build_$name.log" \

@@ -1035,6 +1035,18 @@ CFLAGS   += -DTRAPFLOOR
 CXXFLAGS += -DTRAPFLOOR
 endif
 
+# FITSTEP=1: apply TR1's headroom rule to the AUTOMATIC 256 STEP-UP as well.
+# run 48 put climb_fits() on the three CLIMB entries (vault / jump-reach arm /
+# airborne grab), which left the one path that never asks to climb: a <=256 step
+# is taken by the walk itself, so she still walked up into gaps a third of her
+# height. Behind a flag because unlike run 48's change this one sits in the MOVE
+# GATE, on every walking frame and both axes, so it has to be A/B'd rather than
+# reasoned about.
+ifdef FITSTEP
+CFLAGS   += -DFITSTEP
+CXXFLAGS += -DFITSTEP
+endif
+
 # GYMTEST=1 / CAVETEST=1: boot straight into Lara's Home / the Caves, skipping
 # the title ring. ☠️☠️ BOTH #ifdefs HAVE EXISTED IN main.c FOR AGES AND NEITHER
 # WAS EVER PLUMBED HERE - so -DGYMTEST never reached the compiler and a GYMTEST

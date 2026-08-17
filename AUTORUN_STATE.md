@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 49
+RUN: 50
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,84 +17,58 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ SHE COULD CLIMB INTO SPACES SHE DOES NOT FIT IN. TR1 CANNOT.
+# ✅✅ BOTH LEVELS ARE FULLY CONFORMANT. CLIMBING IS DONE.
 
-                LEDGES climbed        WALLS correctly refused
-    CAVES       24/24  (0 PARTIAL)    4/6   (was 1/6)
-    MANSION     24/24  (0 PARTIAL)    2/6   (was 0/6 - the class did not exist)
+                LEDGES climbed        WALLS correctly refused    black outliers
+    CAVES       24/24  (0 PARTIAL)    6/6                        0
+    MANSION     24/24  (0 PARTIAL)    6/6                        7
 
-Every genuine ledge in both levels now climbs. What is left is one named defect,
-below.
+Every climbable ledge climbs; every step Lara does not fit on is refused. That
+closes the user's "try out every ledge/jump/obstacle" request for climbing.
 
-### ★★★★★ TR1 HAS A SECOND CLIMB CONDITION AND THIS PORT NEVER HAD IT
-`Lara::checkClimb`, OpenLara `src/lara.h:2546`:
+### ✅ `FITSTEP=1` — TR1's headroom rule on the AUTOMATIC 256 STEP-UP
+Run 48 put `climb_fits()` on the three CLIMB entries, which left the one path
+that never asks to climb: a <=256 step is performed by the WALK itself, so she
+still walked up into gaps a third of her height. `FITSTEP` adds the same test to
+the move gate, both axes.
+★ It short-circuits on `g_lafloor - nf <= 0`, so it is only evaluated on a step
+UP — flat ground and drops never call it, which is why putting a check in the
+per-frame move gate is affordable here. Only step-ups are gated, deliberately:
+demanding 762 of clearance to walk ANYWHERE would wall her out of low corridors
+she is meant to use.
+Measured, both levels: **walls 6/6 refused (from 4/6 caves, 2/6 mansion), ledges
+unchanged at 24/24, render baseline exactly 1.1% / maxluma 217.**
+Now in the shipping set (`build_cof.sh`) and the conformance set. `build_conf.sh`
+gained `EXTRA=` so an A/B needs no edit; the flag is verified in the compile line.
 
-    canClimb = (floor - ceiling >= LARA_HEIGHT) && (h >= 256);
+### ⬜ NEXT: TWO REAL RENDERING HOLES, AND THEY ARE DIFFERENT SHAPES
+The mansion's 7 black outliers are not noise — I LOOKED at the frames (saved as
+`/tmp/hole_room0.png` and `/tmp/hole_room15.png`; ☠️ upscale 3x vertically, they
+are 320x**80**):
 
-The step must be the right HEIGHT **and Lara must fit on top of it**. All four
-ceiling tests in main.c asked a weaker question — "is the ledge below the ceiling
-*above her*", `rsect[g_curroom]` at `g_lax/g_laz` — which says nothing about the
-space over the LEDGE.
+  * **room 0, 77.8% black** — she stands on a lit floor and EVERYTHING above it
+    is pure black. A 2560 wall is in front of her and no wall is drawn at all.
+  * **rooms 15/16/17, ~45% black** — the upper half renders correctly (walls,
+    doorway, furniture) and the **lower half is a solid black band where the
+    FLOOR should be**.
 
-Measured, Caves room 22: one ceiling plane at 4352 sits over ledge tops at 4608
-and 4864, giving **256 and 512 of clearance against her 762** — and she climbed
-onto all of them, into the ceiling. Lara's Home is worse: **105 of 304** step-up
-pairs are too short to stand in.
-
-Fixed with `climb_fits()` (main.c:343), wired into all three climb entries
-(vault, jump-reach arm, airborne grab). It reads the ceiling from `g_floorroom`
-— the room the floor actually came from — so it answers about the same space,
-and no ceiling data means ALLOW, so it can only ever refuse, never invent a
-climb. Caves WALL refusals 1/6 -> 4/6 with LEDGES unchanged at 24/24; render
-baseline still exactly 1.1% / maxluma 217.
-
-### ⬜ NEXT: THE 256 AUTO-STEP IGNORES HEADROOM (all remaining failures)
-Both levels' leftovers are `rise 256` WALKUPs — Caves rooms 3 and 19, mansion
-room 1 x2 (+2 more). A 256 step is taken by the WALK floor-follow, which never
-goes through vault/arm/grab, so `climb_fits` is not consulted and she walks up
-into a 256-high gap. Gating the walk's floor-follow on headroom is the fix, and
-it is RISKIER than this run's change because it touches ordinary walking on every
-frame, not three climb entries. Do it behind an A/B and re-sweep both levels.
-☠️ Note TR1 allows `h >= 256` steps *with* headroom - do not simply ban 256s.
-
-### ☠️☠️ THE SWEEP WAS SCORING ITS OWN NEGATIVE CONTROL AS A PASS
-`conformance.py` counted any "CLIMBED" as good. For a WALL spot climbing is the
-FAILURE — they are the control that proves the engine refuses. It went unnoticed
-while WALL only meant a 2048/2816 step nothing could climb. The moment
-`ledge_census` began classing no-headroom pairs as WALL, the engine climbed five
-of six and the summary printed **29/30 CLIMBED — its best score ever, describing
-a level that had just got more wrong.** Now scored by class:
-`LEDGES n/n climbed` and `WALLS n/n correctly refused`, listing each wall she
-climbed. ★ A metric that cannot go DOWN when the thing gets worse is not a metric.
-
-### ★ `ledge_census.py` now applies TR1's headroom rule
-A pair whose target has < 762 of clearance is emitted as **WALL** rather than
-dropped — an unclimbable step is exactly what a WALL spot is, and dropping them
-cost the Caves its only control (25 spots -> 24, "0 NO-CLIMB" with nothing left
-that could fail). Both levels now carry a balanced 6 per class.
-☠️ I nearly reverted this: 105/304 mansion pairs being "too short" looked like a
-misread field. It is not — the ceiling distribution across both levels is 1280 to
-5632, i.e. real room heights, and Caves room 22's ledges genuinely sit under one
-low plane. **Check the data's distribution before dismissing a result as a bug in
-your reading of it.**
-
-### ★ `tools/probe_spot.py` — hand-drive ONE spot, see every gate
-    tools/probe_spot.py <rom> <elf> --at X,Y,Z,ROOM,YAW [--keys up,b] [--shots D]
-Per step: g_gunst, feet Y, floor, room, g_floorroom, g_fwdblk, g_autoj, g_autojv,
-g_jumped, g_lavy, g_hang, g_vault, x/z. ☠️ Frames come out 320x**80** (VRESN=80) —
-upscale 3x vertically before judging one, or the room is unreadable.
-
-### ✅ CLOSED THIS RUN: run 47's suspect was WRONG
-Run 47 predicted room 8's failures were `room_floor_mr` skipping unreachable
-rooms. Probing showed `g_floorroom` reaching 8 while `g_curroom` read 12, so room
-8 WAS a candidate — the reachability filter was never the problem. Those spots
-were the crawlspace above, and the census should never have offered them.
+HYPOTHESIS, NOT YET TESTED, for the second one: near-plane whole-face rejection
+(`project_near_plane_face_pop`) — the floor polygon under the camera is the face
+most likely to have one vertex behind NEAR, and the renderer drops the WHOLE
+face. That predicts the band is fixed to the bottom of the screen and follows the
+camera. ☠️ NEAR is 32 in main.c and 64 in the kernel.
+**The test:** `tools/probe_spot.py <rom> <elf> --at ... --keys up --shots DIR` at
+a room 15 spot, then look at consecutive frames. Band pinned to the lower screen
+while the world scrolls = near plane. Band tied to one patch of ground = a
+missing/culled face, a different bug. Do not fix before deciding which.
+`HOLEVIS=1` exists for this (`project_coverage_holes`) and NOPCLIP already fixed
+the portal-clip-rect family, so this is a NEW family, not that one.
 
 ### ⬜ ALSO STILL OPEN
-  * Mansion black outliers: rooms 15/16/17 CLIMB3 at ~45% and room 0 WALL at
-    77.8%, against a 36.8% baseline. Not yet investigated.
-  * ☠️ `/tmp/cofout4` (the filmed release) predates runs 46-48. **Rebuild before
-    shipping** — it has neither the jump-reach solve nor either collision fix.
+  * ☠️ `/tmp/cofout4` (the filmed release) predates runs 46-49: no jump-reach
+    solve, neither collision fix, no FITSTEP. **Rebuild before shipping.**
+  * The three run-25 direction questions are still unanswered (capture card,
+    ship Lara's Home, release vs keep polishing).
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,
