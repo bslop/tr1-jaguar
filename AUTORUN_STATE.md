@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 60
+RUN: 61
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,76 +17,74 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ☠️☠️ CORRECTION: ROOM 0's "HOLE" IS LARGELY OPEN SKY. STOP CHASING IT.
+# ✅✅ THE RELEASE IS REBUILT AND VERIFIED **INTO GAMEPLAY** FOR THE FIRST TIME
 
-Runs 56-58 treated room 0's 77.8% black as a defect and built a fix for it. Two
-facts found this run say that was wrong, and the next run should NOT continue it.
+`/tmp/cofout5` - 7 files, `OPENLARA.COF` **1,538,700 B**, built with the pinned
+toolchain, `-DFITSTEP` confirmed in the compile line. It carries everything from
+runs 46-49 that had never been in a release ROM:
 
-### 1. The portal graph from room 0 is a LONG CHAIN, not a hub
-    0 -> 1 -> 2 -> 7 -> 8 -> 12 -> 13 -> {14,15,16,17}
-    hop depth from room 0: 1:1  2,3,4:2  5,6,7:3  8,9:4  10,11,12:5
-                           13:6  14,15,16,17:7  18:8
-Room 13 is **6 hops** away and 15/17 are **7**. `sightline.py` found their
-geometry "in front of her" because it tests a 3D BOX, not portal visibility -
-those rooms are physically near and **behind walls**. ★ So the run-56 "fix"
-(HOPDEPTH=5 + ALLVIS) filled 38 points of black by drawing rooms that are not
-visible from there - geometry THROUGH WALLS - and paid 6.3x kernel cycles to do
-it. That is not a fix, it is a rendering error that happens to cover pixels.
-☠️ **`sightline.py` answers "what is nearby", NOT "what is visible."** It is
-still the right first question for a hole - it is what closed room 15 - but its
-answer must be checked against the portal graph before concluding anything.
+    jump_reach_vel + LARA_JUMPGRAB 1920 + LARA_GRABTOP   (TR1 jump-reach solve)
+    g_flr_upwin + ledge-mode "prefer the floor ABOVE"    (ledge probe window)
+    climb_fits + LARA_FIT_HEIGHT                         (TR1 headroom rule)
+    FITSTEP                                              (headroom on the 256 step)
 
-### 2. Room 0 is an OPEN AREA - black sky is correct there
-Sector data: **28 of its 72 cells carry the no-ceiling sentinel (-32768)**, and
-room 1 has 49 of 98. TR1 has no skybox in Lara's Home; open cells render black.
-So a large part of that 77.8% is not a hole at all, and the mansion's "7 black
-outliers" are probably mostly open-sky views. The `room_black.py` baseline
-counts sky as black, which is why they looked anomalous.
+### ★ VERIFIED ALL THE WAY IN, NOT JUST TO THE TITLE
+Run 46 filmed the boot and stopped at the ring, which is where the previous
+"release verified" claim ended. Driven this time with `tools/release_play.py`:
 
-### ⬜ VERDICT ON THE TWO MANSION HOLES - both closed as far as offline can go
-    room 15  MISSING GEOMETRY (run 55): no riser between two floor levels. Real,
-             but it is a spot the census invented; TR1 may never let you stand
-             there. Not worth more runs.
-    room 0   LARGELY LEGITIMATE SKY. Only the PS1 footage can say whether the
-             house exterior should be visible from there, and `res/` is the
-             project's stated authority for how it LOOKS. One video check would
-             settle it - do that ONLY if the exterior matters for the demo.
-`HOPDEPTH`/`ALLVIS` stay OFF. Shipping is unchanged and was verified
-byte-identical at HOPDEPTH=3.
+    boot 8200 fields -> TITLE RING
+    press A          -> PASSPORT opens at "Start Game"   ☠️ TWO presses needed
+    press A          -> SNOW CUTSCENE (Start Game runs an FMV first)
+    +5000 fields     -> **CAVES, 1.1% black / maxluma 238**
 
-### ⬜⬜ NEXT: REBUILD THE RELEASE. It is nine runs stale.
-This is the item with actual user value and it keeps being deferred:
-`/tmp/cofout4` was filmed in run 46 and predates every fix since -
-**the TR1 jump-reach velocity solve, the ledge-probe window fix, `climb_fits`,
-and `FITSTEP`**. Nobody has ever seen those on a screen together.
-    tools/build_cof.sh "<disc>" /tmp/cofout5     (~25 min, needs the disc path)
-Then boot it in jagemu with `--sd /tmp/cofout5`, FILM the boot
-(`jagemu video ... --start 2400 --every 900 --count 12 --cols 4`) and LOOK at it:
-Core logo -> FMV -> title ring, then confirm the caves render. That is the
-deliverable the user gated on his own sign-off, and it should be current.
+1.1% is exactly the recorded in-game baseline, and the frame shows Lara standing
+in the level, undeformed. Saved: `/tmp/release_ring.png`, `/tmp/release_ingame.png`.
+☠️ Two things cost a pass each to learn, both now in the script:
+  * **the ring needs TWO A presses** - one press left every later frame identical
+    and read as "the input did nothing";
+  * **"Start Game" plays a cutscene before the level** - 900-field captures saw
+    only snow and looked like the game had not started.
+★ `jagemu video` has NO input, so a filmstrip can never get past the ring. Any
+"does the game run" check has to be a ctl session.
+
+### ⬜ NEXT: pick one, the forensics thread is closed
+  1. **Hand the release to the user.** It is current, it is verified into
+     gameplay, and the run-25/50 direction questions are still unanswered -
+     including "is this the release?". `/tmp/cofout5` is what he would flash.
+  2. **PS1 parity on mechanics** rather than pixels: the caves audit
+     (`project_caves_mechanics_audit`) still lists driven tests not run -
+     r17's dead doors among them. `tools/drive.sh` drives the pad and captures
+     in ONE jaghw lease, but ☠️ that needs the rig and a human at the TV.
+  3. **Lara's Home is shippable but unproven in the release path** - AUTOGYM
+     builds work, but nobody has selected Lara's Home from the ring in this ROM.
+     Same script, navigate the ring to page 4 first.
+
+### ☠️ THE MANSION HOLE THREAD IS CLOSED (runs 50-59) - do not reopen
+    room 15  MISSING GEOMETRY - no riser between two floor levels; a spot the
+             census invented, TR1 may never let you stand there
+    room 0   LARGELY OPEN SKY - 28 of 72 cells carry the no-ceiling sentinel,
+             and rooms 13/17 are 6-7 PORTAL HOPS away (behind walls), so the
+             run-56 "fix" drew through walls at 6.3x kernel cycles
+`HOPDEPTH`/`ALLVIS` stay OFF; shipping verified byte-identical at HOPDEPTH=3.
 
 ### ★ INSTRUMENTS (all off in shipping builds)
-    sightline.py                  what geometry is NEARBY - not what is visible;
+    release_play.py               drive the RELEASE past the ring into the level
+    sightline.py                  what geometry is NEARBY - not what is VISIBLE;
                                   cross-check against the portal graph
     room_cycles.py --prefix=gym   per-room kernel cycles (fill NOT included)
-    DREWVIS=1                     g_visrooms / g_drewrooms / g_drawframes
-    HOPDEPTH=N                    portal visibility depth (default 3)
+    DREWVIS=1 / HOPDEPTH=N        room bitmasks / portal depth
     CULLCOUNT=1 BEXCNT=1 WCCNT=1  $1C0000 staged  $1C0004 rastered
                                   $1C0010 bexit   $1C0014 worldcull
-    probe_spot.py --raw=N=0xADDR / --set=SYM=VAL
-    build_conf.sh EXTRA= / SKIP=
+    probe_spot.py --raw= / --set= ; build_conf.sh EXTRA= / SKIP=
 ☠️ Counters ACCUMULATE - take DELTAS.
 ☠️ NOEMPTYY=1 and NOSDCULL=1 BUILD AND DO NOT RENDER (illegal=0 either way).
-☠️ FPS CANNOT be measured offline (run 57): the capture card is unplugged and
-   every 68k-side counter runs at the 30 Hz LOGIC tick, not the render rate.
+☠️ FPS CANNOT be measured offline: capture card unplugged, and every 68k-side
+   counter runs at the 30 Hz LOGIC tick, not the render rate.
 
-### ✅ WHAT IS ACTUALLY DONE
-    climbing      CAVES   LEDGES 24/24  WALLS 6/6 refused  0 black outliers
-                  MANSION LEDGES 24/24  WALLS 6/6 refused
-    release       recipe proven end to end (run 46) but the ROM is STALE
-
-### ⬜ ALSO STILL OPEN
-  * Run-25/50 direction questions unanswered; the run-50 report was delivered.
+### ✅ WHAT IS DONE
+    climbing   CAVES   LEDGES 24/24  WALLS 6/6 refused  0 black outliers
+               MANSION LEDGES 24/24  WALLS 6/6 refused
+    release    CURRENT and verified into gameplay -> /tmp/cofout5
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,
