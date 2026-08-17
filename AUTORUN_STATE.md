@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 32
+RUN: 33
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,58 +17,53 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**✅ THE HARNESS WORKS AND THE FIRST FULL CAVES SWEEP IS DONE — 26 spots.**
-`python3 tools/conformance.py /tmp/conf.cof /tmp/conf.elf --out DIR`
+**☠️ RETRACTION OF RUN 31: "ALL SIX CLIMB3 LEDGES FAIL" WAS MY HARNESS, NOT THE
+GAME.** The pull-up now runs the animation at its own length (the run-1 fix that
+stopped it reading as "floating"), so a 768 climb needs ~195 fields. The harness
+gave up after 120. Widened to 300 and five of six CLIMB3 spots rise **exactly
+768**. ★ Third time an instrument has produced a confident false defect in this
+project — check the measurement window before believing a uniform failure.
 
-### ☠️ THE BUG THAT BROKE IT FOR THREE RUNS: A 32-BIT POKE OF A 16-BIT VAR
-`g_layaw` is at 0x19084e, `g_curroom` at 0x190850. Writing 4 bytes of yaw
-**stomped the room two bytes later** — room went to garbage, the floor lookup
-failed, and Lara fell out of the world or refused to move.
-★ **Every poke returned `ok:true, wrote:4`**, which is exactly why it survived
-so long: the writes all landed, just two bytes too wide. A poke helper must know
-the WIDTH of what it writes; defaulting to 32 bits silently corrupts neighbours.
-Fixed with `poke16()`. Now every spot seats exactly (`y == floor == target`).
+### CAVES CONFORMANCE — 20/26 CLIMBED, 2 PARTIAL, 4 NO-CLIMB
+    WALKUP   (256)   6/6 ✅
+    CLIMB2   (512)   5/6 ✅   one stops at 494
+    CLIMB3   (768)   5/6 ✅   one stops at 732
+    JUMPGRAB (1024)  1/1 ✅
+    JUMPGRAB (1536)  3/3 ✅
+    JUMPGRAB (1792)  0/2 ⬜  harness only drives UP+B (a standing pull-up).
+                            TR1 needs a RUNNING JUMP + grab here. NOT a defect
+                            until the harness can jump.
+    WALL     (2048)  0/2 ✅  correctly refuses
 
-### THE RESULTS — 15 CLIMBED / 7 PARTIAL / 4 NO-CLIMB
-
-    WALKUP   (256)   6/6 CLIMBED           ✅ works
-    CLIMB2   (512)   5/6 CLIMBED, 1 at 494 ✅ works (the 494 is within noise)
-    CLIMB3   (768)   0/6 CLIMBED           ☠️ ALL SIX PARTIAL
-                     rose 496, 429, 429, 338, 406, 496 - never the full 768
-    JUMPGRAB (1024)  1/1 CLIMBED           ✅
-    JUMPGRAB (1536)  3/3 CLIMBED           ✅
-    JUMPGRAB (1792)  0/2 - rose 0          ⬜ probably a HARNESS limit, not a
-                     bug: the harness only drives UP+B (a standing pull-up).
-                     TR1 needs a RUNNING JUMP + grab at 1792. Add a jump drive
-                     before calling this a defect.
-    WALL     (2048)  0/2 - rose 0          ✅ correct, 2048 is not climbable
-
-### ★ THE REAL DEFECT: CLIMB3 (768) NEVER COMPLETES
-Six for six, in two different rooms (12 and 14), she rises 338-496 and stops -
-roughly the CLIMB2 ceiling. In PSX TR1 a 768 ledge is a normal standing pull-up.
-**This is the thing to fix next.** Start at the climb height cap / class
-selection: `checkClimb()` bands are <=256 WALKUP, <=640 CLIMB2, <=896 CLIMB3,
-<=1920 JUMPGRAB. Suspect the CLIMB3 branch either is not selected or reuses
-CLIMB2's rise. `PROBE_AHEAD=256` and the run-1 climb-ticks fix are already in.
-
-### ⬜ ALSO FOUND: three spots above the 17.4% black baseline
-    room 22 JUMPGRAB  60.5%   <- well above anything the ROOMTOUR sweep saw
-    room 14 CLIMB3    23.2%
-    room 3  WALKUP    20.8%
-Frames are in `/tmp/confall/s0NN.png`. Look at the 60.5% one first - that is the
-signature both earlier collision voids produced.
+### THE TWO THINGS ACTUALLY WORTH CHASING
+1. ⬜ **room 22 JUMPGRAB spot: 60.4% black** (`/tmp/confall2/s020.png`). Room 22
+   reads **1.1-1.5% at its centre** in the ROOMTOUR baseline, so this is a real
+   outlier, not a dark room. Frame shows Lara on a ledge with rock above and the
+   right half missing. Same signature as the two collision voids already fixed -
+   check that cell with `floor_coverage.py --tsv` and by walking it.
+   (room 3 WALKUP at 20.8% is marginal; the baseline max was 17.4%.)
+2. ⬜ **Two climbs stop just short** (CLIMB2 494/512, CLIMB3 732/768) while
+   their siblings in the same room complete exactly. Worth one look at whether
+   the pull-up ends on `g_vaulty` or leaves a remainder.
 
 ### Still to do for the user's request
-1. Fix CLIMB3.
-2. Add a jump drive so JUMPGRAB 1792 is a real test, not a harness limit.
-3. **Run the sweep in Lara's Home** (`/tmp/conf.cof` has it - built without
-   GYMSD). Its sector grid has never been walked.
-4. Compare against PSX footage in `res/` (Part 2 = Caves, 3m20 -> 23m24).
+1. **Add a jump drive** (`input up,a` then grab) so JUMPGRAB 1792 is a real test.
+2. **Sweep Lara's Home** - `/tmp/conf.cof` includes it (built without GYMSD) and
+   its sector grid has never been walked. Needs census spots for the gym rooms:
+   `ledge_census.py` currently reads `mrt_*` only.
+3. Compare against PSX footage in `res/` (Part 2 = Caves, 3m20 -> 23m24).
+4. Fix what genuinely fails.
 
-### Housekeeping
-⬜ **cobweb is 4 commits behind** (59e5896 -> bf31dee), including jag_rr's
-"book blits to the master that issued them" - the attribution fix I asked for.
-Take it and bump `COBWEB_REV`.
+### Harness reference
+    python3 tools/conformance.py /tmp/conf.cof /tmp/conf.elf --out DIR [--limit N]
+    CONF_DEBUG=1 shows every seat/poke and its response.
+☠️ **Poke width matters**: `g_layaw` is 16-bit and `g_curroom` sits 2 bytes
+after it - a 32-bit yaw poke stomps the room. Use `poke16()`. Every poke
+returned `ok:true` while doing this, which is why it took three runs to find.
+☠️ Symbols are PER-BUILD; read them from that ROM's own `.elf`.
+
+✅ cobweb bf31dee taken (incl. jag_rr's "book blits to the master that issued
+them"); renderer byte-identical, `COBWEB_REV` bumped.
 
 ### ⬜ AWAITING THE USER (run-25 checkpoint)
   1. Capture card replugged? 2. Ship Lara's Home? 3. Release or keep polishing?
