@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 57
+RUN: 58
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,68 +17,65 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ ROOM 0's HOLE IS FIXABLE AND HALF OF IT IS ALREADY GONE: 77.8% -> 39.5%
+# ⬜ THE ROOM-0 FIX IS MEASURED FOR *WORK*. FRAME RATE STILL NEEDS PRICING.
 
-The two mansion holes have **different causes**, which is why one set of flags
-never explained both:
+`HOPDEPTH=5 HOPBOOT=4 ALLVIS=1` takes room 0's hole **77.8% -> 39.5%** and puts
+the mansion exterior on screen (run 56). Its cost, at that spot over 36 fields:
 
-    room 15  MISSING GEOMETRY  - nothing exists to draw (run 55, closed)
-    room 0   NOT DRAWN         - the geometry exists and was never a candidate
+                staged   rastered   rastered/field
+    DEFAULT      6853      2276         63.2
+    FIXED        6694      3136         87.1   (+38%)
 
-### ★★★★★ `tools/sightline.py` — ASK WHAT EXISTS BEFORE BLAMING A CULL
-    tools/sightline.py --prefix gym --at X,Y,Z,ROOM,YAW [--reach N] [--half N]
-Walks every room's faces, keeps centroids in a corridor along the spot's yaw, and
-prints each room's face count and vertical span against the floor she stands on.
-No build required. It reproduces run 55's room-15 verdict in one command, and it
-separated the two holes immediately:
+**Staged is FLAT and rastered is up 38%.** The 68k transform load does not change;
+the GPU simply spends the same time drawing more faces that survive. That is the
+signature of a GPU already saturated: total work per unit time is fixed, so the
+extra rooms do not add 68k cost - they change what the frame is made of.
+☠️ That is NOT the same as "it is free". A scene needing more faces per FRAME
+renders fewer frames per second, and none of the numbers above measure frames.
 
-    room 15 -> only room 13 in view, y -1024..2560, she is at 3072
-               EVERY face above her feet: missing riser, unfixable by culling
-    room 0  -> rooms 13, 1 and 17 in view with faces above AND below her
-               the geometry is THERE
+### ☠️☠️ YOU CANNOT MEASURE FPS OFFLINE WITH ANY EXISTING COUNTER - I tried three
+    tools/fps_measure.py  reads a CAPTURE CLIP. The capture card is unplugged,
+                          so this tool cannot run at all right now.
+    frame_count           is FIELDS. It ticks exactly 12 per 12-field step.
+    g_pipeframe           is a pipeline STAGE INDEX. It sits at 1 forever.
+    a counter in the DRAW LOOP  reads 30.00 fps in a game that renders at ~6:
+                          the 68k stages work every 30 Hz LOGIC tick regardless
+                          of how far behind the GPU is. ★ With PIPELINE=1 the
+                          68k side cannot see the frame rate AT ALL - anything
+                          you count there measures the logic clock.
+`g_drawframes` (DREWVIS builds) is left in as the draw-loop tick, correctly
+labelled - useful for "how many draw passes", useless for fps.
 
-**Five runs of renderer forensics would have been one command.**
+### ⬜ NEXT: PRICE IT WITH `room_cycles.py`, THE ONE OFFLINE INSTRUMENT LEFT
+It runs bare kernels at **silicon-fidelity cycles** (`jtest run/golden
+--assemble`) and gives a per-room render cost - exactly the question here, which
+is "what does drawing N more rooms cost". Sum it over the drawn set:
+    default  drew = {0,1}
+    fixed    drew = bits 0-7,12,13 (12543)
+☠️ Known limit: room_cycles cannot see the Blitter FILL, which is ~30% of the
+frame, so treat its answer as a LOWER bound on the cost.
+Then choose: **HOPDEPTH=4 before 5** - the missing rooms sat at hop 4, so 4 may
+buy the whole win at a fraction of the cost. And consider making it PER LEVEL:
+the Caves never needed a 4th hop (0 black outliers at depth 3), so the mansion
+can pay for what only the mansion uses.
 
-### ✅ THE FIX FOR ROOM 0: portal DEPTH, not the hop dial
-`DREWVIS` at that spot: `vis={0,1,3}`, `drew={0,1}` - rooms 13 and 17 carry the
-geometry for that view and were never candidates. The portal depth was a hard 3,
-written as three nested loops, and `HOPBOOT` cannot reach past it (that dial only
-TIGHTENS an already-capped set). Rewritten as a bounded BFS behind **`HOPDEPTH`**
-(default 3). ☠️ Verified byte-identical at the default before trusting anything:
-same `vis=11 drew=3`, same 77.8%.
+### ★ ROOM 0 IS OUTDOORS - some of the residual 39.5% is legitimate
+`sightline.py --half 4500` (frustum width, not the default pencil beam) finds 8
+rooms / 496 faces in that view; room 14 alone has 75 faces and is still NOT in
+the drawn set at depth 5. So there is more to recover, but room 0 is the mansion
+EXTERIOR and TR1 has no sky geometry either - do not chase the last of it.
+☠️ The default `--half 520` is a pencil beam and under-reports badly; pass the
+frustum width when judging screen coverage.
 
-    HOPDEPTH=3 (ship)              vis={0,1,3} drew={0,1}   77.8% uncovered
-    HOPDEPTH=5 HOPBOOT=4           vis unchanged            75.8%
-    HOPDEPTH=5 HOPBOOT=4 ALLVIS=1  vis=bits0-13 drew=12543  **39.5%**
-
-★ Depth alone was not enough: rooms 13/17 have **no portal window** from there
-(`prv=0`), and `ALLVIS` is what admits a room whose window computes empty. Each
-alone does nothing; together they halve the hole. **Two necessary conditions can
-each measure as "no effect" - run 51 dismissed ALLVIS for exactly this reason.**
-Before/after frames: `/tmp/room0_before.png`, `/tmp/room0_fixed.png` (320x80,
-upscale 3x). The recovered picture is the mansion EXTERIOR - a building with a
-doorway and roof where there was solid black.
-
-### ⬜ NEXT: WHAT DOES IT COST? Then pick the depth.
-This draws ~14 rooms where it drew 2, in a game running 6-7 fps. **Do not ship it
-unmeasured.**
-  1. `tools/fps_measure.py` / `room_cycles.py` on the gym with
-     `HOPDEPTH=4/5 ALLVIS=1` vs the default. Also check the CAVES cost - they
-     never needed the extra depth, so if it is expensive make it per-level.
-  2. The remaining 39.5% is probably legitimate: room 0 is OUTDOORS and TR1 has
-     no sky geometry there. Confirm with `sightline.py` before hunting it.
-  3. If the cost is unacceptable at depth 5, try 4 - the missing rooms were at
-     hop 4, so 4 may buy the whole win.
-
-### ☠️☠️ TWO KERNEL DIAGNOSTIC FLAGS BUILD AND DO NOT RENDER
-    NOEMPTYY=1   GPU halted, flat luma-76 field
-    NOSDCULL=1   GPU halted, HOLEVIS 100% white = nothing drawn
-Both report **illegal=0**. `NOBFCULL=1` and `ALLVIS=1` are safe.
-★ `illegal=0` is not "it rendered" - screenshot every diagnostic build.
+### ✅ SHIPPING IS UNCHANGED AND VERIFIED SO
+`HOPDEPTH` defaults to 3 and the rewrite (three nested loops -> bounded BFS) was
+checked byte-identical at the default: same `vis=11 drew=3`, same 77.8%. Nothing
+above is in a shipping build.
 
 ### ★ INSTRUMENTS (all off in shipping builds)
     sightline.py                  what geometry exists ahead - NO BUILD NEEDED
-    DREWVIS=1                     g_visrooms / g_drewrooms room bitmasks
+                                  (use --half 4500 for frustum width)
+    DREWVIS=1                     g_visrooms / g_drewrooms / g_drawframes
     HOPDEPTH=N                    portal visibility depth (default 3)
     CULLCOUNT=1 BEXCNT=1 WCCNT=1  per-face counters, RAW DRAM:
                                   $1C0000 staged  $1C0004 rastered
@@ -86,10 +83,13 @@ Both report **illegal=0**. `NOBFCULL=1` and `ALLVIS=1` are safe.
     probe_spot.py --raw=N=0xADDR / --set=SYM=VAL
     build_conf.sh EXTRA= / SKIP=
 ☠️ Counters ACCUMULATE - take DELTAS.
+☠️ NOEMPTYY=1 and NOSDCULL=1 BUILD AND DO NOT RENDER (illegal=0 either way).
+   NOBFCULL=1 and ALLVIS=1 are safe.
 
 ### ✅ STILL TRUE — climbing is closed (runs 46-49)
     CAVES    LEDGES 24/24   WALLS 6/6 refused   0 black outliers
     MANSION  LEDGES 24/24   WALLS 6/6 refused
+### ✅ room 15's hole is MISSING GEOMETRY (run 55) - not fixable by rendering
 
 ### ⬜ ALSO STILL OPEN
   * ☠️ `/tmp/cofout4` (the filmed release) predates runs 46-49. Rebuild before

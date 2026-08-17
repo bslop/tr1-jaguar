@@ -26,7 +26,7 @@ INST = "probe"
 BOOT = 1300
 SETTLE = 20
 
-WATCH = ["g_hopcap", "g_gov_on", "g_visrooms", "g_drewrooms", "g_gunst", "g_lay", "g_lafloor", "g_curroom", "g_floorroom", "g_fwdblk", "g_autoj", "g_autojv",
+WATCH = ["g_drawframes", "frame_count", "g_hopcap", "g_gov_on", "g_visrooms", "g_drewrooms", "g_gunst", "g_lay", "g_lafloor", "g_curroom", "g_floorroom", "g_fwdblk", "g_autoj", "g_autojv",
          "g_jumped", "g_lavy", "g_hang", "g_vault", "g_lax", "g_laz"]
 
 

@@ -1036,6 +1036,14 @@ static int g_curroom;                 /* room Lara is standing in (visibility) *
    In vis but not drew = killed by a cull between them. In neither = the portal
    chain never admitted it. */
 static uint32_t g_drewrooms, g_visrooms;
+/* ★ RENDERED-FRAME COUNTER. `frame_count` is FIELDS (it ticks 12 per 12-field
+   step, so it measures the VBL, not the game) and `g_pipeframe` is a stage
+   index that never leaves 1 - neither can price a rendering change. This ticks
+   once per visibility pass, i.e. once per rendered frame, so
+   fps = 60 * delta(g_drawframes) / delta(frame_count).
+   The capture card is unplugged, so tools/fps_measure.py (which reads a capture
+   clip) cannot run at all; this is how a render cost gets measured offline. */
+static uint32_t g_drawframes;
 #endif
 static int g_curroom_fwd(void) { return g_curroom; }
 #define LARA_JUMPGRAB 1920            /* AUTO JUMP-REACH ceiling = TR1's own band:
@@ -9751,6 +9759,11 @@ bootvid_entry:
                        doorway = the room isn't drawn AT ALL. */
 #ifdef DREWVIS
                     g_drewrooms |= 1u << ri;
+                    /* ☠️ TICK HERE, NOT AT THE VISIBILITY PASS. That pass runs on the 30 Hz
+                       LOGIC tick and measured "30 fps" in a game that renders at 6 - the
+                       logic outruns the renderer. The draw loop reaches the current room
+                       exactly once per RENDERED frame, which is the thing being priced. */
+                    if (ri == g_curroom) g_drawframes++;
 #endif
                     { int cx0=0, cx1=319, cy0=0, cy1=VIEW_H-1;
 #ifndef NOPCLIP
