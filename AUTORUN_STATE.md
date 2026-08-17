@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 68
+RUN: 69
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,58 +17,63 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ☠️ RETRACTION: THERE IS NO MID-LEVEL "LOADING". THE RELEASE WALK IS CLEAN.
+# ✅ A DRIVEN PLAY-THROUGH OF THE RELEASE. 54,000 UNITS, FULL HEALTH, NO ANOMALY.
 
-Run 63 reported an unexplained "LOADING..." screen appearing while walking the
-release, and runs 64-66 carried it as an open defect. **It does not exist.** It
-was a contact sheet misread - I attributed a panel to the wrong frame index and
-then reasoned from the mistake for three runs.
+`release_play.py --tour` walks the shipping ROM and **turns when she stops**,
+which is the difference between a capture that ends at the first wall and one
+that explores. With the release ELF it logs position every step.
 
-Re-tested with the release ELF that run 66 made available, so the drive now logs
-real state instead of me interpreting thumbnails:
+    54,225 units covered over 30 samples, x 72765..76733  z 4900..21495
+    health 1000 THROUGHOUT, floor tracks 2600..3626, no falls, no reloads
+Sheet: `/tmp/release_tour_sheet.png` - the canyon from a dozen angles, textured,
+HUD drawn, Lara animating.
 
-    walked  1  z= 4900  y=3072  room=0  health=1000
-    walked  3  z=13736  y=3946  room=0  health=1000
-    walked  5  z=21444  y=3072  room=0  health=1000
-    walked 14  z=21444  y=3072  room=0  health=1000   (wedged, see below)
+☠️ TWO WRONG TURNS WORTH KNOWING, both measured:
+  * **Alternating the turn direction just reverses her.** The first tour
+    ping-ponged along one corridor (z 15396 <-> 21480), covered 56,802 units and
+    saw NO new ground. Turning the SAME way every time (wall-following) turned a
+    dead end into a corner and produced a genuine 2D sweep.
+  * **`g_curroom` stayed 0 for the entire tour and that is CORRECT.** I nearly
+    filed it as stuck room-tracking. Room 0 is 6x20 cells spanning
+    x 71680..77824, z 2048..22528 - the whole tour fits inside it. The Caves
+    opening is ONE long corridor. ★ Check the room's extent before calling a
+    constant room index a bug.
 
-**Room never changes, health never moves, and the frame at the accused index
-(`p_05`) is ordinary gameplay at 0.1% black** - a loading screen is mostly dark
-and cannot read 0.1%. Nothing reloads.
+### ⬜ NEXT: BLACK WEDGES IN NORMAL CAVES PLAY - and this time I have the coords
+Most tour frames carry **large black wedges** below and beside the walkable
+surface (clearest in `t_06`, `t_12`). Some of it must be legitimate - the canyon
+is open-topped and TR1 has no sky there - but the wedges that sit BELOW the floor
+line have the shape of the missing-geometry family from runs 50-59.
+★ This is a far better starting point than that hunt had: **every tour frame has
+an exact position in the log**, so point the tool at it instead of guessing:
 
-★★★★★ **A thumbnail grid is not evidence.** Every wrong turn in the last several
-runs came from reading a picture and inferring state: the "LOADING" that was not
-there, the "geometry through walls" that filled pixels, the pickup counter that
-was never wired. The telemetry took one run to add and settled it immediately.
-**If a claim is about game STATE, read the state.**
+    tools/sightline.py --prefix mrt --at 72790,2602,21444,0,0 --half 4500
 
-### ✅ WHAT THE WALK ACTUALLY SHOWS
-She walks ~16 sectors (z 4900 -> 21444) through the snowy Caves opening at full
-health, then **stops dead at x=74704 z=21444** and never moves again. That is
-just a wall: the drive only ever presses UP. ⬜ If someone wants a longer
-play-through capture, the drive needs turns - not a bug to chase.
+If the geometry is simply absent (as in mansion room 15), it is closed the same
+way and cheaply. If geometry EXISTS and is not drawn, that is a NEW finding in
+the CAVES - the level the demo actually ships on - and worth the runs.
+☠️ Do NOT start from the renderer. Runs 50-59 spent ten runs on culls before
+asking what geometry was there; `sightline.py` exists so that never repeats.
 
-### ⬜ NEXT - all of it optional; nothing is known-broken
-  1. Bats (ents 1, 11, 31) are still unseen: AIRBORNE at y -2432, and a floor
-     stand-off leaves them out of frame. Needs an air teleport or camera pitch.
-  2. A longer driven play-through (turns, not just UP) if a demo capture is
-     wanted.
-  3. ☠️ Driven mechanics tests need the rig and a human at the TV. Do NOT claim
-     the rig - the capture card is unplugged.
-  4. **The release is CURRENT, verified into gameplay on both levels, and now
-     ships with symbols** -> `/tmp/cofout6`. The run-25/50 direction questions
-     are still unanswered and "is this the release?" is the blocking one.
+### ⬜ ALSO OPEN - nothing known-broken
+  * Bats (ents 1, 11, 31) unseen: AIRBORNE at y -2432, a floor stand-off leaves
+    them out of frame. Needs an air teleport or camera pitch.
+  * ☠️ Driven mechanics tests need the rig and a human at the TV. Do NOT claim
+    the rig - the capture card is unplugged.
+  * **The release is CURRENT, verified into gameplay on both levels, ships with
+    symbols, and now has a play-through capture** -> `/tmp/cofout6`. The
+    run-25/50 direction questions remain unanswered; "is this the release?" is
+    the blocking one.
 
 ### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (runs 50-59): room 15 = MISSING GEOMETRY, room 0 = OPEN SKY.
-    pickups (run 65): they WORK - `g_pickups` is DEMO_PROPS and not compiled in;
-      the real state is `g_pickgot[]` + `g_health`.
-    the mid-walk LOADING (this run): never existed.
+    pickups (run 65): they WORK - `g_pickups` is DEMO_PROPS, not compiled in.
+    mid-walk LOADING (run 67): never existed; a contact-sheet misread.
 
 ### ★ INSTRUMENTS (all off in shipping builds)
-    release_play.py [--gym|--play]  drive the RELEASE; --play LOGS TELEMETRY
-                                    (reads OPENLARA.elf beside the ROM;
-                                     REL_ROM/REL_SD/REL_ELF override the paths)
+    release_play.py --tour          wall-following play-through WITH TELEMETRY
+    release_play.py --play/--gym    straight walk / select Lara's Home
+                                    (REL_ROM/REL_SD/REL_ELF override the paths)
     entity_check.py                 stand next to any entity and photograph it
     probe_spot.py --raw= / --set=   per-spot telemetry; teleport anywhere
     sightline.py                    what geometry is NEARBY - not what is VISIBLE
@@ -78,8 +83,7 @@ play-through capture, the drive needs turns - not a bug to chase.
                                     $1C0010 bexit   $1C0014 worldcull
     build_conf.sh EXTRA= / SKIP=
 ☠️ Counters ACCUMULATE - take DELTAS.
-☠️ SYMBOLS ARE PER-BUILD - use the .elf from the SAME build (g_health moves
-   0x13f936 -> 0x17b7f6 between the conformance and release ROMs).
+☠️ SYMBOLS ARE PER-BUILD - use the .elf from the SAME build.
 ☠️ NOEMPTYY=1 and NOSDCULL=1 BUILD AND DO NOT RENDER (illegal=0 either way).
 ☠️ FPS CANNOT be measured offline (capture card unplugged; 68k counters run at
    the 30 Hz LOGIC tick).
@@ -89,8 +93,8 @@ play-through capture, the drive needs turns - not a bug to chase.
                MANSION LEDGES 24/24  WALLS 6/6 refused
     enemies    BEAR and WOLVES render in-game on shipping flags
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
-    release    CURRENT, both levels verified into gameplay, ships with symbols
-               -> /tmp/cofout6.  Walk-through: 16 sectors, full health, clean.
+    release    CURRENT, both levels into gameplay, symbols, play-through capture
+               -> /tmp/cofout6
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,

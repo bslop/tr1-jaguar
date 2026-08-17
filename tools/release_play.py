@@ -101,6 +101,39 @@ try:
     # ☠️ "Start Game" runs the SNOW CUTSCENE before the level. The first pass
     # captured only that and looked like the game had not started. Run long
     # enough to get through it.
+    if "--tour" in sys.argv:
+        # ☠️ PRESSING UP FOREVER STOPS AT THE FIRST WALL. The --play drive walked
+        # 16 sectors and then sat at x=74704 z=21444 for nine straight samples,
+        # which looks like a hang and is just a corridor turning. Watch her
+        # POSITION and turn when she stops: that is the difference between a
+        # 16-sector capture and a play-through.
+        ctl("run", 6000, timeout=3600)
+        turn, stuck, dist = "left", 0, 0
+        px, pz = peek("g_lax"), peek("g_laz")
+        for i in range(30):
+            ctl("input", "up")
+            ctl("run", 120, timeout=1800)
+            ctl("release"); ctl("run", 20)
+            nx, nz = peek("g_lax"), peek("g_laz")
+            moved = abs((nx or 0) - (px or 0)) + abs((nz or 0) - (pz or 0))
+            dist += moved
+            if moved < 64:                      # wedged - turn and try again
+                stuck += 1
+                # ☠️ ALTERNATING THE TURN JUST REVERSES HER. Measured: she
+                # ping-ponged along one corridor between z 15396 and z 21480 for
+                # the whole tour, covering 56,802 units and NO new ground, and
+                # never left room 0. Turn the SAME way every time (classic
+                # wall-following) so a dead end becomes a corner, not a U-turn.
+                ctl("input", "right")
+                ctl("run", 45 + 25 * (stuck % 4))
+                ctl("release"); ctl("run", 10)
+            else:
+                stuck = 0
+            px, pz = nx, nz
+            ctl("frame", os.path.join(OUT, "t_%02d.png" % i))
+            print("  %2d moved %-6d total %-7d %s" % (i, moved, dist, tele()), flush=True)
+        raise SystemExit
+
     if "--play" in sys.argv:
         # ☠️ VERIFY THE HEADLINE FEATURES IN THE SHIPPING ROM, not in a test
         # build. The conformance sweeps prove CLIMBING; nothing has ever
