@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 101
+RUN: 102
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,58 +17,44 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅✅ REAL GAME FIX: `room_floor_mr` RETURNED THE RIGHT FLOOR WITH THE WRONG ROOM.
+# ✅ SHE NO LONGER FALLS THROUGH THE FLOOR AT A STEP. ONE TEST TRADED FOR IT.
 
-    CAVES    51 crossed / 7 FAILED   ->   **55 crossed / 3 FAILED**
-    MANSION                          ->   **15 of 18 crossed / 3 FAILED, 0 UNTESTABLE**
+### 1. RUN 100's FIX IS CLEAN - THE FLAGGED REGRESSION CHECK IS DONE
+    CAVES   24/24 ledges, 6/6 walls        MANSION  24/24 ledges, 6/6 walls
+Nothing regressed from changing the core floor query. That item is closed.
 
-Nothing that passed before regressed (51 -> 55 is exactly the four doors fixed).
+### 2. GYM 7 -> 9 WAS A FALL-THROUGH, AND IT IS FIXED
+Traced the approach cell by cell: room 7's next cell is **-512** (a two-click step
+UP, a vault in TR1) while room 8 lies **1280 BELOW**. Ground mode ranks a floor
+at/below the feet ahead of one above regardless of WHICH room it came from, so
+room 8 won and she walked at the step and **fell through the floor**:
 
-### THE BUG
-`room_floor_mr` runs TWO selections over the same candidate loop - the old
-"lowest floor wins" bookkeeping and the Y-aware "closest reachable floor" that
-actually supplies the answer - and **both wrote `g_floorroom` directly**, so
-whichever ran LAST won. The bookkeeping runs for every candidate, including ones
-the Y-aware path rejects.
+    BEFORE  up0 y=0 room=7  ->  up1 y=1108 room=8  ->  up2 y=1280 room=8
+    AFTER   y=0, room 7, stopped at x=57302 - refused by the step, as TR1 does
 
-Caves 18->21, measured cell by cell: room 18 supplies 4352 under her feet, room 22
-supplies **6400** (2048 BELOW, through the floor portal `18->22`, which spans
-z 47104..58368). The Y-aware path correctly keeps 4352 - she never drops - but
-rooms iterate ascending, room 22 ran second, `fy > best` fired, and `g_floorroom`
-was left reading **22**. `g_floorroom` is what drives the room transition, so she
-keeps her footing at the right height and **the game moves her into the room
-below**: 2253 units walked, out of room 18, attributed to 22, never reaches 21.
+### 3. ☠️ THE FIRST FIX WAS TOO BLUNT AND BROKE ROOM CROSSING
+Preferring the current room outright fixed 7->9 and broke **7->2**: rooms 7 and 2
+BOTH supply floor 0 across the whole seam (measured, z 48016..46096), so room 7
+won every tie and never handed over - she walked **7073 units** and stayed in
+room 7. ★ The distinction is the **DROP**, not the room. Final rule: take the
+normal winner UNLESS it sits BELOW the best floor her own room offers. A TIE
+falls through untouched, so seams still hand over.
 
-☠️ This is a GAMEPLAY defect in the shipping build, not a harness one - anywhere
-an overlapping room supplies a lower floor, walking attributes Lara to the pit
-room under her feet. The door walk is just what finally made it observable.
-
-### THE FIX
-Each candidate now carries its own room AND slope (`best_r/best_slx/best_slz`,
-`nbest_r/nbest_slx/nbest_slz`); the attribution is assigned ONCE, at the end, from
-whichever result is actually returned. `g_flr_slx/g_flr_slz` had the identical
-defect - the slope came from the lowest floor even when a different room's floor
-was returned - and is fixed the same way.
-
-### WHAT IS LEFT, AND WHAT EACH ONE IS
-    CAVES   11 -> 12   DOOR shut     correct - its switch is in the same cell
-    CAVES   25 -> 28   DOOR shut     correct
-    CAVES   25 -> 22   moved 141     WEDGED on the stand-off cell - harness
-    GYM      2 -> 5    STEP UP       correct - a vault, not a walk (run 84)
-    GYM      2 -> 6    STEP UP       correct
-    GYM      7 -> 9    saw [7,8]     ☠️ THE ONE UNEXPLAINED FAILURE LEFT
+### 4. WHAT IT COST - STATE IT PLAINLY
+    CAVES doors      55 crossed / 3 FAILED     IDENTICAL to baseline
+    MANSION climbing 24/24, 6/6                IDENTICAL to baseline
+    MANSION doors    15/3  ->  **14/4**
+      7 -> 9   was "saw [7,8] WALL" (the fall-through)  ->  now STEP UP, explained
+      8 -> 11  was ok  ->  now FAILS, **and its seat drifted into room 10**
+A drifted seat means that test is compromised, not necessarily the game - but I
+am not going to call it harmless without looking. It is the first thing to check.
 
 ### ⬜ NEXT
-  1. **GYM 7 -> 9** - the only unexplained door on either level. She moves 1245
-     units, leaves 7, ends in **8**, never reaches 9. Same method that cracked
-     18->21: `tools/door_walk.py x x --prefix gym --seats --door 7,9` (instant),
-     then walk the cells between the seat and the portal plane and see which room
-     supplies the winning floor at each one.
-  2. ☠️ **RE-RUN THE CLIMB CONFORMANCE.** This run changed the CORE floor query -
-     every movement, water and climb decision goes through it. The door walks are
-     a strong signal (73 doorways across two levels, nothing regressed) but they
-     do not exercise vault/grab, which is exactly what `g_flr_slx/slz` and the
-     LEDGE tier feed. Both levels were 24/24 ledges and 6/6 walls before.
+  1. **GYM 8 -> 11** - seat now resolves to room 10 and she ends there after 5790
+     units. Is that a real crossing failure or just the seat moving because the
+     floor query changed? `--seats --door 8,11` then trace the cells, same method.
+  2. ☠️ **CAVES climb conformance has NOT been re-run on the refined build** -
+     only the Caves DOORS and the MANSION climbs were. Run it before trusting this.
   3. Re-verify the release once 1 and 2 land.
 
 ### ⚠️ BUILD STATE

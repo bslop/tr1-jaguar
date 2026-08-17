@@ -583,6 +583,23 @@ static int room_floor_mr(const uint8_t **rsect, int n, int wx, int wz, int *floo
     int r, found = 0, best = 0, best_w = 0;
     int nfound = 0, nbest = 0, nbestd = 0, nbest_w = 0;  /* Y-aware: CLOSEST reachable floor */
     int nbtier = 0;
+    int ofound = 0, obest = 0, obest_w = 0, obestd = 0, obtier = 0;
+    int obest_slx = 0, obest_slz = 0;
+    /* ☠️☠️ HER OWN ROOM'S FLOOR MUST WIN. Ground mode ranks a floor AT/BELOW the
+       feet ahead of one above (so walking off a crate does not snap to the
+       room-above), but that tier is blind to WHICH room each candidate came
+       from - so a floor far below in ANOTHER room outranks the step-up in the
+       room she is standing in. Measured, gym 7->9: room 7's next cell is -512
+       (a two-click step, a vault in TR1) and room 8 lies 1280 BELOW; tier 0 beat
+       tier 1 and she walks at the step and FALLS THROUGH THE FLOOR into room 8
+       (y 0 -> 1108 -> 1280, room 7 -> 8, measured at the seat).
+       TR1 reads the floor from the sector of the room you are IN and only
+       descends through an actual opening - and that is what the data already
+       encodes: past a portal the source room's cells read 0x7FFE OPEN (that is
+       what portal_open.py writes), so they drop out of this loop by themselves
+       and room crossing still works. So rank the current room first; the tiers
+       keep deciding everything else. */
+    const int curfwd = g_curroom_fwd();
     /* ☠️☠️ THE RETURNED FLOOR AND `g_floorroom` CAME FROM DIFFERENT ROOMS.
        Both selections below used to write g_floorroom directly, so whichever
        ran LAST won - and the lowest-floor bookkeeping runs for every candidate,
@@ -681,12 +698,30 @@ static int room_floor_mr(const uint8_t **rsect, int n, int wx, int wz, int *floo
             int d = fy - g_flr_wy, tier;
             if (d < 0) { d = -d; tier = g_flr_grab ? 0 : 1; }
             else       {         tier = g_flr_grab ? 1 : 0; }
+            /* the best floor HER OWN ROOM offers, scored by the same tiers */
+            if (r == curfwd && (!ofound || tier < obtier ||
+                                (tier == obtier && d < obestd))) {
+                obest = fy; obest_w = w; obestd = d; obtier = tier; ofound = 1;
+                obest_slx = sxs; obest_slz = szs;
+            }
             if (!nfound || tier < nbtier ||
                 (tier == nbtier && d < nbestd)) {
                 nbest = fy; nbest_w = w; nbestd = d; nbtier = tier; nfound = 1; nbest_r = r;
                 nbest_slx = sxs; nbest_slz = szs;
             }
         }
+    }
+    /* ☠️ ANOTHER ROOM MAY NOT PULL HER DOWN THROUGH HER OWN FLOOR - AND MAY NOT
+       BE LOCKED OUT EITHER. Preferring the current room outright fixed the
+       fall-through and BROKE room crossing: gym rooms 7 and 2 both supply floor
+       0 across the whole seam (measured, z 48016..46096), so room 7 won every
+       tie and never handed over - she walked 7073 units and stayed in room 7.
+       The distinction is the DROP, not the room: take the winner unless it sits
+       BELOW the best floor her own room offers, and only then keep her own. A
+       TIE falls through untouched, so the seam still hands over. */
+    if (nfound && ofound && nbest > obest) {
+        nbest = obest; nbest_w = obest_w; nbest_r = curfwd;
+        nbest_slx = obest_slx; nbest_slz = obest_slz;
     }
     if (nfound) { if (floorY) *floorY = nbest & ~1; g_floorwater = nbest_w;
                   g_floorroom = nbest_r;                  /* the room we RETURNED */
