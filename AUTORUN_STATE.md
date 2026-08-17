@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 59
+RUN: 60
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,68 +17,57 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ☠️ THE ROOM-0 FIX COSTS 6.3x KERNEL CYCLES. DO NOT SHIP IT AS TESTED.
+# ☠️☠️ CORRECTION: ROOM 0's "HOLE" IS LARGELY OPEN SKY. STOP CHASING IT.
 
-Priced with `room_cycles.py` (silicon-fidelity jtest cycles), gym, yaw=64:
+Runs 56-58 treated room 0's 77.8% black as a defect and built a fix for it. Two
+facts found this run say that was wrong, and the next run should NOT continue it.
 
-    room  0  202,168 cy (124 faces)     room  6  203,144 cy (134)
-    room  1  209,003 cy (153)           room  7  325,213 cy (289)
-    room  2  292,986 cy (252)           room 12  270,526 cy (239)
-    room  3  203,144 cy (134)           room 13  470,718 cy (481)
-    room  4  203,144 cy (134)
-    room  5  203,144 cy (134)
+### 1. The portal graph from room 0 is a LONG CHAIN, not a hub
+    0 -> 1 -> 2 -> 7 -> 8 -> 12 -> 13 -> {14,15,16,17}
+    hop depth from room 0: 1:1  2,3,4:2  5,6,7:3  8,9:4  10,11,12:5
+                           13:6  14,15,16,17:7  18:8
+Room 13 is **6 hops** away and 15/17 are **7**. `sightline.py` found their
+geometry "in front of her" because it tests a 3D BOX, not portal visibility -
+those rooms are physically near and **behind walls**. ★ So the run-56 "fix"
+(HOPDEPTH=5 + ALLVIS) filled 38 points of black by drawing rooms that are not
+visible from there - geometry THROUGH WALLS - and paid 6.3x kernel cycles to do
+it. That is not a fix, it is a rendering error that happens to cover pixels.
+☠️ **`sightline.py` answers "what is nearby", NOT "what is visible."** It is
+still the right first question for a hole - it is what closed room 15 - but its
+answer must be checked against the portal graph before concluding anything.
 
-    default  drew {0,1}              411,171 cycles
-    fixed    drew {0-7,12,13}      2,583,190 cycles     **6.3x**
+### 2. Room 0 is an OPEN AREA - black sky is correct there
+Sector data: **28 of its 72 cells carry the no-ceiling sentinel (-32768)**, and
+room 1 has 49 of 98. TR1 has no skybox in Lara's Home; open cells render black.
+So a large part of that 77.8% is not a hole at all, and the mansion's "7 black
+outliers" are probably mostly open-sky views. The `room_black.py` baseline
+counts sky as black, which is why they looked anomalous.
 
-☠️ And that is a LOWER BOUND - room_cycles cannot see the Blitter fill, which is
-~30% of a frame. In a game at 6-7 fps this is not a trade worth making for one
-view, so `HOPDEPTH`/`ALLVIS` stay off in shipping builds.
-★ The cost is NOT the depth. Run 56 measured depth 5 alone as changing nothing:
-those rooms are admitted by **ALLVIS**, and ALLVIS draws a rescued room
-FULL-SCREEN with no portal-window clip - so the full-room price above is exactly
-what it pays. Raising HOPDEPTH to 4 instead of 5 will not help; the knob that
-costs is ALLVIS.
+### ⬜ VERDICT ON THE TWO MANSION HOLES - both closed as far as offline can go
+    room 15  MISSING GEOMETRY (run 55): no riser between two floor levels. Real,
+             but it is a spot the census invented; TR1 may never let you stand
+             there. Not worth more runs.
+    room 0   LARGELY LEGITIMATE SKY. Only the PS1 footage can say whether the
+             house exterior should be visible from there, and `res/` is the
+             project's stated authority for how it LOOKS. One video check would
+             settle it - do that ONLY if the exterior matters for the demo.
+`HOPDEPTH`/`ALLVIS` stay OFF. Shipping is unchanged and was verified
+byte-identical at HOPDEPTH=3.
 
-### ⬜ NEXT: FIX THE EMPTY WINDOW INSTEAD OF BYPASSING IT
-The real defect is upstream: `room_link_rect(a,b)` returns **no window** for
-rooms that are plainly visible from room 0, and ALLVIS is a sledgehammer that
-says "window failed, draw the whole room". If the window were computed correctly
-those rooms would be drawn CLIPPED to their doorway - a fraction of the 6.3x.
-  1. Instrument `portal_rect()` at the room 0 spot: for each portal 0->1->...,
-     print the projected rect and which of its early-outs fires (it returns
-     0 = none visible / 1 = rect / 2 = full screen).
-  2. Suspect the "portal fully behind" test first - room 0 is OUTDOORS and its
-     portals are large; a portal spanning the camera plane may be rejected
-     outright rather than clipped, which is the same whole-face-vs-clip mistake
-     the near plane makes elsewhere in this renderer.
-  3. Measure the fixed version the same way: `room_cycles.py` on the resulting
-     draw set, and the hole with `HOLEVIS=1`.
-
-### ✅ `room_cycles.py` WAS DEAD AND NOBODY KNEW
-Two independent faults, both fixed this run:
-  * `JTEST` pointed at `~/Documents/Git/cobweb/...` - the checkout moved under
-    `jag_openlara/` and the path was never updated, so every invocation died with
-    FileNotFoundError. ★ A tool that always throws looks exactly like a tool
-    nobody needs; it had been quietly unusable.
-  * it was Caves-only, with `mrt.bin`/`mrt_geom.bin`/`mrt_atlas.bin` hardcoded -
-    the same trap `mrt_boundary_audit.py` had. Now `--prefix=gym`.
-Usage: `tools/room_cycles.py --prefix=gym --rooms=0,1,13 --yaw=64`
-(yaw in 256ths of a turn: 64 = +X). Needs `build/gpu_geotex.bin` from a ship
-build, which any recent `build_conf.sh` leaves behind.
-
-### ☠️☠️ FPS CANNOT BE MEASURED OFFLINE (run 57, three dead ends)
-    fps_measure.py  needs a CAPTURE CLIP; the capture card is unplugged
-    frame_count     is FIELDS (12 per 12-field step)
-    g_pipeframe     is a stage index, stuck at 1
-    a draw-loop tick reads 30.00 fps in a game rendering at ~6 - with PIPELINE=1
-                    the 68k stages work every 30 Hz LOGIC tick regardless of the
-                    GPU. Nothing counted on the 68k side sees the frame rate.
-**`room_cycles.py` is now the only offline way to price a rendering change.**
+### ⬜⬜ NEXT: REBUILD THE RELEASE. It is nine runs stale.
+This is the item with actual user value and it keeps being deferred:
+`/tmp/cofout4` was filmed in run 46 and predates every fix since -
+**the TR1 jump-reach velocity solve, the ledge-probe window fix, `climb_fits`,
+and `FITSTEP`**. Nobody has ever seen those on a screen together.
+    tools/build_cof.sh "<disc>" /tmp/cofout5     (~25 min, needs the disc path)
+Then boot it in jagemu with `--sd /tmp/cofout5`, FILM the boot
+(`jagemu video ... --start 2400 --every 900 --count 12 --cols 4`) and LOOK at it:
+Core logo -> FMV -> title ring, then confirm the caves render. That is the
+deliverable the user gated on his own sign-off, and it should be current.
 
 ### ★ INSTRUMENTS (all off in shipping builds)
-    sightline.py                  what geometry exists ahead - NO BUILD NEEDED
-                                  (use --half 4500 for frustum width)
+    sightline.py                  what geometry is NEARBY - not what is visible;
+                                  cross-check against the portal graph
     room_cycles.py --prefix=gym   per-room kernel cycles (fill NOT included)
     DREWVIS=1                     g_visrooms / g_drewrooms / g_drawframes
     HOPDEPTH=N                    portal visibility depth (default 3)
@@ -88,17 +77,15 @@ build, which any recent `build_conf.sh` leaves behind.
     build_conf.sh EXTRA= / SKIP=
 ☠️ Counters ACCUMULATE - take DELTAS.
 ☠️ NOEMPTYY=1 and NOSDCULL=1 BUILD AND DO NOT RENDER (illegal=0 either way).
+☠️ FPS CANNOT be measured offline (run 57): the capture card is unplugged and
+   every 68k-side counter runs at the 30 Hz LOGIC tick, not the render rate.
 
-### ✅ STATE OF THE TWO MANSION HOLES
-    room 15  MISSING GEOMETRY - nothing to draw, not a rendering bug (run 55)
-    room 0   geometry exists, window computes empty; fixable, currently 6.3x
-### ✅ climbing is closed (runs 46-49)
-    CAVES    LEDGES 24/24   WALLS 6/6 refused   0 black outliers
-    MANSION  LEDGES 24/24   WALLS 6/6 refused
+### ✅ WHAT IS ACTUALLY DONE
+    climbing      CAVES   LEDGES 24/24  WALLS 6/6 refused  0 black outliers
+                  MANSION LEDGES 24/24  WALLS 6/6 refused
+    release       recipe proven end to end (run 46) but the ROM is STALE
 
 ### ⬜ ALSO STILL OPEN
-  * ☠️ `/tmp/cofout4` (the filmed release) predates runs 46-49. Rebuild before
-    shipping.
   * Run-25/50 direction questions unanswered; the run-50 report was delivered.
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
