@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 19
+RUN: 20
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,50 +17,46 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**★★★ DRIVEN/SPAWN TESTS RUN ENTIRELY OFFLINE — the rig is not needed for them.**
-I had been treating gameplay repro as rig-blocked because the capture card is
-unplugged. It is not: jagemu supplies both the pad (`--press`, `ctl input`) and
-the framebuffer. A `SPAWNAT_*` arm + `jagemu video` reproduces a fall, a drop, a
-ledge — no hardware at all. **Use this for tasks #8 and #10.**
+**✅ COLUMN 319 IS PAINTED — `RCLIPFIX=1`, free (throughput identical).**
 
-### ☠️ REFUTED: the ivy-drop blackness is NOT the portal-hop cap
-Clean A/B at a 1792-unit drop (room 22, from `ledge_census.py`), flag verified
-on the compile line (`-DHOPBOOT=4`):
+    dead columns   before: 1  (x 319, in EVERY scene)      after: 0
+    rendered frames  232 / 398  ->  232 / 398   (identical, f1500 / f2500)
+    illegal=0, image verified by eye, kernel proven to differ (3466 -> 3468 B)
 
-    HOPBOOT=1 (shipping, "room +/- 1")   8.2% of screen black
-    HOPBOOT=4 (uncapped)                 8.3% of screen black
+☠️ **Run 18 called this "a classic off-by-one at clipx1". It is not a mistake —
+it is the edge case of a DELIBERATE convention.** `SHADEEXCL=1` makes spans
+left-inclusive / **right-EXCLUSIVE** on purpose, so adjacent faces neither
+double-OR nor leave "a bright 1px line down the right edge of every face"
+(reported and fixed in 2026-07-30). But `xr` was clamped to `CLIPX1`, which
+`gpu_geotex_setclip(0, 319, ...)` sets **inclusive** — so the rightmost span
+ended at 318. The fix is one instruction: clamp to `CLIPX1+1` under the
+exclusive convention. ★ *An inclusive bound feeding an exclusive consumer loses
+exactly one unit — check the CONVENTION at the boundary, not the arithmetic.*
 
-Draw distance is not the cause. Do not re-try raising `HOPBOOT` for this. The
-8.2% in that scene is genuine empty geometry (the room ends), not a renderer cap
-— which is also why the earlier "EYE-CLEARED no black doorways" verdict at cap 1
-was not wrong.
-
-### ⬜ NEW BUG (small, real, systematic): COLUMN 319 IS NEVER DRAWN
-Fully-black columns, measured across three unrelated scenes:
-
-    normal gameplay (caves)  1 dead column   x 319
-    mansion                  1 dead column   x 319
-    fall spawn (room 22)     8 dead columns  x 312..319   (6 of those are geometry)
-
-`gpu_geotex_setclip(0, 319, 0, RENDER_H-1)` sets the right edge **inclusive**, so
-something downstream is treating it as exclusive — a classic off-by-one at
-`clipx1`. One pixel column down the right of every frame, every scene.
-**Next:** find the right-clip compare in `gpu_geotex.gas` (the left one is the
-`cmp r4,r29` noted at `ss_bw`, where r4 = CLIPX0) and check whether it is `<` vs
-`<=`. Low visual value on an overscanned TV, cheap to fix, and it would be
-embarrassing on a screenshot.
+⬜ **UNEXPLAINED RESIDUAL — do not treat this as fully closed.** Besides the 80
+pixels of column 319, **75 other pixels changed**:
+* 30 of them in **row 1, columns 8-29 and 104-117** — that is the debug
+  bit-block readout, so a counter it displays changed. Expected, benign.
+* ~45 in **rows 37-50 and 66-70, columns 134-184** — clustered around Lara,
+  nowhere near the right edge, and NOT explained by the clamp. Throughput is
+  identical so it is not frame-phase drift.
+**Before shipping RCLIPFIX, find out what those 45 are.** Likely the shade pass
+(which loads CLIPX1 separately at `gpu_geotex.gas` ~3527 via `r14+13`, and was
+NOT changed) now disagreeing with the texture pass about the right edge — i.e.
+the two passes may need the same +1. That is the first thing to check.
 
 ### What to do next
-1. **Task #8 / #10 offline** using the SPAWNAT + `jagemu video` method above.
-   For #10, `ledge_census.py --tsv` gives ready-made CLIMB2/CLIMB3/JUMPGRAB
-   coordinates (cols: CLASS ROOM RISE X Y Z YAW) — spawn on the low side and
-   drive UP+ACTION with `ctl input`.
-2. Fix the column-319 off-by-one.
-3. **RIG, batched** (still the only silicon-blocked item): `PHRASEDST=1`
-   yes/no, title-music fix, enemy skins, the mansion, PHRASECLEAR.
+1. **Explain the 45 pixels** (above). If it is the shade/texture pass mismatch,
+   apply the same `+1` at the shade clamp and re-diff — the residual should go
+   to zero apart from the debug row.
+2. Task #8 / #10 offline with the SPAWNAT + `jagemu video` method (run 18).
+   `ledge_census.py --tsv` gives CLASS ROOM RISE X Y Z YAW directly.
+3. **RIG, batched** — `PHRASEDST=1` yes/no, title-music fix, enemy skins, the
+   mansion, PHRASECLEAR, and now RCLIPFIX.
 
-☠️ `SPAWNAT_*` arms render Lara DEFORMED — always have. Judge the WORLD from
-them, never the model.
+### Refuted / closed
+* Drop blackness is **NOT** the portal-hop cap (HOPBOOT 1 vs 4: 8.2% vs 8.3%).
+* Perf: only `PHRASEDST` is non-null; everything else measured 0 (see run 17).
 
 ---
 

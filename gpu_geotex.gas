@@ -2240,6 +2240,18 @@ rbg_no:
 	load	(r0),r4
 	movei	#CLIPX1,r0
 	load	(r0),r21
+	.if RCLIPFIX=1
+	; ☠️ RIGHT-EXCLUSIVE SPANS NEED AN EXCLUSIVE CLAMP.
+	; With SHADEEXCL=1 a span covers xl..xr-1 (see the fill-convention note at
+	; sp_fill: both blits exclusive so adjacent faces neither double-OR nor
+	; leave a bright 1px seam). But xr is clamped to CLIPX1, which is
+	; INCLUSIVE (gpu_geotex_setclip(0, 319, ...)), so the rightmost span stops
+	; at 318 and COLUMN 319 IS NEVER PAINTED - measured black in every scene:
+	; caves, mansion and a spawn arm all showed exactly one dead column at
+	; x=319. Clamping to CLIPX1+1 makes the exclusive end land on 320, so the
+	; last covered pixel is 319. Left edge is unaffected (inclusive already).
+	addq	#1,r21
+	.endif
 	.endif
 sp_run:
 	.if TRAPEZOID=1
