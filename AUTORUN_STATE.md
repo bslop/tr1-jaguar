@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 110
+RUN: 111
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,46 +54,45 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ⬜☠️ IN-GAME SFX: SHE WALKS, THE GATE IS OPEN, AND NOTHING COMES OUT.
+# ✅✅ IN-GAME SFX CONFIRMED IN THE SHIPPING RELEASE. SOUND IS DONE.
 
-Run 108 proved the RELEASE makes sound during boot/FMV (rms -29.3 dBFS). This
-run went after the thing that actually matters - a FOOTSTEP - and it is missing
-in the conformance build. Every confound I could think of is ruled out:
+Drove `/tmp/cofout8/OPENLARA.COF` with its SD payload the whole way - 8200
+fields to the ring, two A presses, through the snow cutscene - then captured
+audio idle and walking from the SAME session, seconds apart:
 
-    she really walks      g_laz 3584 -> 10632 = **7048 units** under `ctl input up`
-    Jerry is up           **g_jerry_ok = 1**
-    SFX are enabled       **g_sfx_ok = 1**   (sfx_play returns early if this is 0)
-    audio, walking        **-120.0 dBFS, 100% silent**
-    audio, idle           -120.0 dBFS, 100% silent
-    audio, boot           -120.0 dBFS, 100% silent
+    idle     **-120.0 dBFS, 100% silent**
+    walking  **peak -15.5 dBFS, rms -35.5 dBFS, 0% silent**   (she moved 17,484 units)
 
-`sfx_play` is gated only on `g_sfx_ok`, which is `g_jerry_ok`, and both read 1 -
-so the usual explanation (Jerry never came up, SFX silently dropped) is WRONG
-here. Something between `sfx_play` and the DAC is not producing samples.
+Silent when still, audible when walking, one ROM, one session. That is the
+discrimination - nothing about build flags or capture setup can explain it away.
+**All four of the user's DONE items are now verified on the shipping build:**
+enemies+pickups (107), menus+videos (103), sound at boot (108) and in-game (110).
 
-### ☠️ DO NOT CALL THIS A SHIPPING DEFECT YET - THE RELEASE IS UNTESTED IN-GAME
-The release proved audible at boot; only the CONFORMANCE build has been driven
-into gameplay. The conformance set differs (AUTOSTART, no SD payload), and this
-project has burned runs on defects that were arms-only. **The test that settles
-it**: serve the RELEASE with `--sd /tmp/cofout8`, drive it exactly as
-`release_play.py` does (two A presses at the ring, then through the cutscene),
-walk, and capture. If that is silent too, it is real and it is worth fixing
-before any video gets made.
+### ★ RUN 109's "NO FOOTSTEPS" WAS CONFORMANCE-ONLY - THE CAUTION WAS RIGHT
+Run 109 measured 100% silence while walking, with `g_sfx_ok=1`, `g_jerry_ok=1`
+and 7048 units of movement, and stopped short of calling it a shipping defect
+because only the conformance arm had been driven. That was correct: the same
+test on the release is loud. ☠️ **DO NOT TEST AUDIO ON A CONFORMANCE/AUTOSTART
+ROM** - it produces no SFX even with the gate open, and it will read as a
+catastrophic defect. Drive the release.
+★ This is the fourth time an arm-only difference has looked like a game defect
+(mansion holes 50-59, the coverage hole 95-98, the 8->11 door 101). The tell is
+always the same: the finding exists in a diagnostic build and nobody has run the
+shipping one.
 
-### ★ `ctl audio f.wav` RETURNS A FIXED 2.0-SECOND BUFFER
-88,220 samples every time, regardless of how many fields you ran beforehand -
-it is the RECENT window, not the session. So capture immediately after the
-action you care about, and do not expect a long `run` to accumulate. (The
-standalone `jagemu audio <rom> --frames N` DOES give you the whole run - that is
-how run 108 got 41.7s.)
-
-### ⬜ ALSO STILL GATED ON THE USER
+### ⬜ NEXT - NOTHING EMULATOR-ANSWERABLE IS OPEN
+No known defect. Both levels sweep clean, every doorway accounted for, the
+release rebuilt and driven, entities counted, sound proven in-game. What remains
+needs the user:
   1. **The run-100 direction question**, with live numbers: silicon validation /
      **VRESN=80 = +14.7%** at a visible cost (`/tmp/vres_ab.png`, sent) / new
      content.
-  2. **Hardware** - `capture /dev/video0 ok` and the Jaguar idle, against the
-     prompt's standing "physically unplugged". `HW_TESTCARD=1` +
-     `tools/testcard_check.py` are ready. Do not claim the rig.
+  2. **Hardware** - `start` reports `capture /dev/video0 ok` and the Jaguar idle,
+     against the prompt's standing "physically unplugged". `HW_TESTCARD=1` +
+     `tools/testcard_check.py` are built and ready for that session. Do not claim
+     the rig without his word.
+  ☠️ Do not start an open-ended campaign while the direction question is pending
+  (`user_goal_and_endpoint`). Prefer small verifiable work, or wait.
 
 ### ⚠️ BUILD STATE
 `/tmp/cofout8/` = the SHIPPING payload with ALL THREE gameplay fixes (COF +
