@@ -227,6 +227,26 @@ TRLEVEL="$PSX/GYM.PSX" python3 tools/mrt_boundary_audit.py --prefix gym --patch 
 python3 tools/floor_coverage.py --prefix gym --faces --patch 2>&1 | tail -1 \
     || echo "   note: floor_coverage gym patch failed"
 
+# ☠️☠️☠️ PORTAL OPENINGS - RUN LAST, AND NEVER SKIP IT.
+# Without this the CAVES ARE NOT WALKABLE PAST ROOM 0: 25 of 38 rooms had ZERO
+# 0x7FFE cells and Lara physically stopped at the room 0/1 seam (measured run 71:
+# she sat at z=21430 for 11 samples while g_floorroom already read 1; with the
+# patch she crosses at z=21712 and g_curroom flips 0 -> 1).
+# The extractor only opens a cell whose SECTOR carries an FD portal command and
+# never consults the room's PORTAL LIST, so an axis-aligned doorway - a plane
+# lying exactly on a cell boundary - stays solid on BOTH sides.
+# Runs LAST because it only ever turns 0x7FFF into 0x7FFE: it must see the walls
+# the boundary and coverage passes leave behind, and it can never overwrite a
+# floor either of them wrote. Idempotent (a second run opens 0 cells).
+# ★ project_room_crossing_fixed recorded this fixed on 2026-07-30 and it came
+# back, because *_sect.bin is GITIGNORED and regenerated - an asset fix that is
+# not in this script does not exist.
+say "Opening portal cells (room-to-room walking)"
+for _pfx in mrt gym; do
+    python3 tools/portal_open.py --prefix $_pfx --patch 2>&1 | tail -2 \
+        || echo "   note: portal_open $_pfx failed"
+done
+
 say "Atlas patches (doors, pickups, pistols, enemy skins)"
 for patch in MRT_DOORPATCH MRT_PICKPATCH MRT_GUNPATCH; do
     env $MRTENV $patch=1 TRLEVEL="$PSX/LEVEL1.PSX" TRPREFIX=mrt \

@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 72
+RUN: 73
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,91 +17,68 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ☠️☠️☠️ THE CAVES ARE NOT WALKABLE PAST ROOM 0. 25 OF 38 ROOMS ARE SEALED.
+# ✅✅✅ FIXED: THE CAVES ARE WALKABLE AGAIN. ROOM CROSSING WORKS.
 
-This is the most important open item in the project and it is in the SHIPPING
-level. Two independent measurements agree:
+Run 71 found the shipping level sealed - 25 of 38 Caves rooms with ZERO 0x7FFE
+openings, and Lara physically stuck at the room 0/1 seam. Fixed and verified:
 
-**Empirical.** Walking +Z from (74240,3072,18944) she advances z 19178 -> 21430
-and then STOPS for 11 straight samples. `g_floorroom` flips 0 -> 1 (the floor
-ahead really is room 1's); `g_curroom` never changes.
+    BEFORE  she walks to z=21430 and STOPS for 11 samples, g_curroom stays 0
+    AFTER   step 8 z=21430 curroom=0 -> step 9 z=21712 **curroom=1** -> 22276
+    mrt: 395 cells opened, rooms with zero openings 25 -> **0**
+    render unchanged: 1.1% black / maxluma 217, illegal=0, GPU running
 
-**In the data.** The 0->1 portal is a plane at z=21504, x 72704..76800
-(`mrt_portalv`). The two rooms tile perfectly across it and NEITHER side has a
-walkable cell at the seam:
+### ★ `tools/portal_open.py` - open the WALL cells a PORTAL passes through
+    tools/portal_open.py --prefix mrt [--patch]
+The extractor (`tr2jag_multiroom.py:3191`) only opens a cell whose SECTOR carries
+an FD portal command; it never consults the room's PORTAL LIST. ☠️ **A portal
+quad is a zero-thickness PLANE** - for a z-portal every corner shares one z - so
+"cells whose centre lies inside the quad" matches NOTHING. That is almost
+certainly why the 2026-07-30 fix missed these. This opens the cell row on EACH
+SIDE of the plane, within its span.
+★ Only 0x7FFF is ever touched, so floors are never overwritten and it is
+idempotent (verified: a second run opens 0 cells).
 
-    room 0 cell 18 (z 20480..21504)  WALL 2560 3072 3072 2816 WALL   <- she is here
-    room 0 cell 19 (z 21504..22528)  WALL WALL WALL WALL WALL WALL
-    room 1 cell 0  (z 20480..21504)  WALL WALL WALL WALL WALL WALL WALL
-    room 1 cell 1  (z 21504..22528)  WALL WALL 2560 3072 3072 3072 WALL
+### ☠️ WIRED INTO `build_cof.sh`, RUNNING LAST - this is the part that matters
+`*_sect.bin` is GITIGNORED and regenerated, so an asset fix that is not in the
+build script does not exist. **That is why this regressed after being fixed
+once.** It runs after the boundary and coverage passes because it must see the
+walls they leave and can never overwrite a floor they wrote.
 
-The move gate blocks on `room_wall_at(rsect[g_curroom])` - the room she is IN -
-so a WALL cell in room 0 stops her even though room 1 has floor beyond it. That
-rule is correct TR behaviour; what is missing is the OPENING.
-
-    mrt: 38 rooms, **25 with ZERO 0x7FFE openings**, including 0, 1, 2, 3
-         [0,1,2,3,5,6,7,8,9,11,12,14,15,17,23,24,25,28,29,30,31,32,35,36,37]
-
-### ☠️ WHY - and it is NOT the runtime
-`project_room_crossing_fixed` (2026-07-30) recorded this as FIXED, asset-only:
-mark wall cells under a portal's footprint as 0x7FFE, 71 cells opened, silicon
-reached 9 rooms. The extractor's actual rule is
-`tools/tr2jag_multiroom.py:3191`:
-
-    hport = (sector_portal(fidx) is not None) or (_ci in doorcells)
-    fy = (0x7FFE if (below != 255 or hport) else 0x7FFF) if floor == -127 else floor*256
-
-so a cell only opens if the SECTOR carries an FD portal command (`func==1`) or is
-in `doorcells`. At the 0/1 seam neither side qualifies, so both stay 0x7FFF.
-**The room's PORTAL LIST is not consulted at all** - and that list is exactly
-what the memory note says the fix was supposed to use.
-
-### ⬜ NEXT: OPEN THE CELLS FROM THE PORTAL GEOMETRY
-  1. For every room, for every portal quad (dst + 4 corner verts, already parsed
-     for render clipping), mark the WALL cells on BOTH sides of the portal plane
-     within its XZ span as 0x7FFE. ☠️ The plane is ZERO-THICKNESS and lies
-     exactly on a cell boundary, so "cells whose centre is inside the quad"
-     matches NOTHING - that is very likely why the original fix missed these.
-     Expand by half a cell on each side, or mark the cells the plane separates.
-  2. Re-measure: `25 rooms with zero openings` must drop, and room 0 must gain
-     cells at cell 19 x-lanes 1..4.
-  3. Re-verify empirically - the same walk must cross:
-     `probe_spot.py ... --at 74240,3072,18944,0,0 --keys up --frames 20`
-     and `g_curroom` must go 0 -> 1.
-  4. ☠️ `mrt_sect.bin` is GITIGNORED and regenerated - whatever fixes this must
-     live in the extractor or in a `--patch` that `build_cof.sh` runs, or it will
-     evaporate on the next asset regen. That is the most likely reason this
-     regressed after being fixed once.
-★ `room_floor_mr` already skips >=0x7FFE and takes the floor from the neighbour,
-and `room_wall_at` treats only 0x7FFF as solid, so **no runtime change should be
-needed** - exactly as the 2026-07-30 note says.
-
-### ✅ VERIFIED WORKING (so the fault is narrow)
-  * Room tracking: teleported to (74240,3072,28160) deep in room 1 - both
-    `g_curroom` and `g_floorroom` read 1, floor agrees, stable.
-  * The portal DATA is right: `mrt_portalv` has the 0->1 quad with sane
-    coordinates; adjacency lists 0<->1.
+### ⬜ NEXT
+  1. ☠️ **REBUILD THE RELEASE** - `/tmp/cofout6` predates this fix, so the ROM
+     the user would flash is still sealed at room 0.
+     `tools/build_cof.sh "<disc>" /tmp/cofout7`, then re-run the tour:
+     `release_play.py --tour` should now leave room 0 and show several rooms.
+     That tour is also the demo capture.
+  2. **The mansion is still 13 rooms sealed** (gym opened only 8 cells). Its
+     portal cells may already be floor - CHECK before assuming the same bug:
+     walk the gym the way run 71 walked the Caves and see whether she crosses.
+     Lara's Home is a bonus level, so this is second priority.
+  3. Bats unseen (airborne, need an air teleport or camera pitch). Cosmetic.
+  4. ☠️ Driven mechanics tests need the rig and a human at the TV. The GameDrive
+     read NOT ENUMERATED this run - the Jaguar is off. Do NOT claim the rig.
 
 ### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (50-59) · pickups (65) · mid-walk LOADING (67) ·
     caves black wedges (69, OPEN SKY - sightline prints the sky count first)
 
-### ★ INSTRUMENTS - see the list in git history if trimmed; the load-bearing ones:
-    probe_spot.py --raw= / --set=   per-spot telemetry; teleport anywhere
-    sightline.py                    geometry NEARBY + is the room open to sky
+### ★ INSTRUMENTS
+    portal_open.py --prefix P [--patch]   open portal cells (in build_cof.sh)
+    probe_spot.py --raw= / --set=         per-spot telemetry; teleport anywhere
+    sightline.py                          geometry NEARBY + open-to-sky count
     release_play.py --tour/--play/--gym   drive the RELEASE with telemetry
-    entity_check.py                 photograph any entity
-    room_cycles.py --prefix=gym     per-room kernel cycles
+    entity_check.py                       photograph any entity
+    room_cycles.py --prefix=gym           per-room kernel cycles
     HOLEVIS=1 / DREWVIS=1 / HOPDEPTH=N / CULLCOUNT=1 BEXCNT=1 WCCNT=1
 ☠️ Parse probe output BY COLUMN NAME - positional awk has misread it twice.
 ☠️ SYMBOLS ARE PER-BUILD.  ☠️ FPS cannot be measured offline.
 
 ### ✅ WHAT IS DONE
     climbing   CAVES 24/24 ledges, 6/6 walls · MANSION 24/24, 6/6
+    walking    CAVES room-to-room crossing WORKS (this run)
     enemies    BEAR and WOLVES render on shipping flags
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
-    release    /tmp/cofout6 - both levels into gameplay, symbols, tour capture
-               ☠️ but the player cannot walk out of room 0 (above)
+    release    /tmp/cofout6 - ☠️ STALE, predates the portal fix
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,
