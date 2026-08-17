@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 17
+RUN: 18
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,60 +17,49 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**★★★★★ `PHRASEDST=1` IS THE FIRST REAL WIN: +9.1% to +11.3% RENDERED FRAMES.**
-And it is ALSO the one result in this campaign the emulator **cannot** confirm.
+**The offline perf campaign is COMPLETE. One candidate, blocked on silicon.**
 
-    fields   baseline  PHRASECLEAR  NOSOUND  PHRASEDST
-      1500        232          232      232        253   (+9.1%)
-      2500        398          399      398        443   (+11.3%)
+    fields   baseline  PHRASECLEAR  NOSOUND  PHRASESHADE  PHRASEDST
+      1500        232          232      232          232        253  (+9.1%)
+      2500        398          399      398          398        443  (+11.3%)
 
-Measured with the run-15 method (per-arm `PADTEXT=0` build, that arm's own
-`g_synccalls` from `nm`, `--fidelity silicon`). Renders correctly: `illegal=0`,
-and at MATCHED game-frame counts (233 vs 232) only 29/25,600 pixels differ —
-a one-frame animation phase difference, not damage. The kernel's alignment
-worry (risk 1) is **cleared**: differing pixels are spread evenly across
-`x mod 8` (5,4,8,5,5,4,6,8), not clustered at phrase boundaries.
+`PHRASEDST=1` is the only non-null anywhere in this campaign. It is now
+de-risked as far as the emulator allows:
 
-### ☠️☠️ THE SILICON RISK, IN THE KERNEL'S OWN WORDS
-`gpu_geotex.gas` ~line 145 wrote this experiment down before I ran it, including
-the part that offline testing cannot settle:
+* renders clean in the **Caves** (`illegal=0`; 29/25,600 px differ at matched
+  game-frame counts = one animation frame, not damage)
+* renders clean in the **MANSION** — different geometry, different atlas,
+  `illegal=0`, image verified by eye
+* alignment risk **cleared**: differing pixels spread evenly across `x mod 8`
+  (5,4,8,5,5,4,6,8), not clustered at phrase boundaries
+* stable across two cobweb fidelity upgrades (`3ebf805`, `59e5896`) — both arms
+  re-measured identically after each
 
-> *"2. Whether the Blitter can assemble 8 GATHERED source pixels (XADDINC
-> sampler) into one dest phrase at all. **jagemu will happily apply its formula
-> either way** — in-kernel silicon testing is the only real probe."*
+☠️ **STILL NOT A LEVER.** The kernel's risk 2 stands: *"whether the Blitter can
+assemble 8 GATHERED source pixels into one dest phrase at all — jagemu will
+happily apply its formula either way."* **Only silicon decides.** Do not write
+it into the notes as a win, and do not ship it, until the rig answers.
 
-So the +11% may be an emulator artifact. jagemu prices a transfer as
-`(dst_accesses + src_accesses) x 5.6` and simply divides dst accesses by 8 in
-phrase mode; it does not model whether real Tom can gather a scattered source
-into one dest phrase. **This goes to the rig as a specific yes/no question, and
-must NOT be written up as a lever until silicon answers it.**
-
-### Why this one and not the others — the arithmetic that predicted it
-Also from the kernel: a 9-px textured span costs **16 launch + 101 transfer =
-~117 ticks**. Launch is 14%, which is independently why RUNBATCH/TRAPEZOID
-measured null ("it only removes launches"). Transfer is 86%, and phrase DEST is
-the only thing that touches transfer. That is the whole campaign in one line:
-every null hit launch or a non-critical master; this hits the 86%.
-
-Confirmed by Tom's own profile (`--pc-histogram --core gpu --gpu-map`):
-`ss_bw` (the Blitter-idle spin) is ~13.4% of Tom cycles, 4,350,445 polls for
-490,029 blits = **8.9 polls per span**, ~116 cycles waiting per span — matching
-the 117-tick figure exactly.
+★ `PHRASESHADE=1` measured **exactly null** (232/398). That matters: it is the
+*source-free* phrase blit (DSTEN read-modify-write, no gather, so risk 2 does
+not apply). The safe subset bought nothing; the risky one bought 11%. So there
+is no dodging risk 2 by restricting phrase mode to source-free blits.
 
 ### What to do next
-1. **Silicon test PHRASEDST** — batched with the rig queue. The question is
-   narrow: does the picture stay correct on real Tom, and does the frame rate
-   move? A wrong answer looks like corrupted spans, not a crash.
-2. If it holds, look at `PHRASESHADE` (same family, already a flag) and at
-   whether spans can be made 8-px aligned to remove risk 1 entirely.
-3. ✅ cobweb `3ebf805` taken, `COBWEB_REV` bumped. Its new
-   `risc_ram_narrow_writes` detector reads **0** for us — no illegal sub-32-bit
-   writes into GPU/DSP RAM.
+1. **RIG, batched** — this is now the top item and it is a narrow yes/no:
+   flash `PHRASEDST=1` vs baseline, ask the user whether the picture is correct
+   and whether it is visibly faster. Everything else offline is exhausted.
+   Also in the batch: title-music fix, enemy skins, the mansion, PHRASECLEAR.
+2. While waiting, the remaining emulator-answerable items are gameplay, not
+   perf: task #8 ivy-drop blackness, #10 second ledge grab.
+3. Published `jaguar-shared/techniques/blitter-span-cost.md` (31b3483) — the
+   cost model, the five nulls it predicts, and the method traps.
 
-### Do NOT re-test (all measured null)
-per-pixel cost (FLATFLOOR, silicon) · transfer ticks on the 68k side
-(PHRASECLEAR) · 68k work (GCCHOT) · audio (NOSOUND) · launch batching
-(RUNBATCH/TRAPEZOID, and now explained: launch is only 14% of a span).
+### Do NOT re-test (all measured null, with reasons)
+per-pixel cost (FLATFLOOR, silicon) · 68k-side transfer (PHRASECLEAR) · 68k work
+(GCCHOT) · audio (NOSOUND, superset ablation) · launch batching (RUNBATCH /
+TRAPEZOID — launch is only 14% of a span) · source-free phrase blits
+(PHRASESHADE).
 
 ---
 
