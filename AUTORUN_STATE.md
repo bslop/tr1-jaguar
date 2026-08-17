@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 108
+RUN: 109
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,52 +54,45 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ✅ ENEMIES AND PICKUPS STILL DRAW AFTER THE FLOOR-QUERY REWRITE - MEASURED.
+# ✅ SOUND VERIFIED IN THE CURRENT RELEASE - THE LAST UNCHECKED "DONE" ITEM.
 
-Runs 100-101 rewrote the core floor query and nothing had re-checked the
-entities since. New counter `g_entdrawn` (under DREWVIS) = how many entities
-went into the displist this frame:
+    jagemu audio /tmp/cofout8/OPENLARA.COF --sd /tmp/cofout8 --frames 2500 -o /tmp/rel.wav
+    jagemu audiocheck /tmp/rel.wav
 
-    medikit seat, room 25    **4** entities drawn
-    wolf seat,    room 22    **8** entities drawn   <- 6 BRIDGES + 2 WOLVES
+    41.7s @ 44097 Hz   peak **-14.4 dBFS**   rms **-29.3 dBFS**
+    25% silent, leading 1.44s, longest gap 2.69s, **0 clipped**, DC ~0.0004
 
-It discriminates (4 vs 8 by location, and 8 is exactly what room 22 contains),
-so it is measuring something real rather than reporting a constant. No
-regression. `ndrawn` was a local, so nothing could read it before.
+Healthy levels, nothing clipping. The gaps and the 25% are the boot sequence
+(logo -> FMV -> transitions), not dropouts.
 
-### ☠️☠️ TWO WAYS TO ANSWER THIS THAT DO NOT WORK - I TRIED BOTH FIRST
-1. **`entity_check` on a MOBILE entity proves nothing.** It stands Lara at the
-   entity's SPAWN point after a 1300-field boot, and a wolf HUNTS - by capture
-   time it is somewhere else. I stared at a 3x zoom of the wolf seat and could
-   not find a wolf; that is not evidence of absence. It is still valid for
-   STATIC entities (pickups), which cannot wander.
-2. **A build A/B with `SKIP="ENEMIES ENEMYTEX"` is camera-confounded.**
-   66% of pixels differed - the two builds pitch the CAMERA differently, which
-   is obvious the moment you look at them side by side and invisible in the
-   percentage. A cross-build pixel diff can only isolate a small feature if the
-   builds agree on everything else, and these do not.
-★ The dark smudge by Lara's hip that I nearly called a wolf appears in BOTH
-arms. It is scenery.
+### ★ THE NEGATIVE CONTROL CAME FREE, AND IT IS WHAT MAKES THIS EVIDENCE
+The same command on the CONFORMANCE ROM reads **-120.0 dBFS, 100% silent**. Two
+ROMs, one tool, -120 vs -29.3: the measurement discriminates rather than
+reporting whatever it finds. ☠️ And that silence is NOT a defect - the
+conformance ROM is idle with no SD payload, and most SFX are event-driven.
 
-### ☠️ INDEX PROBE COLUMNS BY NAME, NOT POSITION
-`probe_spot`'s column order changes with the flag set - adding DREWVIS shifts
-everything right. I read `$7` as `g_curroom` and got `g_gunst`, which printed
-"room=0" for a seat that was really room 25. The analysis now does
-`hdr.index("g_curroom")`. The `--raw=NAME=addr` columns are safe because they
-are named, which is why the entity number itself was never in doubt.
+### ☠️ `jagemu audio` TAKES `--sd`, THOUGH `--help` DOES NOT SAY SO
+Without it the release streams no `MUSIC.PCM` and reads silent for a reason that
+has nothing to do with the audio path. Written up for the other sessions in
+`jaguar-shared` `techniques/audio.md`, pushed.
 
-### ⬜ NEXT - STILL GATED ON THE USER, NOTHING EMULATOR-ANSWERABLE IS OPEN
-  1. **The run-100 direction question**, now with live numbers: silicon
-     validation / **VRESN=80 = +14.7%** at a visible cost (`/tmp/vres_ab.png`,
-     sent to him) / new content.
+### ⬜ NEXT: IN-GAME SFX (this run only covered the first 2500 fields)
+2500 fields is boot + FMV. Nothing here proves a FOOTSTEP. `jagemu serve` has a
+ctl `audio f.wav` command, so the way to get it is to drive gameplay exactly as
+`release_play.py` does and capture audio over the walking segment, then
+`audiocheck` that. Judge it from a DRIVEN capture - an idle one is silent by
+design and would read as a defect.
+
+### ⬜ ALSO STILL GATED ON THE USER
+  1. **The run-100 direction question**, with live numbers: silicon validation /
+     **VRESN=80 = +14.7%** at a visible cost (`/tmp/vres_ab.png`, sent) / new
+     content.
   2. **Hardware** - `start` reports `capture /dev/video0 ok` and the Jaguar idle,
      against the prompt's standing "physically unplugged". `HW_TESTCARD=1` +
-     `tools/testcard_check.py` are built and ready for that session. Do not
-     claim the rig.
-  3. Gameplay: both levels sweep clean, every doorway accounted for, the release
-     is rebuilt and driven, entities verified. There is no known defect open.
-  ☠️ Do not start an open-ended campaign while the direction question is
-  pending - see `user_goal_and_endpoint`.
+     `tools/testcard_check.py` are ready. Do not claim the rig.
+  3. All four of the user's DONE items are now re-verified on the CURRENT tree:
+     enemies+pickups (107), menus+videos via the driven release (103), sound
+     (108). No known defect is open.
 
 ### ⚠️ BUILD STATE
 `/tmp/cofout8/` = the SHIPPING payload with ALL THREE gameplay fixes (COF +
