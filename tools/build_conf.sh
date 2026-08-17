@@ -39,6 +39,7 @@
 # set mainly in VRESN=80; climb geometry does not depend on render height.
 #
 set -uo pipefail
+JE="${JE:-/home/jvilla/Documents/Git/jag_openlara/cobweb/sim/target/release/jagemu}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$HERE" || exit 1
 
@@ -81,6 +82,20 @@ build_one() {
     fi
     cp build/openlara.cof "/tmp/$name.cof"
     cp build/openlara.elf "/tmp/$name.elf"
+    # ☠️ BOOT IT AND ASSERT THE FRAME. A ROM that builds is not a ROM that renders:
+    # NOEMPTYY and NOSDCULL both built clean, reported illegal=0, and drew NOTHING.
+    # checkshot reads the pixels (size, distinct lumas, the RCLIPFIX right column,
+    # uncovered-screen, per-level black baseline) so that cannot pass silently.
+    # Non-fatal on purpose: a diagnostic build may legitimately not render, and
+    # refusing to produce the ROM would stop you investigating why.
+    if [ -z "${NOSHOT:-}" ]; then
+        "$JE" screenshot "/tmp/$name.cof" --frames 1500 -o "/tmp/$name.png" >/dev/null 2>&1
+        if python3 "$HERE/tools/checkshot.py" "/tmp/$name.png" --size 320x80 \
+                --baseline "$( [ "$name" = gym ] && echo gym || echo mrt )" 2>&1 \
+                | sed "s/^/    /"; then :; else
+            echo "    ☠️ the built ROM did not render a sane frame (see above)"
+        fi
+    fi
     echo "    /tmp/$name.cof  $(stat -c%s /tmp/$name.cof) B"
     # Verify the flag actually landed rather than trusting the command line.
     for k in ${SKIP:-}; do

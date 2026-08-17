@@ -50,6 +50,24 @@ def peek(name, signed=True):
     return None
 
 
+def shot(path):
+    """Capture a frame AND assert it. ☠️ A driven run prints statistics that a
+    human then eyeballs, which is how a phantom "LOADING screen" survived three
+    runs (run 67). checkshot reads the pixels; a bad frame says so on the spot.
+    The release renders 320x240 on the title/FMV and 320x120 in game, so the size
+    is not asserted here - the structural checks that matter (flat field, all
+    white, dark right column) do not depend on it."""
+    ctl("frame", path)
+    r = subprocess.run(["python3", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                "checkshot.py"), path],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        for ln in r.stdout.strip().split("\n"):
+            if "☠️" in ln or "FAIL" in ln:
+                print("   %s" % ln.strip(), flush=True)
+    return r.returncode == 0
+
+
 def tele():
     """One line of where-is-she, for correlating a capture with the game state."""
     return "x=%s z=%s y=%s floor=%s room=%s health=%s" % tuple(
@@ -64,7 +82,7 @@ time.sleep(10)
 try:
     print("booting to the ring...", flush=True)
     ctl("run", 8200, timeout=3600)
-    ctl("frame", os.path.join(OUT, "a_ring.png"))
+    shot(os.path.join(OUT, "a_ring.png"))
     def tour_loop(n=30):
         """Wall-follow: walk, and when she stops, turn the SAME way and retry.
         ☠️ Alternating the turn direction just reverses her (measured run 68:
@@ -91,7 +109,7 @@ try:
             r = peek("g_curroom")
             if r is not None:
                 rooms.add(r)
-            ctl("frame", os.path.join(OUT, "t_%02d.png" % i))
+            shot(os.path.join(OUT, "t_%02d.png" % i))
             print("  %2d moved %-6d total %-7d %s" % (i, moved, dist, tele()), flush=True)
         print("ROOMS VISITED: %s   distance %d" % (sorted(rooms), dist), flush=True)
 
@@ -107,13 +125,13 @@ try:
         # the page is READ, never assumed.
         for i in range(4):
             ctl("input", "right"); ctl("run", 30); ctl("release"); ctl("run", 200)
-            ctl("frame", os.path.join(OUT, "g_step%d.png" % i))
-        ctl("frame", os.path.join(OUT, "g_page4.png"))
+            shot(os.path.join(OUT, "g_step%d.png" % i))
+        shot(os.path.join(OUT, "g_page4.png"))
         print("rotated to ring page 4 (Lara's Home)", flush=True)
         ctl("input", "a"); ctl("run", 30); ctl("release")
         for i, n in enumerate((900, 1800, 1800, 1800)):
             ctl("run", n, timeout=1800)
-            ctl("frame", os.path.join(OUT, "g_%d.png" % i))
+            shot(os.path.join(OUT, "g_%d.png" % i))
             print("  captured g_%d after +%d fields  %s" % (i, n, tele()), flush=True)
         if "--tour" in sys.argv:
             print("touring Lara's Home", flush=True)
@@ -130,7 +148,7 @@ try:
         ctl("run", 30)
         ctl("release")
         ctl("run", 240)
-        ctl("frame", os.path.join(OUT, "press%d.png" % n))
+        shot(os.path.join(OUT, "press%d.png" % n))
     # ☠️ "Start Game" runs the SNOW CUTSCENE before the level. The first pass
     # captured only that and looked like the game had not started. Run long
     # enough to get through it.
@@ -163,7 +181,7 @@ try:
             else:
                 stuck = 0
             px, pz = nx, nz
-            ctl("frame", os.path.join(OUT, "t_%02d.png" % i))
+            shot(os.path.join(OUT, "t_%02d.png" % i))
             print("  %2d moved %-6d total %-7d %s" % (i, moved, dist, tele()), flush=True)
         raise SystemExit
 
@@ -173,19 +191,19 @@ try:
         # confirmed that ENEMIES and PICKUPS appear in the release the user
         # would flash. Walk her forward through the opening caves and film it.
         ctl("run", 6000, timeout=3600)          # through the cutscene into play
-        ctl("frame", os.path.join(OUT, "p_00.png"))
+        shot(os.path.join(OUT, "p_00.png"))
         for i in range(14):
             ctl("input", "up")
             ctl("run", 120, timeout=1800)
             ctl("release")
             ctl("run", 30)
-            ctl("frame", os.path.join(OUT, "p_%02d.png" % (i + 1)))
+            shot(os.path.join(OUT, "p_%02d.png" % (i + 1)))
             print("  walked %2d  %s" % (i + 1, tele()), flush=True)
         raise SystemExit
 
     for i, n in enumerate((2500, 2500, 2500, 2500)):
         ctl("run", n, timeout=1800)
-        ctl("frame", os.path.join(OUT, "b_%d.png" % i))
+        shot(os.path.join(OUT, "b_%d.png" % i))
         print("  captured b_%d after +%d fields" % (i, n), flush=True)
 finally:
     ctl("release")

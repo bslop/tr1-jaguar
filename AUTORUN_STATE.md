@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 89
+RUN: 90
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,70 +17,58 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ★ NEW RULE (user, 2026-08-17): **THE TURN ENDS WITH A REBOOT.**
-    "Each session now takes turns. Their turn is 5 minutes max before the Jaguar
-     is given up for the next session."  +  "Jaguar needs to be rebooted at end
-     of turn."
+# ✅ EVERY BUILD AND EVERY DRIVEN CAPTURE NOW ASSERTS ITS OWN FRAME.
 
-`jag_gd.sh endturn` implements it (reboot-to-stub under a lease); the loop scripts
-carry a note that a rig cycle's last act must be that call. Leases were capped at
-300 s in run 86. Documented in `hw/GD_ACCESS.md` and pushed.
+    build_conf.sh    boots the ROM it just built and runs checkshot on the frame
+    release_play.py  all 10 capture sites go through checkshot instead of just
+                     printing statistics for a human to eyeball
 
-☠️☠️ **THE CONSEQUENCE CHANGES HOW WE VERIFY.** A ROM you upload **STOPS** at the
-end of your turn. "Upload now, look later" no longer exists - and that is exactly
-what we have been doing: `/tmp/cofout7` has been sitting on the board since run 75
-waiting for a verdict. It must now be **upload -> observe -> reboot, inside one
-5-minute turn**, which cannot be done at all without the capture permission
-(`jag_gd.sh capture`, refused by this session's classifier in run 75) unless a
-human is at the TV during that same 5 minutes.
-★ Reboot-to-stub is a good end state for a second reason: it leaves the board on
-the GameDrive menu, which is jag_resident's known-good oracle for "is the video
-chain alive" - it needs none of our code.
+☠️ **FALSIFIED IN BOTH DIRECTIONS, which is the point of adding it at all:**
+    good ROM      conf.png 320x80, black 1.1%, 65 lumas   -> PASS
+    NOEMPTYY=1    frame comes back **720x1**              -> FAIL, loudly
+`NOEMPTYY` is a known render-nothing build that reports `illegal=0`; the old
+"print black% and maxluma for a human" check passed it twice (runs 53/54).
+★ The 720x1 is a better symptom than the flat field I expected: the VIDEO MODE
+itself is degenerate, not just the picture. Worth remembering as a signature.
+☠️ build_conf's check is deliberately NON-FATAL - a diagnostic build may
+legitimately not render, and refusing to emit the ROM would stop you
+investigating why. It prints and continues.
 
-# ✅✅ THE CAVES DOORS ARE FINISHED: 51 CROSSED, 3 EXPLAINED, ZERO DEFECTS.
-    11 -> 12  DOOR shut (its switch is in the same cell - correct)
-    25 -> 28  DOOR shut (correct)
-    25 -> 22  WALL (correct)
-Mansion: 9 crossed, 5 STEP UP. **Not one broken doorway on either level.**
-
-### ★★★ TWO HARNESS BUGS FOUND BY THE LAST DOORS - both classic
-  1. **SAMPLING CANNOT WIN A RACE WITH GEOMETRY.** `door_walk` sampled `g_curroom`
-     every 60 fields (~330 units). Room 18 is a THIN TRANSIT room, narrower than
-     that: at Caves 21->18 she is in room 18 at one sample and room 22 at the next,
-     so the door she crossed never appeared and the test called it a failure.
-     Sampling 3x finer recovered one door and still missed this one.
-     ⇒ Fixed by asking the GAME: `g_roomseen`, a bitmask the ROM ORs every frame
-     (MVDIAG). Zero it, walk, read it - no race at all. Same "ask the subject"
-     move that classified the vetoes.
-  2. **A BITMASK MUST BE SIZED TO THE SET.** The first `g_roomseen` was ONE 32-bit
-     word for a **38-room** level: room 34 aliased onto bit 2, 36 onto 4, 37 onto 5.
-     It printed `saw [2,4,5,36,37]` for a walk nowhere near rooms 2/4/5 - nonsense
-     that could as easily have been believed as doubted. Widened to two words;
-     37->34 immediately passed.
+### ⚠️ `/tmp/conf.cof` IS CURRENTLY A **NOEMPTYY (BROKEN)** BUILD
+Left over from the falsification above. Rebuild before using it:
+`tools/build_conf.sh caves` (add `EXTRA="MVDIAG=1"` if you want the gate/room
+diagnostics).
 
 ### ⬜ NEXT
-  1. **Capture the hardware boot if the user grants permission** - now it must be
-     upload+observe+reboot inside ONE 5-minute turn (see above).
-  2. Wire `checkshot.py` into `build_conf.sh` and `release_play.py`.
-  3. The 8 untestable seats (they resolve into an overlapping room); the ranking
-     prefers an exclusively-owned stand cell but needs a fallback.
-  4. Climb OUT of the pool; `HW_TESTCARD`.
+  1. **Capture the hardware boot if the user grants permission.** ☠️ Under the new
+     rules this is now upload -> observe -> `jag_gd.sh endturn`, ALL INSIDE ONE
+     5-MINUTE TURN: an uploaded ROM stops when the turn ends, so "upload now, look
+     later" no longer exists. Without the capture permission this needs a human at
+     the TV during that same five minutes.
+  2. The 8 untestable door seats - they resolve into an overlapping room; the
+     ranking prefers an exclusively-owned stand cell but has no fallback when none
+     is exclusive.
+  3. Climb OUT of the pool (swimming in works, run 78).
+  4. `HW_TESTCARD` - a 68k-only colour-bar ROM. ☠️ Note bubsy3d's version could not
+     discriminate a wedged console from a dead chain; jag_resident's GameDrive-menu
+     capture does, and needs none of our code. Build the test card for what it IS
+     good for: proving our own video setup, once the board is known alive.
 
-### ★ INSTRUMENT NOTES
-    MVDIAG=1 exposes g_mvveto/g_mvvetoz (which gate clause refused), the step
-    arithmetic (dx/spd/ticks/yaw) and **g_roomseen[2]** (rooms visited).
-    ☠️ `g_layaw` is `uint8_t` 0..255 - poke ONE byte (run 87).
-    ☠️ Anything read only by a debugger must be `volatile` or gcc deletes it.
-    ☠️ Symbol addresses are PER-BUILD.
-    ☠️ `checkshot.py`'s STRUCTURAL checks are the sound ones; its `--baseline`
-       black% is a colour/brightness threshold on an observed scene, which
-       jag_resident measured as unreliable - never let it be the only gate.
+### ★ THE METHOD THAT KEEPS PAYING
+    ASK THE SUBJECT, DO NOT MODEL IT - three Python reimplementations of the floor
+      search were each wrong differently; `MVDIAG` answered first try. `g_roomseen`
+      likewise beat sampling, which cannot win a race with a thin transit room.
+    A CHECK MUST BE ABLE TO COME OUT THE OTHER WAY - `checkshot --selftest` (5/5)
+      and the NOEMPTYY falsification above exist for this reason.
+    A NEW EXPLANATION THAT OVERTURNS A PROVEN ONE IS A RED FLAG - run 87's bogus
+      "FACING" verdict was caught only because it contradicted 11->12's shut door.
+    SIZE A BITMASK TO THE SET - 32 bits for 38 rooms aliased 34 onto bit 2.
 
 ### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (50-59) · pickups (65) · mid-walk LOADING (67) ·
     caves black wedges (69) · caves room crossing (72) · gym room 18 (73/78) ·
     7 "dead doors" (74) · caves 11->12 + switch/door (79-82) ·
-    all mansion door failures (85) · **all Caves door failures (86-88)**
+    all mansion door failures (85) · all Caves door failures (86-88)
 
 ### ✅ WHAT IS DONE
     climbing   CAVES 24/24 ledges, 6/6 walls · MANSION 24/24, 6/6
@@ -89,10 +77,9 @@ Mansion: 9 crossed, 5 STEP UP. **Not one broken doorway on either level.**
     switches   fire, animate, open the door, and she walks through
     enemies    BEAR and WOLVES render on shipping flags
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
-    frames     ASSERTED by tools/checkshot.py (selftest 5/5)
-    rig        leases capped at the 5-minute turn; `jag_gd.sh endturn` reboots
-    release    /tmp/cofout7 - built and verified in the EMULATOR; the hardware
-               verdict now needs a capture inside one turn
+    frames     asserted by checkshot at BUILD time and at every driven capture
+    rig        leases capped at 5 min; `jag_gd.sh endturn` reboots at turn end
+    release    /tmp/cofout7 - verified in the EMULATOR; hardware verdict pending
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,
