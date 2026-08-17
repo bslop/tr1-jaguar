@@ -140,11 +140,19 @@ def main():
               # the cell just past the plane, to reject a doorway that is a step up
               bx = sx if z0 == z1 else (x0 - sgn * 512)
               bz = (z0 - sgn * 512) if z0 == z1 else sz
-              beyond = cellval(r, bx, bz)
-              if beyond is not None and beyond < OPEN:
-                by = struct.unpack(">h", struct.pack(">H", beyond))[0]
-                if fy - by > 256:                      # LARA_STEPUP
-                  continue
+              # ☠️ READ THE **DESTINATION** ROOM'S FLOOR PAST THE PLANE, NOT THE
+              # SOURCE'S. Past the seam the source room reads OPEN (0x7FFE) - that
+              # is what portal_open just made it - so a source-side lookup is
+              # never a floor and the step-up test silently never ran. Measured:
+              # Caves 17->14 has room 17 on 7168 and room 14 on 6656, a 512 step
+              # UP (two clicks) that the move gate refuses because it needs a
+              # VAULT, not a walk - and it was being scored as a dead door.
+              beyond = cellval(dst, bx, bz)
+              if beyond is None or beyond >= OPEN:
+                continue                               # nothing to arrive on
+              by = struct.unpack(">h", struct.pack(">H", beyond))[0]
+              if fy - by > 256:                        # LARA_STEPUP: a vault, not a walk
+                continue
               # ☠️ RANK, DO NOT FIRST-MATCH. Taking the first exclusively-owned
               # cell sent her to stand-offs far along the span and 1800 out; she
               # then walked 10,000+ units and ended up in a THIRD room, and the

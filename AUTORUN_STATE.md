@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 77
+RUN: 78
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,87 +17,83 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ☠️☠️ THE CAPTURE CARD IS BACK AND STILL CAPTURES BLACK. THE TV IS THE ONLY EYE.
+# ✅ THE CAVES ARE 50 OF 58 DOORS PROVEN WALKABLE. MANSION 9 OF 18.
 
-★★★★★ **READ `jaguar-shared/hw/RESOURCES.md` - it changed under us.** jag_bubsy3d
-recorded 2026-08-17: an **Elgato Cam Link 4K** now enumerates, `jaghw own claim`
-says `capture=present`, ffmpeg lists its formats - **and two ROMs uploaded `OK!`
-still captured pure black.** They then built `-DHW_TESTCARD`, a ROM where the
-68000 writes colour bars straight into the backbuffer with no GPU and no Blitter:
-**that ROM cannot be black if the video path works, and it captured black too.**
-So the fault is upstream of the card - Jaguar -> upscaler -> Cam Link cabling, or
-the wrong Cam Link input.
-⇒ **A capture CANNOT verify a hardware boot right now.** Do not spend a run
-reading black frames as renderer bugs; that trap already cost this project nine
-phantom "black boots". Ask what the TV shows.
-⬜ **openlara should keep its own test-card ROM** for this fork - bubsy3d's advice
-and it is right. `HW_TESTCARD` does not exist in this tree.
+    CAVES    58 of 62 wall-portals testable   **50 crossed**, 4 unproven, 4 untestable
+    MANSION  18 of 32 wall-portals testable    **9 crossed**, 5 unproven, 4 untestable
+(the untestable rest are doorways at another HEIGHT - balconies and ledges - plus
+seats that resolve into an overlapping room)
 
-### ⏳ STILL AWAITING: WHAT DOES THE TV SHOW?
-`/tmp/cofout7/OPENLARA.COF` was uploaded to the real Jaguar in run 75 (`OK!`,
-lease clean). It is the first hardware boot carrying the portal fix, the TR1
-jump-reach solve, the ledge-probe window fix, `climb_fits` and `FITSTEP`.
-    title ring  -> the front-end works on silicon; press A twice and walk
-    black       -> A10 boot lottery; `tools/roll_walk.sh <arm> 0 136 272 408 544 816`
-                   (☠️ a power cycle fixes a LAYOUT miss, never a broken build)
-    error screen-> a real fault; roll_walk scores a solid error screen as "LIT"
+The demo level is healthy: 50 doorways walked through and verified by
+`g_curroom` changing to the expected room. Before run 72 the Caves had **zero**
+walkable doorways.
 
-### ★ ROSTER: jag_bubsy3d IS SCRAPPED (user, run 76)
-Recorded in `jaguar-shared/hw/RESOURCES.md` and pushed. Roster is FOUR:
-openlara, quake, rr, resident. **The first slot is vacant and openlara is no
-longer batched behind bubsy3d** - the rig is free to claim. Its capture findings
-were deliberately kept in that file.
+### ☠️ THE FIX THAT BOUGHT 5 MORE CAVES DOORS - read the DESTINATION room
+`door_walk.py`'s step-up filter read the SOURCE room's cell past the seam. Past
+the seam the source room reads **OPEN (0x7FFE)** - that is exactly what
+`portal_open` makes it - so the lookup was never a floor and the filter silently
+never ran. Measured: Caves **17->14** has room 17 on 7168 and room 14 on 6656, a
+**512 step UP** (two clicks) that the move gate refuses because it needs a VAULT,
+not a walk. It was being scored as a dead door. Reading `cellval(dst, ...)` took
+the Caves from 45 to **50 crossed**.
+★ Pattern for the fourth time in three runs: **the tool was wrong, not the game.**
 
-### ✅ MANSION DOORS: 10 OF 22 PROVEN TO CROSS - and that is a LOWER BOUND
-    22 of 32 wall-portals are walkable at floor level; 10 crossed, 5 unproven,
-    7 UNTESTABLE (seat resolves to an overlapping room)
-☠️ **"FAIL" here means UNPROVEN, not broken.** `door_walk.py` walks in a straight
-line from a stand-off, which only tests a door that is directly ahead and
-unobstructed. The 5:
-    2->5, 2->6   moved 164/188 - wedged ON the stand-off cell, never left room 2
-    2->7         moved 7157, still room 2 (room 2 is large) - never lined up
-    10->8, 11->8 moved ~6700 and saw room 12 - went somewhere else entirely
-### ☠️ THREE HARNESS ITERATIONS THIS RUN, ONE OF WHICH WAS MY OWN REGRESSION
-  1. Sweeping the span and taking the FIRST exclusively-owned cell sent her to
-     stand-offs 1800 out at the span edges; she walked 10,000+ units into a third
-     room and the score went **10/12 -> 7/14**. Fixed by RANKING candidates
-     (doorway centre first, exclusivity and distance as tie-breakers) - back to
-     10 crossed while testing 22 doors instead of 16.
-  2. Walking 12,700 units at a door 1,300 away carried her through and out the
-     far side, so an "ended in dst" test scored working doors dead. Now walks 5
-     steps and asserts on the set of rooms REACHED.
-  3. (run 74) A portal has a HEIGHT; ignoring it failed 7 balconies.
-★ The lesson each time: **the tool was wrong, not the game.** A new instrument
-that disagrees with something already seen working is measuring itself.
+### ⬜ THE 9 REMAINING UNPROVEN DOORS, with their signatures
+    CAVES   11->12  moved 1010 of a 1300 stand-off - stopped ~290 SHORT of a
+                    plane whose floors are the SAME level (both 7680). Worth one
+                    look: nothing obvious blocks it.
+            25->22  moved 141   - wedged ON the stand-off cell
+            25->28  moved 984
+            37->34  saw [36]    - went into 36 instead of 34
+    MANSION 2->5    moved 164   - wedged
+            2->6    moved 188   - wedged
+            2->7    moved 7040, never left room 2 (room 2 is large)
+            10->8   saw [12]    - stand point sits in an overlap
+            11->8   saw [12]    - same
+☠️ "FAIL" means UNPROVEN. A straight-line walk only tests a door directly ahead
+and unobstructed; three of these never left the stand-off cell, which is the
+harness picking a spot against geometry, not a broken doorway.
+⬜ Next attack, cheapest first: for a wedged case, step the stand-off in from
+768..2048 and along the span, and REJECT a candidate whose own cell has a wall
+neighbour on the approach axis. For 10->8 / 11->8, require the runtime to agree
+the seat is in the source room *before* accepting the candidate (the tool checks
+after seating and marks UNTESTABLE - it should retry another candidate instead).
 
-### ⬜ NEXT
-  1. **`door_walk.py --prefix mrt`** - the Caves' 62 wall-portals, never tested
-     door by door. The harness is now three fixes better; this is ready.
-  2. The 7 UNTESTABLE seats need a stand point from a cell the source room owns
-     exclusively *and* that the runtime agrees with - poke, settle, and CHECK
-     `g_curroom` before walking (the tool already does; it just has no fallback).
-  3. The pool: swim down through the room 14 water surface, expect room 18.
-  4. A test-card ROM (`HW_TESTCARD`) so a black TV can be split into
-     "renderer" vs "video chain" without borrowing another project's ROM.
+### ⏳ STILL AWAITING THE USER: WHAT DOES THE TV SHOW?
+`/tmp/cofout7/OPENLARA.COF` has been running on the real Jaguar since run 75
+(`OK!`). ☠️ **The capture card is present but captures BLACK even for a 68k-only
+test-card ROM** (jag_bubsy3d, in `jaguar-shared/hw/RESOURCES.md`), so the fault is
+upstream cabling and **no capture can verify this**. Only the TV can.
+    title ring -> front-end works on silicon; press A twice and walk
+    black      -> A10 lottery; `tools/roll_walk.sh <arm> 0 136 272 408 544 816`
+    error      -> a real fault (roll_walk scores an error screen as "LIT")
+
+### ★ ROSTER: jag_bubsy3d IS SCRAPPED (user, run 76) - recorded and pushed
+Roster is FOUR: openlara, quake, rr, resident. The first slot is vacant and
+openlara is no longer batched behind bubsy3d.
+
+### ⬜ ALSO OPEN
+  * The pool: swim down through the room 14 water surface, expect room 18.
+  * A test-card ROM (`HW_TESTCARD`) so a black TV splits "renderer" from "video
+    chain" without borrowing another project's ROM.
 
 ### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (50-59) · pickups (65) · mid-walk LOADING (67) ·
     caves black wedges (69, OPEN SKY) · caves room crossing (72, FIXED) ·
-    gym room 18 (73, it is the POOL) · 7 "dead doors" (74, they are balconies)
+    gym room 18 (73, the POOL) · 7 "dead doors" (74, balconies)
 
 ### ★ INSTRUMENTS
-    jag_gd.sh upload|status|power           the rig, via the shared jaghw lease
     door_walk.py <rom> <elf> --prefix P     walk every doorway, assert the flip
     portal_open.py --prefix P [--patch|--audit]
-    release_play.py --tour [--gym] · probe_spot.py --raw= / --set=
-    sightline.py · entity_check.py · room_cycles.py
-    HOLEVIS=1 / DREWVIS=1 / HOPDEPTH=N / CULLCOUNT=1 BEXCNT=1 WCCNT=1
+    jag_gd.sh upload|status|power · release_play.py --tour [--gym]
+    probe_spot.py --raw= / --set= · sightline.py · entity_check.py
+    room_cycles.py · HOLEVIS=1 / DREWVIS=1 / HOPDEPTH=N
 ☠️ SYMBOLS ARE PER-BUILD.  ☠️ REBUILD THE ROM AFTER AN ASSET PATCH.
-☠️ FPS cannot be measured offline, and on hardware it needs a working capture.
+☠️ FPS cannot be measured offline, and hardware capture is dead upstream.
 
 ### ✅ WHAT IS DONE
     climbing   CAVES 24/24 ledges, 6/6 walls · MANSION 24/24, 6/6
-    walking    CAVES crosses 0->1->2 · MANSION 10/22 doors PROVEN
+    walking    CAVES 50/58 doors PROVEN · MANSION 9/18 · crossing works on both
     enemies    BEAR and WOLVES render on shipping flags
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
     release    /tmp/cofout7 - on the real Jaguar since run 75, verdict pending
