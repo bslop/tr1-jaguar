@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 106
+RUN: 107
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,61 +54,53 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ✅✅ `HW_TESTCARD` IS BUILT AND ASSERTABLE - THE RIG QUESTION NOW HAS A TOOL.
+# ✅ THE FRAME-RATE TRADE, MEASURED TODAY, SO THE USER CAN JUST DECIDE.
 
-    EXTRA="HW_TESTCARD=1" tools/build_conf.sh caves
-    jagemu screenshot /tmp/conf.cof --frames 900 -o /tmp/testcard.png
-    python3 tools/testcard_check.py /tmp/testcard.png     -> PASS, illegal=0
+The run-100 checkpoint asked him to choose between silicon validation, frame
+rate and new content. Frame rate was the option with a stale number attached
+(+12%, recorded weeks ago). Re-measured on the CURRENT tree, same 7 Caves room
+centres, one boot per arm, only the render height differing:
 
-A static 320x240 five-band card painted at boot: 5-bit RED ramp, 5-bit BLUE
-ramp, **6-bit GREEN ramp**, 1-bit checker, pure R/G/B thirds. Measured through
-the real CLUT path: **R=32, B=32, G=64 distinct levels, checker=2, illegal 0.**
-A normal build is byte-unaffected (flag absent from the compile line, conf.png
-still 65 colours / 1.1% black).
+    room   120-line (shipping)   80-line (VRESN=80)   gain
+    r0     11.43                 14.29                +25.0%
+    r8     12.14                 14.29                +17.6%
+    r12     8.57                 10.00                +16.7%
+    r17    15.00                 15.00                 +0.0%
+    r22     7.14                  7.86                +10.0%
+    r30    10.00                 12.14                +21.4%
+    r34     8.57                 10.00                +16.7%
+    MEAN   10.41                 11.94               **+14.7%**
 
-WHY IT EXISTS: the rig has no channel to read a number off the board and a dead
-capture once faked NINE black boots, one of them a known-lit control. `OK!` +
-black means the VIDEO CHAIN, not the console. One upload now settles which,
-without anyone having to describe a TV.
+Both arms captured clean at their own size (320x120 and 320x80, illegal 0), and
+`/tmp/vres_ab.png` shows the same scene from both, each scaled to the 240-line
+window the OP actually fills - which is what the TV shows. **The 80-line image is
+visibly coarser vertically and completely legible.** That is the whole trade and
+it is a taste call, not a technical one; it has been sent to the user.
 
-### ★ THE GREEN RAMP IS THE SHARP CHECK, AND WHY THE RAMPS ARE ASYMMETRIC
-Jaguar RGB16 is `R<<11 | B<<6 | G` with **green SIX bits UNSHIFTED at 5-0**
-(cobweb `8d09c43` measured it with a framebuffer probe; run 105 confirmed it
-independently through the 8bpp CLUT). Feed all three channels 0..31 and green's
-sixth bit is never exercised - a `g << 1` packing then passes every check while
-halving green's resolution. Asserting **64** distinct greens is what separates
-them. `tools/testcard_check.py --selftest` proves all four checks can fail
-(good card, 5-bit green, R/B swapped, wrong size).
-☠️ Written up for the other five sessions in `jaguar-shared`
-`techniques/asset-formats-and-color.md`, pushed.
+### ☠️ HOW TO BUILD THE TWO ARMS - VRESN CANNOT DO 120
+`VRESN=120` is REJECTED by the Makefile: VSCALE=7680/N must be a whole number
+(OP VSCALE is 3.5 fixed point), so only **96 80 64 60** exist. The shipping
+120 comes from `LOWRES=1`, which is already in the conformance BASE. So:
 
-### ☠️ PAINT IT WHERE THE VIDEO PATH IS ALREADY PROVEN
-First attempt put the card straight after `video_init()` and the capture came
-back **720x12 with the illegal count climbing** - the OP list is not finished
-that early. Moving it onto the title screen's own paint (same backbuffer, same
-`video_set_clut`, same flip) gave 320x240 and illegal 0. ★ A plausible-looking
-frame of the WRONG SHAPE is worse than a blank one, which is why the size check
-runs first and returns immediately.
+    120-line (shipping height):  SKIP="VRESN" EXTRA="DREWVIS=1" tools/build_conf.sh caves
+    80-line:                     EXTRA="DREWVIS=1" tools/build_conf.sh caves
 
-### ★ NOTED, NOT FIXED: THE EXTRACTOR STILL WRITES 5-BIT GREEN
-`tr2jag_multiroom.py:1316` and `:4355` pack `((g5&31)<<1)`, and `main.c:1283`'s
-comment says `G<<1` while `main.c:3771`'s brighten correctly treats green as a
-full 6-bit field. They do not disagree (both land green in bits 0-5) - the
-extractor simply never sets bit 0, so every palette has 5-bit green and white is
-31,31,**62**. The PSX source is 5-5-5 so there is no sixth bit of real data;
-the honest fix is bit-replication `(g5<<1)|(g5>>4)` so 31 maps to 63. Worth
-about 1/64 of a green level - **not visible, do not spend a run on it** unless
-something else takes you into the palette path.
+★ The two ROMs came out the SAME SIZE (1,294,060 B both). Checksums differ and
+the script printed `VRESN: confirmed absent`, which is the only reason the A/B
+is trustworthy - equal file sizes are not evidence of anything either way.
+☠️ The 120-line arm "FAILS" build_conf.sh's checkshot: that check asserts a
+320x80 frame, and this arm is 320x120 by design. The size check doing its job.
 
-### ⬜ NEXT - STILL GATED ON THE USER
-  1. **Hardware.** `session_run.sh start` now reports `capture /dev/video0 ok`
-     and `holder -- idle, Jaguar is free --`, contradicting the standing
-     "physically unplugged" premise in the autorun prompt. The testcard is ready
-     for exactly this. Do not claim the rig without his word.
-  2. **The run-100 checkpoint question is still open** - silicon validation vs
-     frame rate (VRESN=80, +12%, unshipped) vs new content.
-  3. Emulator-answerable gameplay work is DONE: both levels sweep clean and the
-     release is rebuilt and driven.
+### ⬜ NEXT - EVERYTHING LEFT NEEDS THE USER
+  1. **The run-100 direction question, now with a current number.** Silicon
+     validation / +14.7% at a visible cost / new content.
+  2. **Hardware** - `start` reports `capture /dev/video0 ok` and the Jaguar idle,
+     against the prompt's standing "physically unplugged". `HW_TESTCARD=1` +
+     `tools/testcard_check.py` are ready for that session. Do not claim the rig.
+  3. Emulator-answerable gameplay work is DONE - both levels sweep clean, the
+     release is rebuilt and driven, every doorway accounted for.
+  ☠️ Do not start an open-ended campaign while these are pending; prefer small
+  verifiable work (see `user_goal_and_endpoint`).
 
 ### ⚠️ BUILD STATE
 `/tmp/cofout8/` = the SHIPPING payload with ALL THREE gameplay fixes (COF +
