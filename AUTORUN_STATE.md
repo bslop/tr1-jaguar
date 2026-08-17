@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 78
+RUN: 79
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,104 +17,81 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ THE CAVES ARE 50 OF 58 DOORS PROVEN WALKABLE. MANSION 9 OF 18.
+# ✅ THE POOL WORKS. SWIM ENTRY, ROOM 18, WATER SURFACE, AND IT RENDERS.
 
-    CAVES    58 of 62 wall-portals testable   **50 crossed**, 4 unproven, 4 untestable
-    MANSION  18 of 32 wall-portals testable    **9 crossed**, 5 unproven, 4 untestable
-(the untestable rest are doorways at another HEIGHT - balconies and ledges - plus
-seats that resolve into an overlapping room)
+Run 73 worked out that gym room 18 is the POOL - a water volume under a surface,
+reached through a VERTICAL portal, not a doorway. Verified this run by walking her
+off room 14's edge into it:
 
-The demo level is healthy: 50 doorways walked through and verified by
-`g_curroom` changing to the expected room. Before run 72 the Caves had **zero**
-walkable doorways.
+    tools/probe_spot.py /tmp/gym.cof /tmp/gym.elf --at 39424,3328,57856,14,0 \
+        --keys up --frames 10 --raw=swim=<g_swim> --raw=watery=<g_watery>
 
-### ☠️ THE FIX THAT BOUGHT 5 MORE CAVES DOORS - read the DESTINATION room
-`door_walk.py`'s step-up filter read the SOURCE room's cell past the seam. Past
-the seam the source room reads **OPEN (0x7FFE)** - that is exactly what
-`portal_open` makes it - so the lookup was never a floor and the filter silently
-never ran. Measured: Caves **17->14** has room 17 on 7168 and room 14 on 6656, a
-**512 step UP** (two clicks) that the move gate refuses because it needs a VAULT,
-not a walk. It was being scored as a dead door. Reading `cellval(dst, ...)` took
-the Caves from 45 to **50 crossed**.
-★ Pattern for the fourth time in three runs: **the tool was wrong, not the game.**
+    g_swim = 1, g_curroom = **18**, g_watery = 3232, y settles at 3168..3232
+    (the surface), and she swims forward: z 57940 -> 58584
 
-### ⬜ THE 9 REMAINING UNPROVEN DOORS, with their signatures
-    CAVES   11->12  moved 1010 of a 1300 stand-off - stopped ~290 SHORT of a
-                    plane whose floors are the SAME level (both 7680). Worth one
-                    look: nothing obvious blocks it.
-            25->22  moved 141   - wedged ON the stand-off cell
-            25->28  moved 984
-            37->34  saw [36]    - went into 36 instead of 34
-    MANSION 2->5    moved 164   - wedged
-            2->6    moved 188   - wedged
-            2->7    moved 7040, never left room 2 (room 2 is large)
-            10->8   saw [12]    - stand point sits in an overlap
-            11->8   saw [12]    - same
-☠️ "FAIL" means UNPROVEN. A straight-line walk only tests a door directly ahead
-and unobstructed; three of these never left the stand-off cell, which is the
-harness picking a spot against geometry, not a broken doorway.
-⬜ Next attack, cheapest first: for a wedged case, step the stand-off in from
-768..2048 and along the span, and REJECT a candidate whose own cell has a wall
-neighbour on the approach axis. For 10->8 / 11->8, require the runtime to agree
-the seat is in the source room *before* accepting the candidate (the tool checks
-after seating and marks UNTESTABLE - it should retry another candidate instead).
+And it LOOKS right: `/tmp/pool_verified.png` - her head at the waterline, tiled
+pool walls, the frieze and the skylight above. 4.2% black, maxluma 217.
+★ So the vertical portal works for water entry even though `portal_open` never
+touches it - water needs no horizontal opening, which is exactly why the
+"rooms with zero openings" metric cried wolf about room 18 in run 73.
+
+### ⬜ NEXT
+  1. **The 9 unproven doors** (CAVES 11->12, 25->22, 25->28, 37->34; MANSION 2->5,
+     2->6, 2->7, 10->8, 11->8). Signatures and the planned attack are below - all
+     nine look like the harness picking a stand-off against geometry, but
+     **CAVES 11->12 is the one worth a real look**: she stops 290 units short of a
+     seam whose floors are the SAME level (both 7680), which nothing explains yet.
+  2. **A test-card ROM (`HW_TESTCARD`)** - 68000 writes colour bars straight into
+     the backbuffer, no GPU, no Blitter. It cannot be black if the video path
+     works, so it splits "our renderer" from "the video chain" in one boot.
+     bubsy3d's idea; every project should carry one. We do not have it.
+  3. Climb out of the pool (she is IN it; does UP against the edge get her out?).
 
 ### ⏳ STILL AWAITING THE USER: WHAT DOES THE TV SHOW?
-`/tmp/cofout7/OPENLARA.COF` has been running on the real Jaguar since run 75
-(`OK!`). ☠️ **The capture card is present but captures BLACK even for a 68k-only
-test-card ROM** (jag_bubsy3d, in `jaguar-shared/hw/RESOURCES.md`), so the fault is
-upstream cabling and **no capture can verify this**. Only the TV can.
+`/tmp/cofout7/OPENLARA.COF` has run on the real Jaguar since run 75 (`OK!`).
+☠️ **No capture can answer this** - the Cam Link is present but captures BLACK even
+for a 68k-only test card (bubsy3d, `jaguar-shared/hw/RESOURCES.md`), so the fault
+is upstream cabling. Only the TV.
     title ring -> front-end works on silicon; press A twice and walk
     black      -> A10 lottery; `tools/roll_walk.sh <arm> 0 136 272 408 544 816`
     error      -> a real fault (roll_walk scores an error screen as "LIT")
 
-### ★ ROSTER IS FIVE AGAIN (2026-08-17): jag_viewpoint IN, jag_bubsy3d OUT
-    jag_quake · jag_openlara · jag_resident · jag_viewpoint · jag_rr
-`jag_viewpoint` (Viewpoint, Neo Geo NGH-051 -> Jaguar) was admitted by the user
-and filled the vacancy bubsy3d left; it takes NO rig time yet (no ROM that
-reaches a picture), following jag_rr's precedent. Pulled as jaguar-shared 814ccd3.
+### ★ ROSTER IS FIVE (2026-08-17): quake · openlara · resident · viewpoint · rr
+`jag_viewpoint` admitted, `jag_bubsy3d` removed. ☠️ **A roster change recorded
+only in PROSE is a roster change that did not happen** - I updated RESOURCES.md
+and left PROTOCOL.md's TABLE stale; viewpoint caught it. The table is what a new
+session reads before touching the rig. Also: removing a project does NOT release
+its lease, and **`jaghw` is re-entrant via `JAGHW_HELD`**, which is what lets a
+loop wrap cycle+settle+upload+capture in ONE acquisition while still calling
+`jag_gd.sh` inside it.
+⚠️ `sonic2-jaguar-port-cleanup` is running and is NOT on the roster - surfaced to
+the user; do not edit the roster on its behalf.
 
-☠️☠️ **A ROSTER CHANGE RECORDED ONLY IN PROSE IS A ROSTER CHANGE THAT DID NOT
-HAPPEN.** I wrote bubsy3d's removal into `hw/RESOURCES.md` prose (run 76) and left
-`hw/PROTOCOL.md`'s TABLE stale, so the two docs disagreed. `jag_viewpoint` caught
-it and fixed the table: **the table is what a new session reads to decide whether
-it may touch the rig.** Update both, or neither counts.
-★ Also from them: removing a project from the roster does NOT release its lease -
-a dead jag_bubsy3d token was still sitting in `~/.jaguar-hw/OWNER`.
-★ **`jaghw` is re-entrant via `JAGHW_HELD`** (hw/jaghw:117 tests it, :171 exports
-it). That is what lets a loop script wrap cycle+settle+upload+capture in ONE outer
-acquisition and still call `jag_gd.sh` inside it - the inner leases nest instead
-of deadlocking. Both `tools/vroll_game.sh` and `tools/climb_matrix.sh` rely on it;
-without it they would have to inline raw `jaggd`, which is how they originally got
-split into the racy multi-lease shape bubsy3d found on 2026-08-16.
-★ For the record, checked this run: **`jag_gd.sh` never self-power-cycles.** On
-LIBUSB_ERROR_TIMEOUT it dies and asks for a human cycle; `upload` already rides a
-single lease (reboot-to-stub + `-ux` together).
-⚠️ A session **`sonic2-jaguar-port-cleanup`** appeared and is NOT on the roster.
-Surfaced to the user; do not edit the roster on its behalf.
-
-### ⬜ ALSO OPEN
-  * The pool: swim down through the room 14 water surface, expect room 18.
-  * A test-card ROM (`HW_TESTCARD`) so a black TV splits "renderer" from "video
-    chain" without borrowing another project's ROM.
+### ✅ DOORS, both levels (run 77)
+    CAVES    58 of 62 testable, **50 crossed**, 4 unproven, 4 untestable
+    MANSION  18 of 32 testable, **9 crossed**, 5 unproven, 4 untestable
+☠️ "FAIL" means UNPROVEN: a straight-line walk only tests a door directly ahead.
+☠️ The step-up filter must read the **DESTINATION** room past the seam - the
+source reads OPEN there (portal_open wrote it), so a source-side lookup silently
+never fires. Fixing that took the Caves 45 -> 50.
 
 ### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (50-59) · pickups (65) · mid-walk LOADING (67) ·
     caves black wedges (69, OPEN SKY) · caves room crossing (72, FIXED) ·
-    gym room 18 (73, the POOL) · 7 "dead doors" (74, balconies)
+    gym room 18 (73/78 - the POOL, and it WORKS) · 7 "dead doors" (74, balconies)
 
 ### ★ INSTRUMENTS
-    door_walk.py <rom> <elf> --prefix P     walk every doorway, assert the flip
-    portal_open.py --prefix P [--patch|--audit]
-    jag_gd.sh upload|status|power · release_play.py --tour [--gym]
+    door_walk.py · portal_open.py [--patch|--audit] · release_play.py --tour
     probe_spot.py --raw= / --set= · sightline.py · entity_check.py
-    room_cycles.py · HOLEVIS=1 / DREWVIS=1 / HOPDEPTH=N
+    jag_gd.sh upload|status|power · room_cycles.py
+    HOLEVIS=1 / DREWVIS=1 / HOPDEPTH=N / CULLCOUNT=1 BEXCNT=1 WCCNT=1
 ☠️ SYMBOLS ARE PER-BUILD.  ☠️ REBUILD THE ROM AFTER AN ASSET PATCH.
-☠️ FPS cannot be measured offline, and hardware capture is dead upstream.
+☠️ FPS cannot be measured offline; hardware capture is dead upstream.
 
 ### ✅ WHAT IS DONE
     climbing   CAVES 24/24 ledges, 6/6 walls · MANSION 24/24, 6/6
-    walking    CAVES 50/58 doors PROVEN · MANSION 9/18 · crossing works on both
+    walking    CAVES 50/58 doors · MANSION 9/18 · crossing works on both
+    swimming   the mansion POOL: enter, swim, room 18, renders correctly
     enemies    BEAR and WOLVES render on shipping flags
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
     release    /tmp/cofout7 - on the real Jaguar since run 75, verdict pending
