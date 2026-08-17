@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 64
+RUN: 65
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,58 +17,68 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ ENEMIES CONFIRMED ON SCREEN IN A SHIPPING-FLAG ROM
+# ✅ ENEMIES RENDER. ⬜ PICKUPS STILL NOT CONFIRMED - and that is a real gap.
 
-The conformance sweeps only ever proved CLIMBING. Nothing had confirmed that
-**enemies and pickups actually appear** - one of the four things the user's DONE
-list names (enemies+pickups, Jaguar menus, videos+loading, sound).
+`tools/entity_check.py` (new) stands Lara next to any entity in
+`<prefix>_spawn.h` and photographs it. **It boots ONCE for a whole list** - one
+probe per entity meant a fresh 4-minute boot each time, which is why this audit
+kept being deferred.
 
-Teleported next to the Caves room-28 BEAR (`mrt_spawn.h` entity 30, at
-14848,6656,58880) in a ROM built with the shipping flag set:
-**the bear renders, textured and on the floor, beside Lara** - two spots, two
-captures. `/tmp/enemy_bear_ingame.png`.
+    tools/entity_check.py /tmp/conf.cof /tmp/conf.elf --ents 29,26,27,30 --out DIR
+    tools/entity_check.py --list          # the whole table with coordinates
 
-    tools/probe_spot.py /tmp/conf.cof /tmp/conf.elf \
-        --at 18432,6656,60928,28,-16384 --keys b --frames 3 --shots DIR
+    ✅ ENEMY_BEAR  (ent 30, room 28)  renders, textured, on the floor
+    ✅ ENEMY_WOLF  (ents 26/27)       TWO wolves visible together
+    ⬜ ENEMY_BAT   (ents 1, 11, 31)   not seen - they are AIRBORNE (y -2432),
+                                      there is no floor at their level so Lara
+                                      stands 1664-2048 below and they are out of
+                                      frame. Needs a camera-pitch or an air
+                                      teleport, not a floor stand-off.
+    ⬜ MEDIKIT_SMALL (ent 29)         NOT CONFIRMED - see below
+Sheet: `/tmp/entity_audit_sheet.png`.
 
-★ `mrt_spawn.h` is the entity index (60 entries, TR1 order preserved) with world
-x/y/z per entity, so ANY entity can be inspected this way: wolves 26/27 in room
-22, bats 1-3 in room 3, MEDIKIT_SMALL 29 in room 28.
-☠️ PICKUPS ARE NOT CONFIRMED. A small yellow object appears at the frame edge in
-one capture and I am NOT calling that a medikit - isolate one properly by
-standing next to entity 29 and comparing against `MRT_ENT_MEDIKIT_SMALL`.
+### ⬜ THE PICKUP QUESTION - do NOT record this as a regression yet
+Standing Lara ON the medikit's exact coordinates (16896,6656,60928) and walking,
+**`g_pickups` stayed 0** for the whole drive. Small yellow objects ARE visible on
+the floor near it in the capture, but I will not call those medikits from pixels.
+☠️ This is most likely the TEST, not the game: `project_pickup_sprites` records
+medikits shipping as real TR1 sprites 7/8, and collection may need ACTION, a
+radius overlap a teleport does not satisfy, or an activation flag. **Read how
+collection is triggered in main.c before concluding anything** - grep
+`g_pickups` and find what increments it. If it turns out collection genuinely
+does not fire, THAT is a headline defect (pickups are on the user's DONE list).
 
-### ⬜ ALSO FOUND: the release drive wedges, and there is an unexplained LOADING
-`tools/release_play.py --play` walks the RELEASE ROM forward from the level
-start. She IS controllable (the first frames show her moving through the opening
-cave), but:
-  * she stops moving after ~4 samples - walked into something; the drive needs
-    turns, not just UP, to explore;
-  * **a "LOADING..." screen with a progress bar appears mid-walk** and she comes
-    back in a visibly different area. Unexplained. It may be normal (a level
-    hand-off) or it may be a reload after a death/fall. ⬜ Worth one run: drive
-    again with turns and watch whether LOADING recurs at the same place.
+### ★ WHAT entity_check.py LEARNED THE HARD WAY
+  * **The entity's own Y is not a place to stand.** A bat sits 2432 up; placing
+    Lara there drops her out of the test. The floor is read from the sector data
+    at the stand-off cell.
+  * **Do not assume one approach direction.** A fixed 1536 in +X put her inside
+    a wall for one entity and over a drop for another (a bat capture caught her
+    mid-fall, arms out). It now searches four axes x four distances and takes the
+    stand-off whose floor is CLOSEST TO THE ENTITY'S Y, with yaw following.
+  * A pickup is a sprite a few pixels wide: `--standoff 640` for pickups, the
+    default for enemies. "I cannot see it" is not "it is not drawn".
+
+### ⬜ ALSO OPEN from run 63
+`release_play.py --play` walks the RELEASE forward: Lara is controllable, but she
+wedges after ~4 samples (the drive needs turns, not just UP) and a **"LOADING..."
+screen appears mid-walk** with her returning in a different area. Unexplained.
 
 ### ⬜ NEXT
-  1. **Finish the feature audit the same way** - it is cheap and it is the
-     user's own DONE list. Pickups (entity 29), wolves (26/27), bats (1-3).
-     One probe each, look at the frame.
-  2. **The release is CURRENT and verified into gameplay on both levels**
-     (`/tmp/cofout5`). The run-25/50 direction questions are still unanswered.
-  3. Driven mechanics tests need the rig and a human at the TV. ☠️ Do NOT claim
+  1. **Finish the pickup question** (above) - it is the one item on the user's
+     DONE list without evidence.
+  2. Bats need a different approach than a floor stand-off.
+  3. The release is CURRENT and verified into gameplay on both levels
+     (`/tmp/cofout5`). Run-25/50 direction questions still unanswered.
+  4. ☠️ Driven mechanics tests need the rig and a human at the TV. Do NOT claim
      the rig - the capture card is unplugged.
-
-### ☠️ NOTE: g_curroom disagreed with the entity's room again
-Entity 30 is listed in room 28; standing at its coordinates the game reports
-`g_curroom=25`. Same overlapping-rooms behaviour seen at the gym room 8/12/13
-spots - the floor search and the entity table disagree about which room owns a
-point. It did not stop the bear rendering, so it is noted, not chased.
 
 ### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (runs 50-59): room 15 = MISSING GEOMETRY (real, reachable),
     room 0 = LARGELY OPEN SKY. `HOPDEPTH`/`ALLVIS` stay OFF.
 
 ### ★ INSTRUMENTS (all off in shipping builds)
+    entity_check.py                 stand next to any entity and photograph it
     release_play.py [--gym|--play]  drive the RELEASE into either level / walk it
     probe_spot.py --raw= / --set=   per-spot telemetry; teleport anywhere
     sightline.py                    what geometry is NEARBY - not what is VISIBLE
@@ -77,7 +87,7 @@ point. It did not stop the bear rendering, so it is noted, not chased.
                                     $1C0000 staged  $1C0004 rastered
                                     $1C0010 bexit   $1C0014 worldcull
     build_conf.sh EXTRA= / SKIP=
-☠️ Counters ACCUMULATE - take DELTAS.
+☠️ Counters ACCUMULATE - take DELTAS.  ☠️ `g_itemcollected` is NOT a symbol.
 ☠️ NOEMPTYY=1 and NOSDCULL=1 BUILD AND DO NOT RENDER (illegal=0 either way).
 ☠️ FPS CANNOT be measured offline (capture card unplugged; 68k counters run at
    the 30 Hz LOGIC tick).
@@ -85,7 +95,7 @@ point. It did not stop the bear rendering, so it is noted, not chased.
 ### ✅ WHAT IS DONE
     climbing   CAVES   LEDGES 24/24  WALLS 6/6 refused  0 black outliers
                MANSION LEDGES 24/24  WALLS 6/6 refused
-    enemies    BEAR renders in-game on shipping flags
+    enemies    BEAR and WOLVES render in-game on shipping flags
     release    CURRENT, both levels verified into gameplay -> /tmp/cofout5
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
