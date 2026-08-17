@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 84
+RUN: 85
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,81 +17,80 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ `tools/checkshot.py` - THE FRAME IS NOW ASSERTED, NOT EYEBALLED.
+# ★★★ CAPTURE WORKS. THE HARDWARE VERDICT IS NO LONGER BLOCKED ON THE TV.
+# (but the capture COMMAND is blocked by this session's permissions - see below)
 
-Reading frames by eye has produced FOUR phantom defects here, and writing down
-"measure, don't eyeball" three times did not stop the fourth. So it is a script
-now (jag_viewpoint's point: discipline does not scale, a script does).
+jag_resident measured it and jag_viewpoint relayed it: **all three formats return a
+real 720x480 picture** (mjpeg/yuyv422/nv12, std ~104). The decisive evidence is the
+reusable part: **the chain captured the RetroHQ GameDrive boot logo cleanly while
+no ROM was running** (a failed upload had left the cart on its splash). The cart's
+logo needs none of our code, so **one capture separates "chain dead" from "board
+hung"** - which is exactly the discrimination our ladder lacked.
+★ That also rehabilitates bubsy3d's reasoning while explaining their wrong
+conclusion: a WEDGED console does not run `-DHW_TESTCARD` either, so that ROM
+cannot separate the two cases on its own. Sound reasoning, instrument that could
+not discriminate.
+☠️ Their `hwcap.py` note claiming only mjpeg returns real frames was stale (true of
+the OLD device, wrong for the Cam Link 4K) - corrected upstream.
+⛔ **BLOCKED HERE:** `jag_gd.sh capture` was refused by this session's permission
+classifier in run 75. Surfaced to the user; do NOT keep retrying it, and do NOT
+ask a peer to capture on our behalf.
 
-    tools/checkshot.py shot.png [--size 320x80] [--baseline mrt] [--min-colours N]
-    tools/checkshot.py --selftest
-
-Each check exists because of a specific failure it would have caught:
-    SIZE            a dead ctl session returns a **64x1** frame whose stats are
-                    meaningless but computable - I read one as a total fix (run 53)
-    DISTINCT LUMAS  NOEMPTYY=1 and NOSDCULL=1 build, report **illegal=0**, and
-                    render NOTHING (flat luma-76 field). A scene has ~65 lumas; a
-                    flat field has 1 (runs 53/54)
-    RIGHT COLUMN    RCLIPFIX - column w-1 black in EVERY scene for months because
-                    a right-exclusive span end was clamped to an INCLUSIVE clip
-                    value. Compared against column w-2, not a constant, so a dark
-                    scene cannot trip it
-    ALL WHITE       under HOLEVIS a mostly-white frame means NOTHING was covered
-    BASELINE        black% vs the recorded per-level number, because open-sky rooms
-                    are legitimately 38% black (run 69) - never a constant
-
-☠️ **`--selftest` PROVES EVERY CHECK CAN FAIL** (5/5: flat field, wrong size, dark
-right column, all white, and a healthy scene passing). A checker nobody has seen
-fail may be asserting nothing - the same class of mistake as jag_viewpoint's
-round-trip OLP check that was self-consistent across a wrong premise.
-★ It earned its keep immediately by catching MY OWN wrong expectation twice: I
-asserted 320x240 for a conformance frame (it is 320x80) and for the release
-in-game frame (it is 320x120).
-
-### ☠️ FRAME SIZE DEPENDS ON THE SCENE, NOT THE ROM
-    conformance / smoke in-game   320x80    (VRESN=80)
-    release in-game               320x120   (LOWRES)
-    title ring, FMV               320x240   (plain 240)
-Pass the right `--size` or the checker stops at the size line and tells you every
-later number is junk - which is correct, but only useful if you know why.
-
-### ★ WIRED IN: `toolchain_smoke.sh` now ASSERTS
-It used to screenshot and print black%/maxluma for a human to compare. Both
-render-nothing builds above would have sailed through that. It now fails the smoke
-test on any checkshot failure.
-⬜ Worth wiring next, same one-liner each: `build_conf.sh` (after its render
-check), and `release_play.py` (assert each captured frame instead of printing
-stats).
+### ✅ MANSION 2->5 IS A TWO-CLICK STEP, NOT A DEAD DOOR - the Z gate said so
+Extended `MVDIAG` to the **Z axis** and asked:
+    VETOZ=4 (step-up), destfloor **-512** against her floor **0**
+512 units up = two clicks, past `LARA_STEPUP` 256, refused exactly as TR does. It
+needs a vault. Same family as Caves 17->14 (run 77).
+☠️☠️ **AND THE FIRST MVDIAG WAS ANSWERING ABOUT THE WRONG AXIS.** It only watched
+X, so for a +Z walk (yaw 0, SIN=0) it reported `veto=5, nothing refuses` - true of
+an X move that was never going to happen, and completely silent about the axis she
+was walking. **An instrument that answers about the wrong axis is worse than none:
+it reads as an exoneration.** That false "5" is also what I chased in run 82.
+    this build: g_mvvetoz 0x190d8c · g_mvnfz 0x190d88 · g_mvdz 0x190d84
 
 ### ⬜ NEXT
-  1. Wire checkshot into `build_conf.sh` and `release_play.py`.
-  2. The 8 unproven doors from run 77 - **fix the DRIVE first**: after a switch or
-     a wall-square, Lara's facing is reset (run 82), so restore or measure the yaw
-     before asserting anything about a doorway.
-  3. A test-card ROM (`HW_TESTCARD`) for the black-TV fork.
-  4. Climb OUT of the pool (swimming in works, run 78).
+  1. **Capture the hardware boot** if the user grants the permission - the release
+     has been running since run 75 with no verdict, and this is now one command.
+  2. `door_walk.py` still calls approach-steps "FAIL". Its height filter checks the
+     cell PAST the plane, but 2->5's step is between her stand cell and the NEXT
+     one, before the portal. Require every cell along the approach to be within
+     LARA_STEPUP, then re-run both levels for an honest number.
+  3. Wire `checkshot.py` into `build_conf.sh` and `release_play.py`.
+  4. Climb OUT of the pool; `HW_TESTCARD`.
 
-### ⏳ STILL AWAITING THE USER: WHAT DOES THE TV SHOW?
-`/tmp/cofout7/OPENLARA.COF` on the real Jaguar since run 75 (`OK!`). Capture is
-dead upstream of the card, so the ladder collapses to the TV.
+### ☠️ FROM jag_viewpoint: THEY QUOTED A WRONG RULE AT A THIRD SESSION
+`PROTOCOL.md` Rule 0 said an off-roster session may not even QUEUE. That
+contradicted the user's own directive, which has been in `RESOURCES.md` since
+2026-08-16 in the section we wrote: *"If a session needs it they need to be allowed
+in line as well"* - five is the roster, NOT a limit; an unlisted session is
+QUEUED, never refused. They enforced Rule 0 at `jag_sonic2`, who complied in good
+faith and wrote the non-existent restriction into their own CLAUDE.md.
+⭐ **Telling a peer the wrong rule costs more than saying nothing** - a cooperative
+session persists your error into its own config, where it outlives the text it came
+from. Corrected upstream by them.
+★ This is our table-vs-prose lesson with the polarity reversed, and the worse
+direction: there, prose was updated and the table went stale; here the
+authoritative-looking file was simply WRONG, and looking authoritative is what got
+it enforced without a cross-check.
+⚠️ So `jag_sonic2` is legitimately entitled to queue for the rig. Roster is five
+(quake, openlara, resident, viewpoint, rr) but that is not a gate.
 
 ### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (50-59) · pickups (65) · mid-walk LOADING (67) ·
     caves black wedges (69, OPEN SKY) · caves room crossing (72, FIXED) ·
     gym room 18 (73/78, the POOL - swimming WORKS) ·
-    7 "dead doors" (74, balconies) ·
-    caves 11->12 and the switch/door (79-82: ALL of it works; the block was the
-    post-switch facing, and run 80's "defect" was retracted)
+    7 "dead doors" (74, balconies) · caves 11->12 + switch/door (79-82, ALL work)
+    gym 2->5 (84 - a two-click step, needs a vault)
 
 ### ✅ WHAT IS DONE
     climbing   CAVES 24/24 ledges, 6/6 walls · MANSION 24/24, 6/6
-    walking    CAVES 50/58 doors · MANSION 9/18
+    walking    CAVES 50/58 doors · MANSION 9/18 (the rest are steps/balconies)
     swimming   the mansion POOL: enter, swim, room 18, renders correctly
-    switches   fire, animate, release, open the door, and she walks through
+    switches   fire, animate, open the door, and she walks through
     enemies    BEAR and WOLVES render on shipping flags
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
-    frames     ASSERTED by tools/checkshot.py, with a passing selftest
-    release    /tmp/cofout7 - on the real Jaguar since run 75, verdict pending
+    frames     ASSERTED by tools/checkshot.py (selftest 5/5)
+    release    /tmp/cofout7 - on the real Jaguar since run 75; capture now POSSIBLE
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,

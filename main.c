@@ -895,6 +895,12 @@ static volatile int g_mvnf;     /* the floor the refused destination reported  *
    destination already equals her position. So record the step arithmetic itself:
    nx = g_lax + (SIN(yaw)*(spd*mv))>>16, spd = RUN_SPEED_TR1*g_ticks>>1. */
 static volatile int g_mvnx, g_mvdx, g_mvspd, g_mvticks, g_mvyaw;
+/* ☠️ AND THE Z AXIS. The first MVDIAG only watched X, so for a +Z walk (yaw 0,
+   SIN=0) it reported "veto=5, nothing refuses" - true of the X move, which was
+   never going to happen, and completely silent about the axis she was actually
+   walking along. An instrument that answers about the wrong axis is worse than
+   none: it reads as an exoneration. */
+static volatile int g_mvvetoz, g_mvnfz, g_mvdz;
 #endif
 static int g_fwdblk;                  /* forward held but BLOCKED this frame
                                          (gates the auto-reach probe)      */
@@ -8216,6 +8222,17 @@ bootvid_entry:
                       g_mvnf = nf2;
                       g_mvnx = nx; g_mvdx = nx - mx0; g_mvspd = spd;
                       g_mvticks = g_ticks; g_mvyaw = g_layaw;
+                  }
+                  if (mv > 0 && g_laz == mz0) {
+                      int nf3 = 0;
+                      g_mvvetoz =
+                          room_wall_at(rsect[g_curroom], g_lax, nz)           ? 1 :
+                          !room_floor_mr(rsect, roomCount, g_lax, nz, &nf3)   ? 2 :
+#ifdef ENTITIES
+                          ent_door_blocks(g_curroom, g_lax, g_laz, g_lax, nz) ? 3 :
+#endif
+                          (g_lafloor - nf3 > LARA_STEPUP)                     ? 4 : 5;
+                      g_mvnfz = nf3; g_mvdz = nz - mz0;
                   }
 #endif
                   g_fwdblk = (mv > 0 && g_lax == mx0 && g_laz == mz0);

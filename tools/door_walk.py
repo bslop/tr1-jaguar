@@ -217,8 +217,16 @@ def main():
             got = None
             seen = set()
             x0p, z0p = peek("g_lax"), peek("g_laz")
+            # ☠️ HOLD THE FACING. Run 82: her yaw is RESET by things that happen
+            # while walking - a wall-square (ALIGN_WALL) or using a switch leaves
+            # her squared to the geometry, not pointed where the test aimed her.
+            # She then walks off-axis with full speed, which reads as "wedged"
+            # (moved 164) or "walked 7000 units and never arrived". The test's
+            # intent is "walk AT this door", so re-assert the yaw every step.
+            yv = yaw & 0xFFFF
             ctl("input", "up")
             for _ in range(5):
+                ctl("poke", hex(syms["g_layaw"]), "%d,%d" % ((yv >> 8) & 255, yv & 255))
                 ctl("run", 60, timeout=600)
                 cur = peek("g_curroom")
                 if cur is not None:
