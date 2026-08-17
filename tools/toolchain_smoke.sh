@@ -41,6 +41,20 @@ print('%.1f' % (100.0*sum(1 for p in px if p<8)/len(px)))" 2>/dev/null)
 LUM=$(python3 -c "
 from PIL import Image
 print(max(Image.open('$OUT/s.png').convert('L').getdata()))" 2>/dev/null)
+# ☠️ ASSERT OVER THE PIXELS, do not just print statistics. black%/maxluma
+# alone passed for both NOEMPTYY and NOSDCULL builds, which render NOTHING
+# and still report illegal=0 (runs 53/54). checkshot.py catches a flat
+# field, a wrong frame size (a dead ctl session hands back 64x1), an
+# uncovered screen, and the RCLIPFIX dark-right-column signature.
+# ☠️ --size must match the SCENE, not the ROM: this smoke shot is the
+#    in-game view at 320x80 (VRESN=80); the title ring is 320x240 and the
+#    release in-game view is 320x120.
+if ! python3 "$HERE/tools/checkshot.py" "$OUT/s.png" --size 320x80 \
+      --baseline mrt >"$OUT/checkshot.log" 2>&1; then
+    echo "☠️ TOOLCHAIN SMOKE: the frame FAILED checkshot:"
+    sed 's/^/     /' "$OUT/checkshot.log"
+    exit 1
+fi
 SZ=$(stat -c%s build/openlara.cof)
 echo "  smoke: ROM $SZ B, black ${BLK}%, maxluma $LUM"
 

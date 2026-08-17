@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 83
+RUN: 84
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,52 +17,57 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ☠️☠️ RETRACTION: THE SWITCH/DOOR "DEFECT" WAS MY DRIVE. EVERYTHING WORKS.
+# ✅ `tools/checkshot.py` - THE FRAME IS NOW ASSERTED, NOT EYEBALLED.
 
-Run 80 reported "the switch fires, the door opens fully, and she still cannot walk
-through" as a real gameplay defect. **It is not a defect.** Measured this run:
+Reading frames by eye has produced FOUR phantom defects here, and writing down
+"measure, don't eyeball" three times did not stop the fourth. So it is a script
+now (jag_viewpoint's point: discipline does not scale, a script does).
 
-    up0..up3   walks to the door, x 50169 -> 49441
-    b5..b12    switch fires, anim releases, door angle 6 -> 42+ (fully open)
-    up14..     spd=164, ticks=7, **yaw=0**, dx=0   <- she has SPEED and no
-                                                     DIRECTION: SIN(0)=0
-    set g_layaw=0xC000 (back to -X), then UP:
-               x 49441 -> 49159 -> 49018, **g_curroom = 12**, on to 46698
+    tools/checkshot.py shot.png [--size 320x80] [--baseline mrt] [--min-colours N]
+    tools/checkshot.py --selftest
 
-**Using the switch leaves her SQUARED TO THE LEVER (yaw 0), which is correct TR1
-behaviour** - the player turns and walks away. My drive kept pressing UP, so she
-pushed into the wall beside the door forever. Restore the facing and she walks
-straight through. The door, the passage, the crossing and the switch all work.
-★ That is the FIFTH harness false-defect in this thread (inverted Z yaw, bad
-seats, portal height, source-vs-destination floor, and now the post-switch
-facing). ☠️ **`veto=5` was the tell and I misread it**: "no clause refuses" meant
-the gate was fine and the INPUT was wrong, not that something exotic was blocking.
-When an instrument says nothing is wrong, suspect the question.
+Each check exists because of a specific failure it would have caught:
+    SIZE            a dead ctl session returns a **64x1** frame whose stats are
+                    meaningless but computable - I read one as a total fix (run 53)
+    DISTINCT LUMAS  NOEMPTYY=1 and NOSDCULL=1 build, report **illegal=0**, and
+                    render NOTHING (flat luma-76 field). A scene has ~65 lumas; a
+                    flat field has 1 (runs 53/54)
+    RIGHT COLUMN    RCLIPFIX - column w-1 black in EVERY scene for months because
+                    a right-exclusive span end was clamped to an INCLUSIVE clip
+                    value. Compared against column w-2, not a constant, so a dark
+                    scene cannot trip it
+    ALL WHITE       under HOLEVIS a mostly-white frame means NOTHING was covered
+    BASELINE        black% vs the recorded per-level number, because open-sky rooms
+                    are legitimately 38% black (run 69) - never a constant
 
-### ★ WHAT THE INSTRUMENTS BOUGHT (keep all three)
-    MVDIAG=1                      g_mvveto (which clause), plus dx/spd/ticks/yaw.
-                                  The yaw=0 with spd=164 IS the whole answer.
-    probe_spot --phases "..."     key sequences; "-" releases
-    probe_spot --phases set:SYM=VAL:1
-                                  poke MID-SEQUENCE - this is what separated
-                                  "the passage is blocked" from "she is facing
-                                  the wrong way", which no key sequence could.
-☠️ Anything read only by a debugger must be `volatile` or gcc deletes it.
-☠️ Re-read symbol addresses from the ELF of the build under test - a stale
-`g_dooff` address gave a clean, plausible, false `door=0` for a whole run.
+☠️ **`--selftest` PROVES EVERY CHECK CAN FAIL** (5/5: flat field, wrong size, dark
+right column, all white, and a healthy scene passing). A checker nobody has seen
+fail may be asserting nothing - the same class of mistake as jag_viewpoint's
+round-trip OLP check that was self-consistent across a wrong premise.
+★ It earned its keep immediately by catching MY OWN wrong expectation twice: I
+asserted 320x240 for a conformance frame (it is 320x80) and for the release
+in-game frame (it is 320x120).
 
-### ⬜ NEXT - the door thread is CLOSED; pick from these
-  1. **`checkshot.py` for us** (jag_viewpoint's artifact, worth copying): assert
-     over rendered pixels instead of eyeballing black%/maxluma. Our precedent is
-     `RCLIPFIX` - the rightmost column was black in EVERY scene for months because
-     a right-exclusive span end was clamped to an INCLUSIVE clip value. One
-     assertion on the rendered right edge would have caught it in a day.
-     ★ Their sharpest trick: assert the RED band contains no BLUE. Asserting a
-     band is merely bright proves nothing; a swapped R5:B5:G6 layout still renders
-     bright bands. Make assertions DISCRIMINATE, not confirm.
-  2. The 8 other unproven doors from run 77 - now expect most to be drive
-     artefacts of this same family, so fix the DRIVE first (after a switch or a
-     wall-square, restore or measure the facing before asserting).
+### ☠️ FRAME SIZE DEPENDS ON THE SCENE, NOT THE ROM
+    conformance / smoke in-game   320x80    (VRESN=80)
+    release in-game               320x120   (LOWRES)
+    title ring, FMV               320x240   (plain 240)
+Pass the right `--size` or the checker stops at the size line and tells you every
+later number is junk - which is correct, but only useful if you know why.
+
+### ★ WIRED IN: `toolchain_smoke.sh` now ASSERTS
+It used to screenshot and print black%/maxluma for a human to compare. Both
+render-nothing builds above would have sailed through that. It now fails the smoke
+test on any checkshot failure.
+⬜ Worth wiring next, same one-liner each: `build_conf.sh` (after its render
+check), and `release_play.py` (assert each captured frame instead of printing
+stats).
+
+### ⬜ NEXT
+  1. Wire checkshot into `build_conf.sh` and `release_play.py`.
+  2. The 8 unproven doors from run 77 - **fix the DRIVE first**: after a switch or
+     a wall-square, Lara's facing is reset (run 82), so restore or measure the yaw
+     before asserting anything about a doorway.
   3. A test-card ROM (`HW_TESTCARD`) for the black-TV fork.
   4. Climb OUT of the pool (swimming in works, run 78).
 
@@ -74,17 +79,18 @@ dead upstream of the card, so the ladder collapses to the TV.
     mansion holes (50-59) · pickups (65) · mid-walk LOADING (67) ·
     caves black wedges (69, OPEN SKY) · caves room crossing (72, FIXED) ·
     gym room 18 (73/78, the POOL - swimming WORKS) ·
-    7 "dead doors" (74, balconies) · caves 11->12 (79-82: the door, the switch
-    AND the passage all work; the block was the post-switch facing)
+    7 "dead doors" (74, balconies) ·
+    caves 11->12 and the switch/door (79-82: ALL of it works; the block was the
+    post-switch facing, and run 80's "defect" was retracted)
 
 ### ✅ WHAT IS DONE
     climbing   CAVES 24/24 ledges, 6/6 walls · MANSION 24/24, 6/6
     walking    CAVES 50/58 doors · MANSION 9/18
     swimming   the mansion POOL: enter, swim, room 18, renders correctly
-    switches   fire, animate, release, swing the door fully open, AND she walks
-               through into room 12 afterwards
+    switches   fire, animate, release, open the door, and she walks through
     enemies    BEAR and WOLVES render on shipping flags
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
+    frames     ASSERTED by tools/checkshot.py, with a passing selftest
     release    /tmp/cofout7 - on the real Jaguar since run 75, verdict pending
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
