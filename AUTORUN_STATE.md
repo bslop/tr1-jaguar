@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 36
+RUN: 37
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,54 +17,51 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**✅ THE GUARD THAT WOULD HAVE SAVED FOUR RUNS NOW EXISTS AND HAS FIRED.**
+**✅ LARA'S HOME IS NOW TESTABLE — the blocker was a real extractor-flag bug.**
 
-`tools/toolchain_smoke.sh` — after any toolchain move it **builds a ROM,
-screenshots it, and compares black% + max luma to a recorded baseline**.
+`ledge_census.py --prefix gym` crashed on the mansion. Cause: **`soff` bit 31 is
+the WATER-ROOM FLAG**, not part of the offset (`tr2jag_multiroom.py:3219` sets
+it; `main.c:6881` reads it as `rwater[i] = (e[4] & 0x80)`). Room 18 of Lara's
+Home is the pool. The Caves have no water room, so this never bit there.
+Masked with `& 0x7FFFFFFF` in **both** `ledge_census.py` and
+`floor_coverage.py` — the same unmasked read was in both.
 
-    tools/toolchain_smoke.sh              check (build ~15 min)
-    tools/toolchain_smoke.sh --baseline   record the current result as good
-    baseline recorded: black 1.1%, ROM 1,292,812 B  (toolchain 59e5896)
+Mansion census now works: **304 ledges** — 110 WALKUP, 90 CLIMB2, 39 CLIMB3,
+55 JUMPGRAB, 10 WALL. (Caves has 26 filtered spots.)
 
-Wired into `cobweb_check.sh --update`, which now REFUSES an update whose ROM
-does not draw. Threshold verified against real data:
+`tools/conformance.py --prefix gym` added. Mansion ROM built with the GOOD
+toolchain (`AUTOGYM=1`, 1,531,308 B) and it **renders: 3.1% black, maxluma 255**.
 
-    bad toolchain   black 100.0% lum   0 -> FAILS ✅
-    good toolchain  black   1.1% lum 217 -> passes
-    scene variation black   4.3% lum 230 -> passes
+### ⬜ FIRST GYM RESULT — 0/10 CLIMBED. DO NOT TRUST IT YET.
+    WALKUP  room 1  x6   rose 0   floor -1280
+    CLIMB2  room 1  x3   rose 0   floor -1280
+    CLIMB2  room 2  x1   rose 0   floor 0
+Seating VERIFIED in every case (`y == floor`, so she is standing where intended;
+-1280 is plausibly just room 1's floor height). But **this harness has produced
+two confident false negatives already** — the 120-field climb window (run 31)
+and the 32-bit yaw poke (run 30). Before recording "the mansion cannot climb":
 
-### ☠️ `beb2c15` DOES NOT FIX THE REGRESSION
-`"jcc68k: an odd-sized global sent every runtime helper to an odd address"`
-sounded exactly like our bug. It is not — with it the ROM is **still 100%
-black**. The 16-bit parameter offset change (`24(a6)` -> `26(a6)`) is separate
-and still present. **Stay pinned to 59e5896** (Dockerfile + cobweb_check).
-Updated `jaguar-shared/COBWEB_ISSUES_JCC68K_ABI.md` (ecd4df1) to say so, since
-the commit message invites exactly the wrong conclusion.
+1. **Drive ONE gym spot by hand with telemetry**, exactly as run 25 did for the
+   Caves: serve, `run 1250`, `input up` in 12-field steps, then `up,b`, peeking
+   `g_lay/g_laz/g_lafloor` between samples. If Y moves at all, the harness is
+   wrong; if Y is flat through a held UP+B, the mansion genuinely does not climb.
+2. Check the **yaw**: if the census yaw faces her away from the ledge, `UP`
+   walks the wrong way and every spot reads NO-CLIMB. Compare her Z/X drift
+   against the ledge direction.
 
-★ Note `cobweb_check --update` reported "renderer byte-identical — safe" for
-**both** broken revisions. Both true, both useless. That is the whole lesson.
+### Toolchain — STILL PINNED to 59e5896
+`beb2c15` does NOT fix the jcc68k regression (still 100% black). Build with
+`COBWEB_DIR=/tmp/cobweb-old`; `tools/toolchain_smoke.sh` guards updates
+(baseline: black 1.1%, ROM 1,292,812 B) and is wired into `cobweb_check
+--update`. Harness ROM with the good toolchain is 1,538,508 B — exactly run 29's
+working size.
 
-### TO BUILD A WORKING ROM
-    git -C ../../../../cobweb worktree add /tmp/cobweb-old 59e5896   # once
-    cargo build --release --manifest-path /tmp/cobweb-old/sim/Cargo.toml
-    make <flags> COBWEB_DIR=/tmp/cobweb-old      # or export it
-☠️ Never `git checkout` an old rev in the SHARED cobweb tree — four sessions
-build from it. The worktree at /tmp/cobweb-old is deliberate.
-
-### Resume the user's standing request
-"Test the entire level and home... notate what works vs PSX, then fix."
-1. **Re-run the Caves sweep** with a good-toolchain ROM:
-   `python3 tools/conformance.py <rom> <elf> --out DIR`. Last result (run 32,
-   valid): **20/26 CLIMBED, 2 PARTIAL, 4 NO-CLIMB**.
-2. **Add a jump drive** so JUMPGRAB 1792 is a real test rather than a harness
-   limit (it only holds UP+B today).
-3. **Sweep Lara's Home** — needs a no-GYMSD ROM and census spots for the gym
-   rooms (`ledge_census.py` reads `mrt_*` only today).
-4. Compare against `res/` PSX footage (Part 2 = Caves, 3m20 -> 23m24).
-5. ⬜ Room 22 cell (17,11) is a REAL geometry hole — zero faces cover it,
-   60-73% black at every yaw. `floor_coverage.py --faces` finds 49 such cells
-   but **walling them is the wrong remedy** (opt-in, off by default). A hole
-   wants GEOMETRY, not less collision.
+### Caves status (valid, run 32)
+20/26 CLIMBED, 2 PARTIAL, 4 NO-CLIMB. WALKUP 6/6, CLIMB2 5/6, CLIMB3 5/6,
+JUMPGRAB 1024/1536 4/4, WALL correctly refused. JUMPGRAB 1792 needs a jump
+drive to be a real test.
+⬜ Room 22 cell (17,11) is a REAL geometry hole (zero faces, 60-73% black at
+every yaw); `--faces` finds 49 such cells but walling them is the WRONG remedy.
 
 ### ⬜ AWAITING THE USER (run-25 checkpoint)
   1. Capture card replugged? 2. Ship Lara's Home? 3. Release or keep polishing?

@@ -64,6 +64,12 @@ def load(prefix):
     rooms = []
     for r in range(nroom):
         _, soff = struct.unpack_from(">II", idx, 8 + r * 8)
+        # ☠️ soff BIT 31 IS THE WATER-ROOM FLAG, not part of the offset.
+        # tr2jag_multiroom.py: `index.append((goff, soff | 0x80000000 if water))`
+        # and main.c reads it back as `rwater[i] = (e[4] & 0x80)`. The CAVES have
+        # no water room so this never bit there; Lara's Home room 18 is the pool
+        # and an unmasked read walks off the end of the file.
+        soff &= 0x7FFFFFFF
         xS, zS = struct.unpack_from(">HH", sect, soff)
         ix, iz = struct.unpack_from(">ii", sect, soff + 4)
         cells = []
