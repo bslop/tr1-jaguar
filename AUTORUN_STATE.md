@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 67
+RUN: 68
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,61 +17,59 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ THE RELEASE IS NOW INSTRUMENTABLE. `build_cof.sh` KEEPS ITS ELF.
+# ☠️ RETRACTION: THERE IS NO MID-LEVEL "LOADING". THE RELEASE WALK IS CLEAN.
 
-Chasing the mid-walk "LOADING..." from run 63 ran straight into a wall: **the
-release ROM had no symbols**, so nothing could be peeked in the only build that
-reproduces it. `tools/build_cof.sh` now copies `OPENLARA.elf` beside the ROM.
+Run 63 reported an unexplained "LOADING..." screen appearing while walking the
+release, and runs 64-66 carried it as an open defect. **It does not exist.** It
+was a contact sheet misread - I attributed a panel to the wrong frame index and
+then reasoned from the mistake for three runs.
 
-Verified by a full release rebuild -> `/tmp/cofout6`:
-    OPENLARA.COF 1,538,700 B  (byte-identical size to run 60 - reproducible)
-    OPENLARA.elf 1,571,556 B  258 data symbols, all key ones resolve
-    NOT listed in COPY-THESE-TO-SD-ROOT.txt - it is a debug artifact, not an SD file
-★ And the addresses PROVE why a conformance ROM was never a substitute:
-`g_health` is 0x17b7f6 in the release and 0x13f936 in the conformance build.
-**Symbol addresses are per-build; peeking a release with another ROM's map reads
-whatever happens to live there.**
+Re-tested with the release ELF that run 66 made available, so the drive now logs
+real state instead of me interpreting thumbnails:
 
-### ⬜ THE "LOADING..." IS STILL UNEXPLAINED, but two things are now ruled out
-  * **Not a death/reload.** Walking 3000 units from the Caves level start in a
-    conformance ROM: z 3889 -> 6966, floor flat at 3072, room 0 throughout,
-    **health 1000 the whole way**. No damage, no reload.
-  * **Not the intro FMV mistaken for play.** The frames before it show Lara's
-    model in TR1's snowy opening WITH THE HUD MARKS DRAWN - that is gameplay.
-    (TR1's Caves really does start outdoors in snow, which is what made "it must
-    be the cutscene" tempting.)
-So it is a real mid-level load in the release path. ⬜ To chase it:
-  1. `probe_spot.py` needs **`--sd DIR`** (the release streams its videos) and a
-     **boot-length override** - the release needs ~8200 fields to reach the ring
-     versus the 1300 hardcoded now. Both are small.
-  2. Then drive `--play` again with position/health/room telemetry and watch what
-     changes at the moment the loading screen appears.
+    walked  1  z= 4900  y=3072  room=0  health=1000
+    walked  3  z=13736  y=3946  room=0  health=1000
+    walked  5  z=21444  y=3072  room=0  health=1000
+    walked 14  z=21444  y=3072  room=0  health=1000   (wedged, see below)
 
-### ★ OBSERVED, NOT ACTIONED
-The pre-LOADING gameplay frame shows a **doorway-shaped black rectangle** in the
-cave mouth - the classic coverage-hole shape. The mansion hole thread is closed
-and this is the Caves, whose conformance sweep reports 0 black outliers, so it is
-noted here rather than chased. If it turns out to matter, `sightline.py` at that
-spot is the first command.
+**Room never changes, health never moves, and the frame at the accused index
+(`p_05`) is ordinary gameplay at 0.1% black** - a loading screen is mostly dark
+and cannot read 0.1%. Nothing reloads.
 
-### ⬜ NEXT
-  1. Give `probe_spot.py` `--sd` and a boot override, then chase the LOADING.
-  2. Bats (ents 1, 11, 31) are unseen - AIRBORNE at y -2432, a floor stand-off
-     leaves them out of frame. Needs an air teleport or camera pitch.
-  3. The release is CURRENT and verified into gameplay on both levels
-     (`/tmp/cofout6` now, with symbols). Run-25/50 direction questions still
-     unanswered - "is this the release?" is the blocking one.
-  4. ☠️ Driven mechanics tests need the rig and a human at the TV. Do NOT claim
+★★★★★ **A thumbnail grid is not evidence.** Every wrong turn in the last several
+runs came from reading a picture and inferring state: the "LOADING" that was not
+there, the "geometry through walls" that filled pixels, the pickup counter that
+was never wired. The telemetry took one run to add and settled it immediately.
+**If a claim is about game STATE, read the state.**
+
+### ✅ WHAT THE WALK ACTUALLY SHOWS
+She walks ~16 sectors (z 4900 -> 21444) through the snowy Caves opening at full
+health, then **stops dead at x=74704 z=21444** and never moves again. That is
+just a wall: the drive only ever presses UP. ⬜ If someone wants a longer
+play-through capture, the drive needs turns - not a bug to chase.
+
+### ⬜ NEXT - all of it optional; nothing is known-broken
+  1. Bats (ents 1, 11, 31) are still unseen: AIRBORNE at y -2432, and a floor
+     stand-off leaves them out of frame. Needs an air teleport or camera pitch.
+  2. A longer driven play-through (turns, not just UP) if a demo capture is
+     wanted.
+  3. ☠️ Driven mechanics tests need the rig and a human at the TV. Do NOT claim
      the rig - the capture card is unplugged.
+  4. **The release is CURRENT, verified into gameplay on both levels, and now
+     ships with symbols** -> `/tmp/cofout6`. The run-25/50 direction questions
+     are still unanswered and "is this the release?" is the blocking one.
 
 ### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (runs 50-59): room 15 = MISSING GEOMETRY, room 0 = OPEN SKY.
-    pickups (run 65): they WORK - `g_pickups` is a DEMO_PROPS counter that is not
-    compiled in; the real state is `g_pickgot[]` + `g_health`.
+    pickups (run 65): they WORK - `g_pickups` is DEMO_PROPS and not compiled in;
+      the real state is `g_pickgot[]` + `g_health`.
+    the mid-walk LOADING (this run): never existed.
 
 ### ★ INSTRUMENTS (all off in shipping builds)
+    release_play.py [--gym|--play]  drive the RELEASE; --play LOGS TELEMETRY
+                                    (reads OPENLARA.elf beside the ROM;
+                                     REL_ROM/REL_SD/REL_ELF override the paths)
     entity_check.py                 stand next to any entity and photograph it
-    release_play.py [--gym|--play]  drive the RELEASE into either level / walk it
     probe_spot.py --raw= / --set=   per-spot telemetry; teleport anywhere
     sightline.py                    what geometry is NEARBY - not what is VISIBLE
     room_cycles.py --prefix=gym     per-room kernel cycles (fill NOT included)
@@ -80,7 +78,8 @@ spot is the first command.
                                     $1C0010 bexit   $1C0014 worldcull
     build_conf.sh EXTRA= / SKIP=
 ☠️ Counters ACCUMULATE - take DELTAS.
-☠️ SYMBOLS ARE PER-BUILD - use the .elf that came out of the SAME build.
+☠️ SYMBOLS ARE PER-BUILD - use the .elf from the SAME build (g_health moves
+   0x13f936 -> 0x17b7f6 between the conformance and release ROMs).
 ☠️ NOEMPTYY=1 and NOSDCULL=1 BUILD AND DO NOT RENDER (illegal=0 either way).
 ☠️ FPS CANNOT be measured offline (capture card unplugged; 68k counters run at
    the 30 Hz LOGIC tick).
@@ -90,8 +89,8 @@ spot is the first command.
                MANSION LEDGES 24/24  WALLS 6/6 refused
     enemies    BEAR and WOLVES render in-game on shipping flags
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
-    release    CURRENT, both levels verified into gameplay, NOW WITH SYMBOLS
-               -> /tmp/cofout6
+    release    CURRENT, both levels verified into gameplay, ships with symbols
+               -> /tmp/cofout6.  Walk-through: 16 sectors, full health, clean.
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,

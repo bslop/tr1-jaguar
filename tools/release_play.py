@@ -8,8 +8,9 @@ ctl session: boot, press A at the ring, let the level load, capture frames.
 import subprocess, sys, time, os
 
 JE = "/home/jvilla/Documents/Git/jag_openlara/cobweb/sim/target/release/jagemu"
-ROM = "/tmp/cofout5/OPENLARA.COF"
-SD = "/tmp/cofout5"
+ROM = os.environ.get("REL_ROM", "/tmp/cofout6/OPENLARA.COF")
+SD = os.environ.get("REL_SD", "/tmp/cofout6")
+ELF = os.environ.get("REL_ELF", "/tmp/cofout6/OPENLARA.elf")
 INST = "rel"
 OUT = "/tmp/rel5play"
 
@@ -17,6 +18,42 @@ OUT = "/tmp/rel5play"
 def ctl(*a, timeout=900):
     return subprocess.run([JE, "ctl", INST] + [str(x) for x in a],
                           capture_output=True, text=True, timeout=timeout).stdout.strip()
+
+
+# ☠️ SYMBOLS ARE PER-BUILD. Read them from the ELF that came out of the SAME
+# build as this ROM (build_cof.sh keeps it beside the COF as OPENLARA.elf).
+# Using a conformance ROM's map here reads whatever happens to live at those
+# addresses - g_health alone moves 0x13f936 -> 0x17b7f6 between the two.
+SYMS = {}
+if os.path.exists(ELF):
+    import json as _json
+    for _ln in subprocess.run(["m68k-neogeo-elf-nm", ELF],
+                              capture_output=True, text=True).stdout.split("\n"):
+        _p = _ln.split()
+        if len(_p) == 3:
+            SYMS[_p[2]] = int(_p[0], 16)
+
+
+def peek(name, signed=True):
+    """Read a 4-byte variable by NAME, or None if this build has no such symbol."""
+    if name not in SYMS:
+        return None
+    import json as _json
+    for ln in ctl("peek", hex(SYMS[name]), "--len", "4").split("\n")[::-1]:
+        try:
+            b = _json.loads(ln).get("bytes")
+        except Exception:
+            continue
+        if b:
+            v = (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]
+            return v - (1 << 32) if (signed and v >= 1 << 31) else v
+    return None
+
+
+def tele():
+    """One line of where-is-she, for correlating a capture with the game state."""
+    return "x=%s z=%s y=%s floor=%s room=%s health=%s" % tuple(
+        peek(n) for n in ("g_lax", "g_laz", "g_lay", "g_lafloor", "g_curroom", "g_health"))
 
 
 os.makedirs(OUT, exist_ok=True)
@@ -77,7 +114,7 @@ try:
             ctl("release")
             ctl("run", 30)
             ctl("frame", os.path.join(OUT, "p_%02d.png" % (i + 1)))
-            print("  walked %d" % (i + 1), flush=True)
+            print("  walked %2d  %s" % (i + 1, tele()), flush=True)
         raise SystemExit
 
     for i, n in enumerate((2500, 2500, 2500, 2500)):
