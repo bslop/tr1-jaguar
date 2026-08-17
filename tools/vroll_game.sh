@@ -52,12 +52,13 @@ cycle_and_record() {
 export -f cycle_and_record
 export GD ROM OUT SECS
 
-# ☠️ PROTOCOL.md caps a lease at 600 s. The cycle needs SECS + ~80 for the
+# ☠️ THE TURN IS 300 s (user, 2026-08-17: each session takes at most 5 minutes
+# then gives the Jaguar up). This was written against the OLD 600 s cap. The cycle needs SECS + ~80 for the
 # power/boot/enumerate/upload preamble, so a long -secs request cannot be
 # honoured as one acquisition - refuse rather than silently split the cycle
 # back into the racy shape this comment exists to prevent.
 LEASE=$((SECS + 80))
-if [ "$LEASE" -gt 600 ]; then
+if [ "$LEASE" -gt 300 ]; then
     echo "refusing: secs=$SECS needs a ${LEASE}s lease, over PROTOCOL.md's 600s cap."
     echo "  record in shorter takes - do NOT split the cycle across leases."
     exit 2

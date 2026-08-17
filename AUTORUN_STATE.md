@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 86
+RUN: 87
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,79 +17,83 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ THE MANSION HAS **ZERO** DOOR DEFECTS. ALL 5 "FAILURES" ARE VAULT-HEIGHT DOORS.
+# ★ NEW RULE (user, 2026-08-17): THE JAGUAR TURN IS **5 MINUTES**, THEN GIVE IT UP.
 
-    gym: 18 of 32 wall-portals walkable at floor level
-         **9 crossed**, 5 classified STEP UP, 4 untestable seats
+    "Each session now takes turns. Their turn is 5 minutes max before the Jaguar
+     is given up for the next session."
 
-    ☠️ FAIL  2 -> 5   WHY: STEP UP (needs a vault, not a walk)
-    ☠️ FAIL  2 -> 6   WHY: STEP UP
-    ☠️ FAIL  2 -> 7   WHY: STEP UP
-    ☠️ FAIL 10 -> 8   WHY: STEP UP
-    ☠️ FAIL 11 -> 8   WHY: STEP UP
+☠️ **`hw/jaghw`'s own `LEASE_MAX` is still 600 s**, so nothing enforces this
+mechanically - the cap is ours to honour where the lease is REQUESTED. Audited and
+fixed this run:
+    jag_gd.sh reboot 120 · upload 300 · power 60 · run 180   all fixed, all inside
+    jag_gd.sh capture  `secs+20` - **caller-controlled**, the ONLY one that could
+                       breach the turn. Now refuses `secs > 270`.
+    tools/vroll_game.sh refused a lease over **600** - its own ceiling was written
+                       against the OLD cap, so a long recording would have been
+                       allowed by the script and broken the turn. Now 300.
+★ The generalisable move: audit leases by asking **which of these is a variable**.
+Four of five were constants already inside the turn; the fifth took its length from
+an argument and was the entire exposure. Documented in `hw/GD_ACCESS.md` and pushed
+for the other sessions, including the warning that a loop script's ceiling can be
+stale in a way `jaghw` will never catch.
 
-Every one is a doorway whose far side sits more than `LARA_STEPUP` (256) above her
-- two clicks or more - which the move gate refuses exactly as TR does. Nothing is
-broken. `door_walk.py` now prints the reason, so a "FAIL" line is self-explaining.
+# ✅ ZERO DOOR DEFECTS ON EITHER LEVEL. Every failure is now EXPLAINED.
+    CAVES    58 of 62 testable, **48 crossed**, 6 explained, 4 untestable seats
+    MANSION  18 of 32 testable, **9 crossed**, 5 explained, 4 untestable seats
 
-### ★★★★★ THE LESSON OF THIS RUN: ASK THE GAME, DO NOT PREDICT IT
-I tried **three times** to pre-filter these doors by modelling the runtime's floor
-search in Python, and was wrong in a different way each time:
-    1. checked the SOURCE room's cell        -> past the seam it reads OPEN, never a floor
-    2. checked the cell PAST THE PLANE       -> the step is BEFORE the portal
-    3. an any-room lowest-floor lookup       -> still did not reproduce the gate
-Each attempt cost a build+run and changed the numbers by zero. Then I had
-`door_walk.py` read `MVDIAG`'s veto from the RUNNING ROM and it classified all five
-correctly on the first try.
-☠️ **A model of the runtime is a second implementation, and it will disagree with
-the first in ways you cannot predict.** When the runtime can be asked, ask it.
-★ Note this is the exact inverse of the `veto=5` trap: there the instrument
-answered about the wrong axis and I believed it. The fix in both directions is the
-same - make the SUBJECT report, and make sure it reports on the thing under test.
+`door_walk.py` classifies from `MVDIAG` (read out of the running ROM, not
+predicted), and every Caves failure names itself:
+    11 -> 12  **DOOR shut**  - correct; its switch is in the same cell (run 79)
+    25 -> 28  **DOOR shut**  - correct
+    23 -> 18  **STEP UP**    - a vault-height doorway, refused as TR does
+    25 -> 22  **WALL**       - correct
+    21 -> 18  "nothing refused - check the FACING/axis"  } harness: she walked
+    37 -> 34  "nothing refused - check the FACING/axis"  } off-axis into another room
+All five mansion failures were STEP UP (run 85). **Not one door on either level is
+broken.**
 
 ### ⬜ NEXT
-  1. **Run `door_walk.py --prefix mrt` on an MVDIAG Caves build** - the 4 Caves
-     failures (11->12 is a shut door, 25->22, 25->28, 37->34) will classify
-     themselves. Build with `EXTRA="MVDIAG=1" tools/build_conf.sh caves`.
-     ☠️ Without MVDIAG the tool prints "(build without MVDIAG=1 - no reason
-     available)" rather than guessing.
-  2. **The 4 untestable seats** (7->9, 7->2, 8->10, 8->11) all resolve into room
-     12. Pick a stand point the source room owns exclusively - the ranking already
-     prefers that; it needs a fallback when no candidate is exclusive.
+  1. The 2 Caves "nothing refused" cases (21->18, 37->34) are the last unexplained
+     door lines, and both are the FACING family - she reaches a different room
+     (saw [21,22] and [36]). Read `g_mvyaw` at the moment of failure and compare it
+     with the yaw the test aimed her at; expect a wall-square to have turned her.
+  2. The 4+4 untestable seats resolve into an overlapping room. The ranking already
+     prefers an exclusively-owned stand cell; it needs a FALLBACK when none is.
   3. Capture the hardware boot **if the user grants permission** - `jag_gd.sh
-     capture` was refused by this session's classifier in run 75, and capture is
-     now known to WORK (jag_resident). Do not route around it; do not ask a peer.
+     capture` was refused by this session's classifier (run 75) and capture is now
+     known to WORK. ☠️ Do not route around it; do not ask a peer. And it now costs
+     at most one 5-minute turn.
   4. Wire `checkshot.py` into `build_conf.sh` and `release_play.py`.
   5. Climb OUT of the pool; `HW_TESTCARD`.
 
-### ★ FALSE EXONERATION - now a named section in jaguar-shared (jag_viewpoint)
-Five instances across four projects in two days, all one shape:
-    ours       a diagnostic watching only X, reporting "nothing refuses" for a +Z walk
-    viewpoint  reading OLP back in the units they assumed
-    resident   bandwidth accounting cannot see a latency failure
-    bubsy3d    a wedged console does not run the test-card ROM either
-    rr         a swapped colour layout still renders bright bands
-⭐ **A check must be able to come out the other way.** The tell is that the answer
-arrives CLEAN and stops you looking. Countermeasure 1 in that file: **an
-unfalsified checker is an opinion** - `checkshot.py --selftest` exists for this
-reason and proves 5/5 of its checks can fail.
+### ★★★★★ THE METHOD THAT IS WORKING - keep doing this
+    ASK THE SUBJECT, DO NOT MODEL IT. Three attempts to pre-filter doors by
+    reimplementing the floor search in Python were each wrong differently and
+    changed nothing; `MVDIAG` read from the ROM classified all five on the first
+    try. A model of the runtime is a second implementation.
+    A CHECK MUST BE ABLE TO COME OUT THE OTHER WAY. `veto=5` from an X-only
+    diagnostic exonerated a +Z walk and I retracted a real defect off it.
+    `checkshot.py --selftest` proves 5/5 of its checks can fail for this reason.
+    (jaguar-shared now carries this as **FALSE EXONERATION** - five instances
+    across four projects in two days.)
 
 ### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (50-59) · pickups (65) · mid-walk LOADING (67) ·
     caves black wedges (69, OPEN SKY) · caves room crossing (72, FIXED) ·
     gym room 18 (73/78, the POOL) · 7 "dead doors" (74, balconies) ·
-    caves 11->12 + switch/door (79-82, all work) ·
-    **all 5 mansion door failures (85 - vault-height doorways, not defects)**
+    caves 11->12 + switch/door (79-82) · all 5 mansion door failures (85) ·
+    **all 6 Caves door failures (86)** - shut doors, a step, a wall, 2 harness
 
 ### ✅ WHAT IS DONE
     climbing   CAVES 24/24 ledges, 6/6 walls · MANSION 24/24, 6/6
-    walking    CAVES 50/58 doors · MANSION 9/9 walkable doors, 5 vault doors
+    walking    CAVES 48 doors crossed · MANSION 9 · zero defects either level
     swimming   the mansion POOL: enter, swim, room 18, renders correctly
     switches   fire, animate, open the door, and she walks through
     enemies    BEAR and WOLVES render on shipping flags
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
     frames     ASSERTED by tools/checkshot.py (selftest 5/5)
-    release    /tmp/cofout7 - on the real Jaguar since run 75; capture now possible
+    rig        every lease honours the 5-minute turn
+    release    /tmp/cofout7 - on the real Jaguar since run 75; verdict pending
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,
