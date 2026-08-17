@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 97
+RUN: 98
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,64 +17,54 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ⬜ THE HOLE IS AT THE **FACE** LEVEL. TWO ROOM-LEVEL KNOBS RULED OUT BY A/B.
+# ✅ CLOSED: THE MANSION "COVERAGE HOLE" IS NOT A BUG. NOTHING IS BEING CULLED.
 
-Seat (35795, 1024, 54194) room 0 of Lara's Home, 16 yaws, HOLEVIS. Same valid
-seat as run 95 (`g_lay=g_lafloor=1024`, `g_curroom=g_floorroom=0`).
+Runs 95-97 chased this. It is a NEGATIVE RESULT and it is worth as much as a fix:
+**the renderer draws everything it is given, and the geometry it is given is
+complete.** Four independent tests at the same valid seat (35795, 1024, 54194,
+room 0, `g_lay=g_lafloor=1024`), 16 yaws, HOLEVIS:
 
-### 1. ROOMS ARE ADMITTED, THEN DROPPED - AND THE SHIPPING ROM SHIPS THE DIAL AT 1
-`g_visrooms`/`g_drewrooms` are **BITMASKS**, not counts (`|= 1u << ri`):
+    ALLVIS=1        rooms with an empty portal window      53.0% -> 53.2%
+    g_hopcap 1->4   drew {0,1} -> {0,1,2,3}, TWO MORE ROOMS 53.0% -> 53.7%
+    NOBFCULL=1      rastered ~600 -> ~1150, DOUBLE the faces 53.0% -> 54.4%
+    geometry        room 0 = 124 faces / 72 cells = 1.7,    normal for the level
+                    (all 19 rooms run 1.1 .. 2.3 faces/cell)
 
-    vis = 31 = rooms {0,1,2,3,4}      drew = 3 = rooms {0,1}   <- only two ever
+★ Drawing twice as many faces does not fill the screen. Admitting two more rooms
+does not fill the screen. The faces that would cover those pixels DO NOT EXIST IN
+THE FRUSTUM - she is in a room that is 39% open to the sky, looking across it.
+☠️ I called this "a real coverage hole" in run 95 off a HOLEVIS frame. HOLEVIS
+proves a pixel was never COVERED; it does not prove anything SHOULD have covered
+it - sightline.py's docstring says exactly that and I read past it. **Uncovered
+is not the same as broken.** Do not reopen this without new evidence from the PS1
+footage showing geometry we do not draw.
 
-Cause found: `g_hopcap = 1`, the portal-hop draw-distance cap. It is **not** the
-GOVERNOR (that is `#ifdef GOVERNOR` and `g_gov_on` is not even in this build) -
-it is `HOPBOOT=1`, and ☠️ **`tools/build_cof.sh:95` sets HOPBOOT=1 too**, so the
-SHIPPING ROM draws the current room plus one hop. main.c's own default is
-`#define HOPBOOT 4` (uncapped).
+### ★ WHERE THE 45% "SCREEN-SPACE REJECTED" BUCKET WENT
+`CULLCOUNT=1 BEXCNT=1 WCCNT=1` splits the faces (☠️ CUMULATIVE counters - take
+DELTAS): ~12% world-plane cull, 0-25% bottom-exit, ~30% rastered, ~45% rejected.
+NOBFCULL collapses that 45% to ~0 and doubles `rastered`, so **the whole bucket
+was backface culling** - normal, not a leak. Nothing else rejects faces.
 
-### 2. ☠️ BUT UNCAPPING IT DOES NOT FILL THE SCREEN - SO THAT IS NOT THE HOLE
-Poked `g_hopcap=4` live (+ `g_hop_cached_a=-1`, or room_withinK answers from a
-stale cache) on the SAME ROM, same seat, same yaws:
+### ☠️ TWO FACTS FOUND ON THE WAY, BOTH REAL
+1. **`HOPBOOT=1` IS IN THE SHIPPING FLAG SET** (`tools/build_cof.sh:95`), so the
+   release draws the current room **plus one portal hop**; main.c's own default is
+   `#define HOPBOOT 4`. It is not a bug - it is a draw-distance/fps trade nobody
+   has re-evaluated since. Uncapping demonstrably draws more rooms (mask 3 -> 15).
+   Worth measuring for VISIBLE QUALITY at an fps cost, on a corridor seat rather
+   than an open room. **This is the one lead worth keeping from these three runs.**
+2. **`NEARCLIP=1` DOES NOT BUILD.** `gpu_geotex.gas:4099: undefined symbol
+   nc_back`, and the line's own comment reads "nothing implemented past here
+   yet". It is a STUB, not a flag - the near-plane clipper was never written.
+   `project_near_plane_face_pop` should say so; do not plan around NEARCLIP.
 
-    drew      3 (rooms 0,1)  ->  15 (rooms 0,1,2,3)     two more rooms DRAWN
-    uncovered 53.0%          ->  53.7%                  NO IMPROVEMENT
-
-★ Two more rooms are submitted and the screen is no emptier and no fuller. With
-run 95's ALLVIS result (53.0 -> 53.2), that is **two independent room-level knobs
-that change what is drawn and do not change what is covered**. The gap is not
-about which ROOMS get in. Do not re-test ALLVIS or the hop cap.
-☠️ ALIGN THE FRAMES BEFORE COMPARING: adding `set:` phases shifts every shot
-index. My first read compared s00 against a different yaw and showed a fake +0.7.
-
-### 3. WHERE IT ACTUALLY IS: 63% OF STAGED FACES NEVER RASTERISE
-With `CULLCOUNT=1` the kernel counters come alive. ☠️ THEY ARE CUMULATIVE - take
-DELTAS between steps, the raw numbers only ever grow:
-
-    per capture interval:  staged ~1900   rastered ~700   => ~63% dropped
-
-### ⬜ NEXT: ATTRIBUTE THAT 63%, THEN TEST `NEARCLIP=1`
-`bexit` and `worldcull` both read **0** - they need their own flags, `BEXCNT=1`
-and `WCCNT=1`. ☠️ A COUNTER THAT IS NOT COMPILED IN READS 0, AND 0 LOOKS LIKE AN
-ANSWER: I read "staged=0 rast=0 bexit=0 worldcull=0" off a CULLCOUNT-less build
-and nearly filed it as "no faces staged". This is the same failure cobweb just
-fixed in jagemu (`b12182f`: don't report a confident 0.0% for a core that was
-never profiled). Rebuild with:
-
-    EXTRA="HOLEVIS=1 DREWVIS=1 CULLCOUNT=1 BEXCNT=1 WCCNT=1" tools/build_conf.sh gym
-
-then re-run the probe line in §4 and split the 63% into world-plane cull vs
-bottom-exit vs backface/screen reject. **Prime suspect: near-plane whole-face
-rejection** - a known open bug (`project_near_plane_face_pop`: one vertex past
-NEAR drops the whole face; NEAR is 32 in main.c and 64 in the kernel), and the
-kernel has a `NEARCLIP` flag that is in NEITHER flag set. A/B it the same way.
-
-### 4. THE PROBE LINE (same seat, reuse it verbatim)
-    python3 tools/probe_spot.py /tmp/gym.cof /tmp/gym.elf --at 35795,1024,54194,0,0 \
-      --phases "set:g_layaw=0x0000:2,set:g_layaw=0x6000:2,set:g_layaw=0xC000:2" \
-      --raw=staged=0x1C0000 --raw=rastered=0x1C0004 \
-      --raw=bexit=0x1C0010 --raw=worldcull=0x1C0014 --shots /tmp/holevis
-    python3 tools/holevis_scan.py /tmp/holevis/*.png --prefix gym --room 0
+### ⬜ NEXT: GO BACK TO THE TASK LIST - THIS THREAD IS CLOSED
+Nothing in the mansion render needs fixing. Pick from:
+  1. `HOPBOOT=4` on a CORRIDOR seat: does draw distance visibly improve, and what
+     does it cost in fps? (`tools/fps_measure.py`, and A/B on the same seat.)
+  2. The 8 untestable door seats (they resolve into an overlapping room; the
+     ranking needs a fallback).
+  3. `HW_TESTCARD`.
+  4. The hardware boot capture - still blocked on the user's permission.
 
 ### ⚠️ BUILD STATE
 `/tmp/cofout7/` = the SHIPPING payload built this run WITH the pool fix (COF +
