@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 22
+RUN: 23
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,57 +17,53 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**✅ THE B+UP CLIMB MECHANIC WORKS — verified offline with position telemetry,
-no rig.** And it surfaced a NEW bug worth chasing.
+**★★★ COLLISION SAYS FLOOR, THE RENDERER DRAWS NOTHING — build the cross-check.**
 
-Method (reusable for every movement bug — this is the important part):
+Run 22 chased the post-climb blackness and eliminated every cheap explanation:
 
-    make ... SPAWNAT_ROOM=11 SPAWNAT_X=59904 SPAWNAT_Y=7168 SPAWNAT_Z=56832 \
-             SPAWNAT_YAW=-16384 PADTEXT=0        # coords from ledge_census.py --tsv
-    jagemu serve --rom <rom> --instance clm
-    jagemu ctl clm run 1250          # reach the level
-    jagemu ctl clm input up          # then: run 12 ; peek ; repeat
-    jagemu ctl clm input up,b        # request the climb
-    jagemu ctl clm peek 0x001549e4   # g_lay (Y, DOWN is +) ; g_laz 0x001549ec
-                                     # g_lafloor 0x001549e8 ; g_curroom 0x00154970
+* **Not scenery / not above the ceiling.** The sector record's `+2` field is the
+  **CEILING** (undocumented until now; layout is `floor:h, ceiling:h, slantX:b,
+  slantZ:b`, 6 bytes/cell). The destination cell (room 11, cx=11, cz=4) reads
+  **floor 6656 / ceiling 5632 = 1024 units of headroom** — a legitimate standing
+  space, exactly one sector tall.
+* **Not the camera leaving the room.** Camera lands at X 59904, Y 5956, Z 58157;
+  room 11's box is X 48128..60416, Z 54272..60416, and 5956 sits between that
+  cell's ceiling (5632) and floor (6656). Inside on all three axes.
+* **Not the renderer failing.** 81% black at rest, but `maxluma 255` — rock
+  renders correctly ABOVE her. It is specifically the surface she stands on and
+  its surroundings that are missing.
+* **Not room-crossing.** `g_curroom` stays 11 throughout.
 
-Telemetry — this is what "it works" looks like, and it is unambiguous:
+⇒ **A cell the collision data calls walkable has no lit/rendered floor.** Two
+candidates and they need separating: the room mesh has **no polygon** there, or
+it has one that renders **fully dark**. Both would look identical here.
 
-    walk (UP)     Y 7168 constant,  Z +282/step        flat ground
-    UP+B          Y 7168 -> 7100 -> 6964 -> 6861 ->
-                    6725 -> 6656,  floor 7168 -> 6656  SMOOTH, lands on ledge
-    then          Y 6656 constant, Z advancing         walks on the new floor
+### THE INCREMENT TO BUILD (offline, finds every instance at once)
+Cross-check `mrt_sect.bin` against `mrt_geom.bin`: for every cell whose floor is
+a real height (not `0x7FFF` WALL / `0x7FFE` OPENING), is there a floor face in
+the room mesh covering that cell's XZ at that Y? Cells with collision but no
+geometry are black floors the player can stand on — a whole-level list, not one
+anecdote. `tools/ledge_census.py:load()` already parses the sector side; the
+geometry side is the new part.
+★ This is a strong candidate for the user's *"I fall into some blackness then
+the area"* — and it is a DIFFERENT mechanism from the two already refuted
+(portal-hop cap, run 18; camera outside the room, this run).
 
-★ It climbs **only on the button** (Y is flat through the whole UP-only phase),
-which is what the user asked for after "she automatically pulls herself up".
-★ The rise is **gradual over ~6 samples**, not a teleport — the "floats up"
-complaint does not reproduce.
+### Reference — offline movement telemetry (works, no rig)
+    SPAWNAT_ROOM/_X/_Y/_Z/_YAW from `ledge_census.py --tsv`, PADTEXT=0
+    jagemu serve --rom <rom> --instance N ; ctl N run 1250
+    ctl N input up | up,b | release ; ctl N run 12..15 between samples
+    g_lax 0x001549f0  g_lay 0x001549e4  g_laz 0x001549ec
+    g_lafloor 0x001549e8  g_curroom 0x00154970
+    g_camx 0x001548ea  g_camy 0x001548e6  g_camz 0x001548e2
+☠️ Addresses are per-build — re-read them from that arm's own `nm`.
+☠️ `serve` instances expire; peeks start returning no `bytes`. Re-serve and
+re-drive rather than trusting a silent zero.
 
-☠️ **Get the walk distance right.** My first attempt held UP+B for 120 fields
-and carried her **2,525 units** (2.5 sectors) past the target — she climbed
-*a* ledge, not *the* one. Same trap already recorded ("walking 6s carried her
-eight sectors past it"). Use ~12-15 fields per step and sample between.
-
-### ⬜ NEW BUG: after climbing, the world renders 97.2% BLACK
-Final frame is black except Lara. `g_curroom` is still **11** — she did NOT
-cross a portal, so this is not room-crossing. She climbed onto a surface inside
-room 11 and the camera sees nothing.
-
-**Before chasing it, establish whether that surface is REACHABLE IN PLAY.** The
-spawn came from `ledge_census.py`, which lists geometric steps, not places the
-player can get to — climbing onto scenery that a real player can never stand on
-would make this a non-issue. Check the census coordinate against the PS1 footage
-(`res/`, Part 2 = Caves) or walk there from the level start.
-If it IS reachable, this is a strong candidate for the user's *"I fall into some
-blackness then the area"* — and note run 18 already refuted the portal-hop cap
-as the cause of drop-blackness, so this would be a different mechanism
-(camera inside/above geometry, everything backface-culled).
-
-### What to do next
-1. Reachability check above, then chase the black room if it is real.
-2. Task #8 (ivy drop) with the same telemetry method.
-3. Re-run `tools/build_cof.sh` (recipe gained RCLIPFIX in run 20).
-4. **RIG, batched** — `PHRASEDST=1` yes/no, title-music, enemy skins, mansion,
+### Also queued
+1. Task #8 (ivy drop) with the same telemetry.
+2. Re-run `tools/build_cof.sh` (recipe gained RCLIPFIX in run 20).
+3. **RIG, batched** — `PHRASEDST=1` yes/no, title-music, enemy skins, mansion,
    PHRASECLEAR, RCLIPFIX.
 
 ---
