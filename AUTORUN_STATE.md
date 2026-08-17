@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 63
+RUN: 64
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,71 +17,75 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ CENSUS NOW REQUIRES THAT SHE FITS WHERE SHE **STANDS**, TOO
+# ✅ ENEMIES CONFIRMED ON SCREEN IN A SHIPPING-FLAG ROM
 
-TR1's `checkClimb` headroom rule was applied to the climb TARGET (run 48). The
-standing cell was never checked, so the census offered pairs where Lara cannot
-be in the first place - not a ledge, not a wall control, just noise:
+The conformance sweeps only ever proved CLIMBING. Nothing had confirmed that
+**enemies and pickups actually appear** - one of the four things the user's DONE
+list names (enemies+pickups, Jaguar menus, videos+loading, sound).
 
-    CAVES    12 of 290 step-up pairs (4%)   e.g. room 20 floor 4608, ceiling 4352
-    MANSION  15 of 304 step-up pairs (5%)   e.g. room  8 floor  512, ceiling  256
+Teleported next to the Caves room-28 BEAR (`mrt_spawn.h` entity 30, at
+14848,6656,58880) in a ROM built with the shipping flag set:
+**the bear renders, textured and on the floor, beside Lara** - two spots, two
+captures. `/tmp/enemy_bear_ingame.png`.
 
-Those are dropped now (not reclassified - a spot she cannot stand at is not a
-WALL control either). Both levels still yield a balanced 6 per class.
+    tools/probe_spot.py /tmp/conf.cof /tmp/conf.elf \
+        --at 18432,6656,60928,28,-16384 --keys b --frames 3 --shots DIR
 
-★★★★★ **HONEST SCOPE, recorded because it would be easy to claim otherwise:**
-this does NOT explain the room 15 hole that cost runs 50-55. That spot has
-**4608** of standing headroom and is perfectly reachable - the missing riser
-there is real. The rule is worth having on its own merits; it is not a
-retro-justification for that hunt.
+★ `mrt_spawn.h` is the entity index (60 entries, TR1 order preserved) with world
+x/y/z per entity, so ANY entity can be inspected this way: wolves 26/27 in room
+22, bats 1-3 in room 3, MEDIKIT_SMALL 29 in room 28.
+☠️ PICKUPS ARE NOT CONFIRMED. A small yellow object appears at the frame edge in
+one capture and I am NOT calling that a medikit - isolate one properly by
+standing next to entity 29 and comparing against `MRT_ENT_MEDIKIT_SMALL`.
 
-### ✅ VERIFIED NON-REGRESSIVE - both levels re-swept on clean ROMs
-    CAVES    LEDGES 24/24 climbed   WALLS 6/6 refused   0 black outliers
-             render baseline exactly 1.1% / maxluma 217
-    MANSION  LEDGES 24/24 climbed   WALLS 6/6 refused   6 black outliers
-             (rooms 15/16/17 - the known open-sky / missing-riser views)
+### ⬜ ALSO FOUND: the release drive wedges, and there is an unexplained LOADING
+`tools/release_play.py --play` walks the RELEASE ROM forward from the level
+start. She IS controllable (the first frames show her moving through the opening
+cave), but:
+  * she stops moving after ~4 samples - walked into something; the drive needs
+    turns, not just UP, to explore;
+  * **a "LOADING..." screen with a progress bar appears mid-walk** and she comes
+    back in a visibly different area. Unexplained. It may be normal (a level
+    hand-off) or it may be a reload after a death/fall. ⬜ Worth one run: drive
+    again with turns and watch whether LOADING recurs at the same place.
 
-### ⬜ NEXT: THE OFFLINE WORK IS DONE. WHAT REMAINS NEEDS THE USER OR THE RIG.
-Say this plainly rather than inventing another sweep:
-  1. **The release is CURRENT and verified into gameplay on BOTH levels**
-     (`/tmp/cofout5`, run 60-61). It carries every fix from runs 46-49. This is
-     what he would flash. The run-25/50 direction questions are still
-     unanswered - "is this the release?" now has a real ROM behind it.
-  2. **Driven mechanics tests** (`project_caves_mechanics_audit`: r17's dead
-     doors and the rest) need `tools/drive.sh`, the rig, and a human at the TV.
-     ☠️ Do NOT claim the rig - the capture card is unplugged.
-  3. If another offline increment is wanted, the remaining candidates are small
-     and none is a known defect. Prefer re-verifying the release over inventing
-     work: rebuild, drive both levels, look at the frames.
+### ⬜ NEXT
+  1. **Finish the feature audit the same way** - it is cheap and it is the
+     user's own DONE list. Pickups (entity 29), wolves (26/27), bats (1-3).
+     One probe each, look at the frame.
+  2. **The release is CURRENT and verified into gameplay on both levels**
+     (`/tmp/cofout5`). The run-25/50 direction questions are still unanswered.
+  3. Driven mechanics tests need the rig and a human at the TV. ☠️ Do NOT claim
+     the rig - the capture card is unplugged.
 
-### ★ CONTRIBUTED TO `jaguar-shared` THIS RUN
-`techniques/driving-a-menu-in-jagemu.md` - `jagemu video` has no input so a
-filmstrip can never pass a title screen; a spinning menu swallows presses (~200
-fields each, capture after every one); and `illegal=0` is NOT "it rendered".
-All three cost this project a pass each.
+### ☠️ NOTE: g_curroom disagreed with the entity's room again
+Entity 30 is listed in room 28; standing at its coordinates the game reports
+`g_curroom=25`. Same overlapping-rooms behaviour seen at the gym room 8/12/13
+spots - the floor search and the entity table disagree about which room owns a
+point. It did not stop the bear rendering, so it is noted, not chased.
 
 ### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (runs 50-59): room 15 = MISSING GEOMETRY (real, reachable),
-    room 0 = LARGELY OPEN SKY (28/72 cells have no ceiling; rooms 13/17 are 6-7
-    PORTAL HOPS away, so the run-56 "fix" drew through walls at 6.3x cycles).
-    `HOPDEPTH`/`ALLVIS` stay OFF; shipping verified byte-identical at HOPDEPTH=3.
+    room 0 = LARGELY OPEN SKY. `HOPDEPTH`/`ALLVIS` stay OFF.
 
 ### ★ INSTRUMENTS (all off in shipping builds)
-    release_play.py [--gym]       drive the RELEASE into either level
-    sightline.py                  what geometry is NEARBY - not what is VISIBLE
-    room_cycles.py --prefix=gym   per-room kernel cycles (fill NOT included)
-    DREWVIS=1 / HOPDEPTH=N        room bitmasks / portal depth
-    CULLCOUNT=1 BEXCNT=1 WCCNT=1  $1C0000 staged  $1C0004 rastered
-                                  $1C0010 bexit   $1C0014 worldcull
-    probe_spot.py --raw= / --set= ; build_conf.sh EXTRA= / SKIP=
+    release_play.py [--gym|--play]  drive the RELEASE into either level / walk it
+    probe_spot.py --raw= / --set=   per-spot telemetry; teleport anywhere
+    sightline.py                    what geometry is NEARBY - not what is VISIBLE
+    room_cycles.py --prefix=gym     per-room kernel cycles (fill NOT included)
+    DREWVIS=1 / HOPDEPTH=N ; CULLCOUNT=1 BEXCNT=1 WCCNT=1
+                                    $1C0000 staged  $1C0004 rastered
+                                    $1C0010 bexit   $1C0014 worldcull
+    build_conf.sh EXTRA= / SKIP=
 ☠️ Counters ACCUMULATE - take DELTAS.
 ☠️ NOEMPTYY=1 and NOSDCULL=1 BUILD AND DO NOT RENDER (illegal=0 either way).
-☠️ FPS CANNOT be measured offline: capture card unplugged, and every 68k-side
-   counter runs at the 30 Hz LOGIC tick, not the render rate.
+☠️ FPS CANNOT be measured offline (capture card unplugged; 68k counters run at
+   the 30 Hz LOGIC tick).
 
 ### ✅ WHAT IS DONE
     climbing   CAVES   LEDGES 24/24  WALLS 6/6 refused  0 black outliers
                MANSION LEDGES 24/24  WALLS 6/6 refused
+    enemies    BEAR renders in-game on shipping flags
     release    CURRENT, both levels verified into gameplay -> /tmp/cofout5
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)

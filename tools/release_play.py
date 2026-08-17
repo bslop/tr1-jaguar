@@ -64,6 +64,22 @@ try:
     # ☠️ "Start Game" runs the SNOW CUTSCENE before the level. The first pass
     # captured only that and looked like the game had not started. Run long
     # enough to get through it.
+    if "--play" in sys.argv:
+        # ☠️ VERIFY THE HEADLINE FEATURES IN THE SHIPPING ROM, not in a test
+        # build. The conformance sweeps prove CLIMBING; nothing has ever
+        # confirmed that ENEMIES and PICKUPS appear in the release the user
+        # would flash. Walk her forward through the opening caves and film it.
+        ctl("run", 6000, timeout=3600)          # through the cutscene into play
+        ctl("frame", os.path.join(OUT, "p_00.png"))
+        for i in range(14):
+            ctl("input", "up")
+            ctl("run", 120, timeout=1800)
+            ctl("release")
+            ctl("run", 30)
+            ctl("frame", os.path.join(OUT, "p_%02d.png" % (i + 1)))
+            print("  walked %d" % (i + 1), flush=True)
+        raise SystemExit
+
     for i, n in enumerate((2500, 2500, 2500, 2500)):
         ctl("run", n, timeout=1800)
         ctl("frame", os.path.join(OUT, "b_%d.png" % i))
