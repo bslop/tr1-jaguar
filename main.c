@@ -319,6 +319,33 @@ static int room_ceil_at(const uint8_t *sp, int wx, int wz, int *ceilY)
     *ceilY = (int16_t)(((uint16_t)e[2]<<8)|e[3]);
     return 1;
 }
+
+/* TR1's OTHER climb condition, and the one this port never had.
+ * Lara::checkClimb, OpenLara src/lara.h:2546:
+ *
+ *     canClimb = (floor - ceiling >= LARA_HEIGHT) && (h >= 256);
+ *
+ * It is not enough for the step to be the right HEIGHT - Lara has to FIT on top
+ * of it. Every ceiling test in this file asked a different and much weaker
+ * question: "is the ledge below the ceiling ABOVE HER" (rsect[g_curroom] at
+ * g_lax/g_laz), which says nothing about the space over the LEDGE.
+ *
+ * Measured, Caves room 22: one ceiling plane at 4352 sits over ledge tops at
+ * 4608 and 4864, so those have 256 and 512 of clearance against her 762 - and
+ * she climbed onto all of them, into the ceiling. Lara's Home is worse: 105 of
+ * 304 step-up pairs are too short to stand in.
+ *
+ * Uses g_floorroom, so call it straight after the room_floor_mr that produced
+ * `lf`: that is the room the floor came from, and the ceiling must be read from
+ * the same room or it answers about a different space.
+ * No ceiling data = allow, so this can only REFUSE, never invent a climb. */
+#define LARA_FIT_HEIGHT 762      /* OpenLara src/lara.h:33 LARA_HEIGHT */
+static int climb_fits(const uint8_t **rsect, int px, int pz, int lf)
+{
+    int cy;
+    if (!room_ceil_at(rsect[g_floorroom], px, pz, &cy)) return 1;
+    return (lf - cy) >= LARA_FIT_HEIGHT;
+}
 /* ---- PORTAL-WINDOW CLIPPING: project a portal's 4 verts to a screen rect
    with EXACTLY the kernel's transform (yaw-rot -> pitch-rot -> NEAR cull ->
    FOCAL project). Neighbour rooms then render clipped to the doorway rect
@@ -8391,6 +8418,7 @@ bootvid_entry:
                       (rise = g_lafloor - lf) > LARA_STEPUP && rise <= LARA_CLIMB &&
                       (!room_ceil_at(rsect[g_curroom], g_lax, g_laz, &cy0) ||
                        lf >= cy0) &&
+                       climb_fits(rsect, px, pz, lf) &&
                       room_reachable(g_curroom, g_floorroom)) {
                       g_layaw = ALIGN_WALL(g_layaw);   /* turn square to the wall */
                       g_vault = 1; g_vaulty = lf; g_vaultx = px; g_vaultz = pz;
@@ -8440,6 +8468,7 @@ bootvid_entry:
                       rise <= LARA_JUMPGRAB &&
                       (!room_ceil_at(rsect[g_curroom], g_lax, g_laz, &cy2) ||
                        lf >= cy2) &&
+                       climb_fits(rsect, px, pz, lf) &&
                       room_reachable(g_curroom, g_floorroom)) {
                       g_layaw = ALIGN_WALL(g_layaw);   /* square to the wall */
                       g_autoj = 1;                     /* arm the up-jump */
@@ -8605,6 +8634,7 @@ bootvid_entry:
                         (g_lafloor - lf) > LARA_STEPUP &&
                         (!room_ceil_at(rsect[g_curroom], g_lax, g_laz, &cy1) ||
                          lf >= cy1) &&
+                         climb_fits(rsect, px, pz, lf) &&
                         room_reachable(g_curroom, g_floorroom)) {
                         g_layaw = ALIGN_WALL(g_layaw);   /* turn square to the wall */
                         /* TR1 HANGS here rather than vaulting straight up: she

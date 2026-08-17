@@ -53,6 +53,10 @@ def classify(rise):
 
 # forward vector is (SIN(yaw), COS(yaw)) - see the ledge probe in main.c - so
 # yaw 0 faces +Z and 16384 (90 degrees) faces +X.
+# OpenLara src/lara.h:33. A climb target must clear this much between its floor
+# and its ceiling or Lara does not fit and TR1 will not climb it.
+LARA_HEIGHT = 762
+
 DIRS = [(0, 1, 0, "+Z"), (1, 0, 16384, "+X"),
         (0, -1, -32768, "-Z"), (-1, 0, -16384, "-X")]
 
@@ -84,7 +88,12 @@ def load(prefix):
                 # step - room 0 alone is 41/120 sloped and produced test spots
                 # that were open hillside, not ledges.
                 sx, sz = struct.unpack_from(">bb", sect, base + 4)
-                col.append((fy & 0xFFFF if fy < 0 else fy, sx, sz))
+                # e[2]/e[3] are the CEILING (main.c room_ceil_at reads exactly
+                # there). Needed for TR1's headroom rule below - without it this
+                # tool happily reports the top of a wall in a crawlspace as a
+                # climbable ledge.
+                cy = struct.unpack_from(">h", sect, base + 2)[0]
+                col.append((fy & 0xFFFF if fy < 0 else fy, sx, sz, cy))
             cells.append(col)
         rooms.append(dict(r=r, xS=xS, zS=zS, ix=ix, iz=iz, cells=cells))
     return rooms
@@ -96,7 +105,7 @@ def census(rooms):
         xS, zS, cells = rm["xS"], rm["zS"], rm["cells"]
         for cx in range(xS):
             for cz in range(zS):
-                here, hsx, hsz = cells[cx][cz]
+                here, hsx, hsz, hcy = cells[cx][cz]
                 if here in (WALL, OPEN) or hsx or hsz:
                     continue                      # sloped: no single height
                 hf = struct.unpack(">h", struct.pack(">H", here))[0]
@@ -104,14 +113,32 @@ def census(rooms):
                     nx, nz = cx + dx, cz + dz
                     if not (0 <= nx < xS and 0 <= nz < zS):
                         continue
-                    there, tsx, tsz = cells[nx][nz]
+                    there, tsx, tsz, tcy = cells[nx][nz]
                     if there in (WALL, OPEN) or tsx or tsz:
                         continue                  # sloped ledge top: skip
                     nf = struct.unpack(">h", struct.pack(">H", there))[0]
                     rise = hf - nf                 # +Y is DOWN: positive = step UP
                     if rise <= 0:
                         continue
-                    out.append(dict(room=rm["r"], rise=rise, cls=classify(rise),
+                    # ☠️☠️ TR1 REFUSES A CLIMB WITH NO HEADROOM AT THE TOP.
+                    # lara.h:2546, Lara::checkClimb:
+                    #     canClimb = (floor - ceiling >= LARA_HEIGHT) && (h >= 256)
+                    # This tool compared FLOORS only, so it emitted the tops of
+                    # walls inside crawlspaces as climbable ledges. Lara's Home
+                    # room 8 is the case that exposed it: target floor 256 under
+                    # a ceiling at 0 is 256 of headroom - a third of her height -
+                    # and it was reported as a JUMPGRAB the engine then "failed".
+                    # The engine was right and the census was wrong; those spots
+                    # cost two runs of hunting a bug that was not there.
+                    # ...but do NOT drop the pair: reclassify it as WALL. An
+                    # unclimbable step is exactly what a WALL spot is, and WALL
+                    # spots are the NEGATIVE CONTROL - they are how the sweep
+                    # proves the engine REFUSES what it should. Dropping them
+                    # instead cost the Caves its only control (25 spots -> 24,
+                    # "0 NO-CLIMB" with nothing left that ought to fail).
+                    noroom = (nf - tcy) < LARA_HEIGHT
+                    out.append(dict(room=rm["r"], rise=rise,
+                                    cls="WALL" if noroom else classify(rise),
                                     x=rm["ix"] + cx * CELL + CELL // 2,
                                     z=rm["iz"] + cz * CELL + CELL // 2,
                                     y=hf, yaw=yaw, face=label))

@@ -342,11 +342,29 @@ def main():
                ("%.1f" % r["black"]) if r["black"] >= 0 else "-", r["verdict"]))
     json.dump(rows, open(os.path.join(outdir, "results.json"), "w"), indent=1)
 
-    ok = sum(1 for r in rows if r["res"]["verdict"] == "CLIMBED")
-    print("\n%d/%d CLIMBED   %d PARTIAL   %d NO-CLIMB" %
-          (ok, len(rows),
-           sum(1 for r in rows if r["res"]["verdict"] == "PARTIAL"),
-           sum(1 for r in rows if r["res"]["verdict"] == "NO-CLIMB")))
+    # ☠️☠️ SCORE BY CLASS. "CLIMBED" is the right answer for a ledge and the
+    # WRONG answer for a WALL - those spots are the NEGATIVE CONTROL, and a
+    # summary that counts them as passes is congratulating the engine for
+    # climbing what it must refuse. This went unnoticed while WALL only ever
+    # meant a 2048/2816 step nothing could climb; once ledge_census started
+    # classing no-headroom pairs as WALL (TR1 refuses a target Lara does not
+    # fit in), the engine climbed several of them and the old summary read
+    # 29/30 "CLIMBED" - its best score yet, describing a level that had just
+    # got MORE wrong.
+    climbable = [r for r in rows if r["spot"]["cls"] != "WALL"]
+    walls = [r for r in rows if r["spot"]["cls"] == "WALL"]
+    ok = sum(1 for r in climbable if r["res"]["verdict"] == "CLIMBED")
+    refused = sum(1 for r in walls if r["res"]["verdict"] == "NO-CLIMB")
+    print("\nLEDGES  %d/%d climbed   %d PARTIAL   %d failed to climb" %
+          (ok, len(climbable),
+           sum(1 for r in climbable if r["res"]["verdict"] == "PARTIAL"),
+           sum(1 for r in climbable if r["res"]["verdict"] == "NO-CLIMB")))
+    print("WALLS   %d/%d correctly refused   %d CLIMBED THAT SHOULD NOT BE" %
+          (refused, len(walls), len(walls) - refused))
+    for r in walls:
+        if r["res"]["verdict"] != "NO-CLIMB":
+            print("   ☠️ room %-3d rise %-5d rose %s"
+                  % (r["spot"]["room"], r["spot"]["rise"], r["res"]["rose"]))
     # ☠️ USE THE LEVEL'S OWN BASELINE. This used to hardcode 20% "vs the 17.4%
     # ROOMTOUR baseline" - a CAVES number. Lara's Home has rooms reading 36.3%
     # black standing at their CENTRES, so that threshold reported normal rooms

@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 48
+RUN: 49
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,89 +17,84 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ THE LEDGE PROBE COULD NOT SEE PAST 848 UNITS. FIXED, +1 SPOT.
+# ✅ SHE COULD CLIMB INTO SPACES SHE DOES NOT FIT IN. TR1 CANNOT.
 
-    CAVES    24/25 CLIMBED   0 PARTIAL   1 NO-CLIMB   (the 1 is a 2048 WALL)
-    MANSION  21/30 CLIMBED   0 PARTIAL   9 NO-CLIMB   (6 of the 9 are WALLs)
+                LEDGES climbed        WALLS correctly refused
+    CAVES       24/24  (0 PARTIAL)    4/6   (was 1/6)
+    MANSION     24/24  (0 PARTIAL)    2/6   (was 0/6 - the class did not exist)
 
-Run 46 left "4 genuine mansion failures, clustered in room 8." Hand-driving one
-with a new tool (`tools/probe_spot.py`, prints every gate on the climb path per
-step) showed she walks at the ledge, **falls 768 through it**, ends up in a
-different room, and hits a wall she correctly refuses. So the arm never fired.
+Every genuine ledge in both levels now climbs. What is left is one named defect,
+below.
 
-### ★★★★★ THE ROOT CAUSE: A WINDOW SIZED FOR THE WRONG QUESTION
-`room_floor_mr` discards candidate floors more than `FLR_UPWIN_LEDGE` = **848**
-above the caller. That is correct for the AIRBORNE GRAB (hands reach 720+slack).
-But the **AUTO JUMP-REACH ARM sets the same flag** while looking for ledges up to
-`LARA_JUMPGRAB` = 1920 — so every ledge above 848 was thrown away *before it was
-scored*, and could never arm.
+### ★★★★★ TR1 HAS A SECOND CLIMB CONDITION AND THIS PORT NEVER HAD IT
+`Lara::checkClimb`, OpenLara `src/lara.h:2546`:
 
-★★★★★ **It worked in the Caves by luck.** Where only ONE room covers the column,
-every candidate fails the window, `nfound` stays 0, and the search falls back to
-"lowest floor wins" — which IS the ledge, being the only candidate. Lara's Home
-room 8 has room 12 UNDERNEATH it (verified in the sector data: rooms 7, 8 and 12
-all cover x=49664 z=40448 at floors 0 / 1280 / 2560). Room 12's floor passes the
-window, so the fallback never runs and the ledge stays invisible.
-**A bug that hides wherever the geometry is simple is the kind that ships.**
+    canClimb = (floor - ceiling >= LARA_HEIGHT) && (h >= 256);
 
-Fixed in three parts, both levels re-swept:
-  1. `g_flr_upwin` — a caller-settable up-window; 0 keeps the mode default.
-  2. **Ledge mode now prefers the floor ABOVE her**, not the nearest. "Plain
-     closest" picked room 12's floor 768 BELOW over the ledge 1024 above, so the
-     probe reported a drop where there is a block — and she walked into the
-     block's column and fell through it. A vault/grab search asks "what can I get
-     onto"; a floor below is the absence of an answer, not an answer. Ground mode
-     keeps its own preference or walking off a crate snaps to the room above.
-  3. The arm probe sets the window to `LARA_JUMPGRAB + 128`.
+The step must be the right HEIGHT **and Lara must fit on top of it**. All four
+ceiling tests in main.c asked a weaker question — "is the ledge below the ceiling
+*above her*", `rsect[g_curroom]` at `g_lax/g_laz` — which says nothing about the
+space over the LEDGE.
 
-Mansion 20 -> **21** (the room 1 CLIMB2 recovered), Caves unchanged at 24/25,
-render baseline still exactly 1.1% / maxluma 217. Nothing regressed.
+Measured, Caves room 22: one ceiling plane at 4352 sits over ledge tops at 4608
+and 4864, giving **256 and 512 of clearance against her 762** — and she climbed
+onto all of them, into the ceiling. Lara's Home is worse: **105 of 304** step-up
+pairs are too short to stand in.
 
-### ⬜ NEXT: THE 3 REMAINING ROOM-8 SPOTS — AND THERE IS A NAMED SUSPECT
-Two JUMPGRAB 1024 and one CLIMB3 768, all at x=**49664** (the four room-8 spots
-that DO climb are at x=46592). The probe showed something the fix does not
-address: seated in room 8 standing on room 8's floor, **`g_curroom` reads 12**.
-Room resolution, not the floor search, put her there.
+Fixed with `climb_fits()` (main.c:343), wired into all three climb entries
+(vault, jump-reach arm, airborne grab). It reads the ceiling from `g_floorroom`
+— the room the floor actually came from — so it answers about the same space,
+and no ceiling data means ALLOW, so it can only ever refuse, never invent a
+climb. Caves WALL refusals 1/6 -> 4/6 with LEDGES unchanged at 24/24; render
+baseline still exactly 1.1% / maxluma 217.
 
-That matters because `room_floor_mr` SKIPS rooms up front:
+### ⬜ NEXT: THE 256 AUTO-STEP IGNORES HEADROOM (all remaining failures)
+Both levels' leftovers are `rise 256` WALKUPs — Caves rooms 3 and 19, mansion
+room 1 x2 (+2 more). A 256 step is taken by the WALK floor-follow, which never
+goes through vault/arm/grab, so `climb_fits` is not consulted and she walks up
+into a 256-high gap. Gating the walk's floor-follow on headroom is the fix, and
+it is RISKIER than this run's change because it touches ordinary walking on every
+frame, not three climb entries. Do it behind an A/B and re-sweep both levels.
+☠️ Note TR1 allows `h >= 256` steps *with* headroom - do not simply ban 256s.
 
-    if (g_flr_limit ? !room_reachable(g_curroom_fwd(), r)
-                    : !room_within3(g_curroom_fwd(), r)) continue;
+### ☠️☠️ THE SWEEP WAS SCORING ITS OWN NEGATIVE CONTROL AS A PASS
+`conformance.py` counted any "CLIMBED" as good. For a WALL spot climbing is the
+FAILURE — they are the control that proves the engine refuses. It went unnoticed
+while WALL only meant a 2048/2816 step nothing could climb. The moment
+`ledge_census` began classing no-headroom pairs as WALL, the engine climbed five
+of six and the summary printed **29/30 CLIMBED — its best score ever, describing
+a level that had just got more wrong.** Now scored by class:
+`LEDGES n/n climbed` and `WALLS n/n correctly refused`, listing each wall she
+climbed. ★ A metric that cannot go DOWN when the thing gets worse is not a metric.
 
-If she is registered in room 12 and room 8 is not reachable/within-3 of it, then
-**room 8 is never a candidate at all** and no window or preference can help. Test
-that first: probe the spot and print `g_floorroom` alongside `g_curroom`, and
-check `room_reachable(12, 8)`. ☠️ Do not "fix" the window again — it is not the
-window this time.
+### ★ `ledge_census.py` now applies TR1's headroom rule
+A pair whose target has < 762 of clearance is emitted as **WALL** rather than
+dropped — an unclimbable step is exactly what a WALL spot is, and dropping them
+cost the Caves its only control (25 spots -> 24, "0 NO-CLIMB" with nothing left
+that could fail). Both levels now carry a balanced 6 per class.
+☠️ I nearly reverted this: 105/304 mansion pairs being "too short" looked like a
+misread field. It is not — the ceiling distribution across both levels is 1280 to
+5632, i.e. real room heights, and Caves room 22's ledges genuinely sit under one
+low plane. **Check the data's distribution before dismissing a result as a bug in
+your reading of it.**
 
 ### ★ `tools/probe_spot.py` — hand-drive ONE spot, see every gate
     tools/probe_spot.py <rom> <elf> --at X,Y,Z,ROOM,YAW [--keys up,b] [--shots D]
-Prints per step: g_gunst, feet Y, floor, room, g_fwdblk, g_autoj, g_autojv,
-g_jumped, g_lavy, g_hang, g_vault, x/z. A failure names the FIRST gate that did
-not open, which is what separates a collision bug from a harness bug in one run
-instead of three. It is how both of this run's findings were made.
+Per step: g_gunst, feet Y, floor, room, g_floorroom, g_fwdblk, g_autoj, g_autojv,
+g_jumped, g_lavy, g_hang, g_vault, x/z. ☠️ Frames come out 320x**80** (VRESN=80) —
+upscale 3x vertically before judging one, or the room is unreadable.
 
-### ☠️ NINTH INSTRUMENT NOTE: DRIVE UP+ACTION, NOT UP ALONE
-Run 46 changed the JUMPGRAB drive to hold UP by itself and it passed all of the
-Caves, which made it look right. It is not: the arm gate is
-`(pad & PAD_UP) && g_fwdblk && (g_gunst == GST_OFF || (pad & ACT_ACTION))`, so UP
-alone only works while her hands are EMPTY — and TR1's own rule is that she never
-climbs without ACTION. The Caves have no guns, so it happened to work there and
-would have broken the moment a build armed her. Now drives `up,b`. (Measured: it
-changed no verdict either way, since `g_gunst` was already 0. Correct by rule,
-not by luck.)
+### ✅ CLOSED THIS RUN: run 47's suspect was WRONG
+Run 47 predicted room 8's failures were `room_floor_mr` skipping unreachable
+rooms. Probing showed `g_floorroom` reaching 8 while `g_curroom` read 12, so room
+8 WAS a candidate — the reachability filter was never the problem. Those spots
+were the crawlspace above, and the census should never have offered them.
 
 ### ⬜ ALSO STILL OPEN
-  * Mansion black outliers are REAL (baseline re-measured at 36.8%, essentially
-    the old 36.3%): room 8 CLIMB3 reads 51.1 / 38.7 / 37.4% *while climbing*,
-    room 0 WALL reads 77.5% twice. Same room as the climb failures.
-  * Caves is CLEAN: 0 over baseline, 0 PARTIAL, walls refuse.
-
-### ✅ RELEASE READY (run 46, unchanged)
-`tools/build_cof.sh` ran end to end: 7 files, `OPENLARA.COF` 1,538,068 B, output
-in `/tmp/cofout4`. Booted in jagemu with `--sd` and FILMED: Core Design logo ->
-full FMV intro -> TOMB RAIDER title with a working ring menu. ☠️ That ROM predates
-this run's collision fix and run 46's jump fix — **rebuild before shipping**.
+  * Mansion black outliers: rooms 15/16/17 CLIMB3 at ~45% and room 0 WALL at
+    77.8%, against a 36.8% baseline. Not yet investigated.
+  * ☠️ `/tmp/cofout4` (the filmed release) predates runs 46-48. **Rebuild before
+    shipping** — it has neither the jump-reach solve nor either collision fix.
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,
