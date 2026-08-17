@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 79
+RUN: 80
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,76 +17,78 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ THE POOL WORKS. SWIM ENTRY, ROOM 18, WATER SURFACE, AND IT RENDERS.
+# ✅ CAVES 11->12 IS A CLOSED DOOR WITH ITS SWITCH BESIDE IT. NOT A BUG.
 
-Run 73 worked out that gym room 18 is the POOL - a water volume under a surface,
-reached through a VERTICAL portal, not a doorway. Verified this run by walking her
-off room 14's edge into it:
+The one genuinely odd door from run 77 is explained. She halts at exactly
+x=49441 with `g_fwdblk=1`, and everything else about the seam is fine:
 
-    tools/probe_spot.py /tmp/gym.cof /tmp/gym.elf --at 39424,3328,57856,14,0 \
-        --keys up --frames 10 --raw=swim=<g_swim> --raw=watery=<g_watery>
+    portal plane x=49151, i.e. ONE UNIT before room 11's cell boundary at 49152
+    room 11 cell 1 (49152..50176) floor 7680  <- she stands here
+    room 11 cell 0 (48128..49152) OPEN        <- portal_open did its job
+    room 12 beyond the plane      floor 7680  <- SAME LEVEL, no step
+    g_curroom 11, g_floorroom 11, floors level, cells open
 
-    g_swim = 1, g_curroom = **18**, g_watery = 3232, y settles at 3168..3232
-    (the surface), and she swims forward: z 57940 -> 58584
+So it is not geometry. The remaining gate in the move path is
+`ent_door_blocks`, and the entity table says why:
 
-And it LOOKS right: `/tmp/pool_verified.png` - her head at the waterline, tiled
-pool walls, the frieze and the skylight above. 4.2% black, maxluma 217.
-★ So the vertical portal works for water entry even though `portal_open` never
-touches it - water needs no horizontal opening, which is exactly why the
-"rooms with zero openings" metric cried wolf about room 18 in run 73.
+    entity  9  DOOR_4  room 11  (49664, 7680, 57856)
+    entity 10  SWITCH  room 11  (49664, 7680, 57856)
 
-### ⬜ NEXT
-  1. **The 9 unproven doors** (CAVES 11->12, 25->22, 25->28, 37->34; MANSION 2->5,
-     2->6, 2->7, 10->8, 11->8). Signatures and the planned attack are below - all
-     nine look like the harness picking a stand-off against geometry, but
-     **CAVES 11->12 is the one worth a real look**: she stops 290 units short of a
-     seam whose floors are the SAME level (both 7680), which nothing explains yet.
-  2. **A test-card ROM (`HW_TESTCARD`)** - 68000 writes colour bars straight into
-     the backbuffer, no GPU, no Blitter. It cannot be black if the video path
-     works, so it splits "our renderer" from "the video chain" in one boot.
-     bubsy3d's idea; every project should carry one. We do not have it.
-  3. Climb out of the pool (she is IN it; does UP against the edge get her out?).
+**A closed door with its switch in the same cell** - correct TR1 behaviour, and
+`ent_door_blocks` refuses the move until `g_dooff[e] >= DOOR_ANG_CLEAR`.
+★ That is 5 of the 9 "unproven" doors explained as harness or as correct game
+behaviour. `door_walk.py` should skip or flag door-guarded portals rather than
+scoring them - a closed door is not a dead doorway.
+
+### ⬜ NEXT: THROW THE SWITCH, THEN CROSS - needs a MULTI-PHASE drive
+Holding `up,b` for the whole walk does NOT work: **she never moved at all**
+(x pinned at 50169, `fwdblk` eventually 1). ACTION held while walking is not the
+same as ACTION pressed at the switch. The drive has to be phased:
+    walk UP to the switch cell -> release -> press B alone -> release -> walk UP
+`probe_spot.py` has one fixed key set for the whole run, so this needs either a
+`--phases "up:6,b:2,up:8"` option or a small purpose-built driver. Then assert
+`g_dooff[9]` rises and `g_curroom` becomes 12. That also tests the switch+door
+mechanic end to end in the shipping build, which nothing has done.
+
+### ★ FROM jag_viewpoint (peer, 2026-08-17) - two things that change our procedure
+  1. **jag_resident hit the OPPOSITE conclusion from the same black-capture
+     symptom**: a HUNG BOARD that `jagpower cycle` fully recovered. So a black
+     capture is not automatically "the video chain". RESOURCES.md now carries an
+     ORDERED procedure, and it is the right one to follow:
+         (a) `jagpower cycle` first - seconds, and decisive IF the GD menu
+             returns... but ☠️ for us "decisive" needs a working capture, which we
+             do not have, so for openlara it is still the TV;
+         (b) then a test-card ROM;
+         (c) then ask the human.
+  2. They verified my jag_gd.sh correction line by line and fixed PROTOCOL.md,
+     which had carried the wrong "self-power-cycles" warning long enough to be
+     copied into their own docs. ★ **A wrong warning in the authoritative file
+     becomes several wrong warnings** - the table-vs-prose lesson in the other
+     direction. What was wrong was "unattended", not "dangerous": mains IS shared,
+     so any explicit cycle resets whatever else is running.
 
 ### ⏳ STILL AWAITING THE USER: WHAT DOES THE TV SHOW?
 `/tmp/cofout7/OPENLARA.COF` has run on the real Jaguar since run 75 (`OK!`).
-☠️ **No capture can answer this** - the Cam Link is present but captures BLACK even
-for a 68k-only test card (bubsy3d, `jaguar-shared/hw/RESOURCES.md`), so the fault
-is upstream cabling. Only the TV.
-    title ring -> front-end works on silicon; press A twice and walk
-    black      -> A10 lottery; `tools/roll_walk.sh <arm> 0 136 272 408 544 816`
-    error      -> a real fault (roll_walk scores an error screen as "LIT")
+A power cycle would only tell us something if capture worked; it does not.
 
-### ★ ROSTER IS FIVE (2026-08-17): quake · openlara · resident · viewpoint · rr
-`jag_viewpoint` admitted, `jag_bubsy3d` removed. ☠️ **A roster change recorded
-only in PROSE is a roster change that did not happen** - I updated RESOURCES.md
-and left PROTOCOL.md's TABLE stale; viewpoint caught it. The table is what a new
-session reads before touching the rig. Also: removing a project does NOT release
-its lease, and **`jaghw` is re-entrant via `JAGHW_HELD`**, which is what lets a
-loop wrap cycle+settle+upload+capture in ONE acquisition while still calling
-`jag_gd.sh` inside it.
-⚠️ `sonic2-jaguar-port-cleanup` is running and is NOT on the roster - surfaced to
-the user; do not edit the roster on its behalf.
+### ⬜ ALSO OPEN
+  * A test-card ROM (`HW_TESTCARD`): 68000 writes colour bars into the backbuffer,
+    no GPU, no Blitter. Cannot be black if the video path works.
+  * The other 8 unproven doors (signatures in run 77's notes; most are the
+    harness picking a stand-off against geometry).
+  * Climb OUT of the pool (swimming in works - run 78).
 
-### ✅ DOORS, both levels (run 77)
-    CAVES    58 of 62 testable, **50 crossed**, 4 unproven, 4 untestable
-    MANSION  18 of 32 testable, **9 crossed**, 5 unproven, 4 untestable
-☠️ "FAIL" means UNPROVEN: a straight-line walk only tests a door directly ahead.
-☠️ The step-up filter must read the **DESTINATION** room past the seam - the
-source reads OPEN there (portal_open wrote it), so a source-side lookup silently
-never fires. Fixing that took the Caves 45 -> 50.
+### ★ ROSTER IS FIVE: quake · openlara · resident · viewpoint · rr
+⚠️ `sonic2-jaguar-port-cleanup` is running and is NOT on the roster (user informed).
+☠️ A roster change in PROSE only did not happen - update PROTOCOL.md's TABLE too.
+★ `jaghw` is re-entrant via `JAGHW_HELD` - one outer acquisition can wrap a whole
+cycle+upload+capture sequence and still call `jag_gd.sh` inside it.
 
 ### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (50-59) · pickups (65) · mid-walk LOADING (67) ·
     caves black wedges (69, OPEN SKY) · caves room crossing (72, FIXED) ·
-    gym room 18 (73/78 - the POOL, and it WORKS) · 7 "dead doors" (74, balconies)
-
-### ★ INSTRUMENTS
-    door_walk.py · portal_open.py [--patch|--audit] · release_play.py --tour
-    probe_spot.py --raw= / --set= · sightline.py · entity_check.py
-    jag_gd.sh upload|status|power · room_cycles.py
-    HOLEVIS=1 / DREWVIS=1 / HOPDEPTH=N / CULLCOUNT=1 BEXCNT=1 WCCNT=1
-☠️ SYMBOLS ARE PER-BUILD.  ☠️ REBUILD THE ROM AFTER AN ASSET PATCH.
-☠️ FPS cannot be measured offline; hardware capture is dead upstream.
+    gym room 18 (73/78, the POOL - and swimming WORKS) ·
+    7 "dead doors" (74, balconies) · caves 11->12 (79, a closed door)
 
 ### ✅ WHAT IS DONE
     climbing   CAVES 24/24 ledges, 6/6 walls · MANSION 24/24, 6/6
