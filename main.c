@@ -8335,7 +8335,7 @@ bootvid_entry:
                      swings fully open (angle 66 of a 64 cap) and Lara still
                      cannot walk through - and I had eliminated three of the four
                      veto clauses BY INFERENCE FROM MY OWN MODEL of them. That is
-                     the trap jag_viewpoint handed over: a check performed in the
+                     the trap a peer project handed over: a check performed in the
                      units you assumed is self-consistent across a wrong premise.
                      So RE-EVALUATE the clauses after the fact and record which
                      one vetoes. Re-evaluation, not restructuring: the shipping

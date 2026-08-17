@@ -97,7 +97,7 @@ grab() {  # grab <out.png>  - a short recording, last frame (single grabs race t
 # This loop used to take FIVE separate leases per pad: power-cycle (lease),
 # enumeration wait (UNLOCKED), upload (lease), 14s settle (UNLOCKED), grab
 # (lease). PROTOCOL.md rule 2 forbids exactly that, and it is the same bug that
-# already shipped in jag_quake/scripts/flash.sh - here it was worse, because it
+# already shipped in a peer project's flash script - here it was worse, because it
 # sat inside a per-class loop that yanks the SHARED MAINS unattended on every
 # pass. Two failures, both of which look like somebody ELSE's bug:
 #   - another project mid-capture gets power-cycled out from under it, and
@@ -105,7 +105,7 @@ grab() {  # grab <out.png>  - a short recording, last frame (single grabs race t
 #   - our own grab, in the unlocked 14s window, can photograph ANOTHER
 #     project's frame - and a capture that belongs to someone else is worse
 #     than a failed capture, because it looks like a result.
-# Caught by jag_bubsy3d reading this file, 2026-08-16. The build stays OUTSIDE
+# Caught by a peer project reading this file, 2026-08-16. The build stays OUTSIDE
 # the lock (it is minutes long and touches no hardware); jaghw is re-entrant
 # via JAGHW_HELD, so grab()'s own inner lease nests instead of deadlocking.
 cycle_one() {   # cycle_one <rom> <out.png>  - power, upload, settle, capture

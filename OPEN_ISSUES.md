@@ -54,7 +54,7 @@ B2 — had shipped. Statuses below are verified against the code, not the docs.
 ### Also fixed since this list was written (not previously tracked here)
 - **CRY16 scan-out decoded to the wrong colours.** jsim indexed the chroma byte
   transposed and scaled by `/255` instead of `>>8`. Both fixed; the four
-  silicon-captured face colours from bubsy3d are now jsim regression tests.
+  silicon-captured face colours from a peer project are now jsim regression tests.
   Any CRY screenshot you took before `8e78a1d` was wrong — and CRY is not
   niche, the Blitter's Gouraud path is CRY-only on silicon.
 - **`stall_load` / `stall_alu` were OVERSTATED** in `gpu.timing` on load-heavy

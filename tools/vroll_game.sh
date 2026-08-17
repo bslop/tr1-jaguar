@@ -37,7 +37,7 @@ mkdir -p "$OUT"
 # Unlocked, another project can flash between our upload and our recording -
 # and then we record THEIR program and report it as our result. The power cycle
 # is the worse half: mains is shared by every cart, so an unleased cycle resets
-# whatever anyone else is running. Found by jag_bubsy3d, 2026-08-16.
+# whatever anyone else is running. Found by a peer project, 2026-08-16.
 # jaghw is re-entrant (JAGHW_HELD), so $GD's own internal leases nest safely.
 cycle_and_record() {
     echo "== power cycle"

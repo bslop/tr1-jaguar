@@ -16,7 +16,7 @@ writing down "measure, don't eyeball" three times did not stop the fourth:
             looked like working ROMs to every check I had.
   * run 53  a dead ctl session returned a **64x1** frame and I read its "0.0%
             uncovered" as a spectacular fix.
-jag_viewpoint (2026-08-17) made the general point after inventing a phantom
+A peer project (2026-08-17) made the general point after inventing a phantom
 geometry bug off a *working* image minutes after writing that same lesson down:
 **a screenshot is evidence only when something reads its pixels**, and discipline
 demonstrably does not scale - a script does.

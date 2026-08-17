@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 103
+RUN: 104
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,53 +54,44 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ✅✅ BOTH LEVELS FULLY EXPLAINED. THE FLOOR FIX IS REGRESSION-CLEAN.
+# ✅✅ THE RELEASE IS REBUILT WITH ALL THREE GAMEPLAY FIXES AND DRIVEN CLEAN.
 
-    CAVES   doors 55 crossed / 3 FAILED     climbs 24/24 ledges, 6/6 walls
-    MANSION doors 15 crossed / 3 FAILED     climbs 24/24 ledges, 6/6 walls
+`/tmp/cofout8` - built from the disc with the pool fix (93), the floor-room
+attribution fix (100) and the drop rule (101) all in. Caves 38 rooms, gym 19.
 
-**Every remaining failure on either level is explained**, and all four sweeps
-match the pre-fix baseline:
+    LARA'S HOME  ring -> page 4 -> level -> 24-step tour
+                 51,321 units, health 1000 throughout, **0 checkshot complaints**
+    CAVES        30-step tour, rooms 0 and 1
+                 88,051 units, health 1000 throughout, **0 checkshot complaints**
 
-    CAVES   11 -> 12  DOOR shut   correct - its switch is in the same cell
-    CAVES   25 -> 28  DOOR shut   correct
-    CAVES   25 -> 22  moved 141   WEDGED on the stand-off cell - harness, see below
-    GYM      2 -> 5   STEP UP     correct - a vault, not a walk
-    GYM      2 -> 6   STEP UP     correct
-    GYM      7 -> 9   STEP UP     correct - and this was the FALL-THROUGH bug
+★ Every captured frame now passes checkshot unassisted - run 94's recalibration
+(a recorded per-level colour floor instead of a constant) holds up across two
+full drives. The mansion tour is byte-for-byte the same trajectory as run 94
+(51,321 units), which is the expected result: it wall-follows inside room 0,
+where none of the three fixes apply.
 
-### ★★★★★ THE ONE "REGRESSION" WAS THE HARNESS TESTING ITSELF
-Run 101 traded gym 8->11 for the 7->9 fix and I refused to call that harmless
-without looking. It was not a game defect: **8->11 walks room 8 -> room 11
-perfectly on a fresh boot at the SAME seat** (measured - she holds y=1280 through
-room 8, crosses at x=58450 into room 11, then follows the floor down 1506 ->
-3950). door_walk runs all 18 doors in ONE boot, so a test starts from wherever
-the previous walk left her - mid-fall, on a slope, carrying velocity - and that
-is what moved the seat into room 10.
-FIX: `door_walk` now **re-seats up to 3 times** before believing a drift, and
-`--door R,D` works on a LIVE run, not just `--seats`, so any single doorway can
-be re-run in isolation. Mansion went **14/4 -> 15/3 with all three explained**.
-☠️ A sweep that reports its own sequencing as a door failure is worse than
-useless - it invents defects, and I nearly recorded one.
+### ☠️☠️ THE CAPTURE CARD IS REPORTING **ONLINE** NOW - THE USER MUST RULE ON IT
+`session_run.sh start` printed:
 
-### ⬜ NEXT: REBUILD AND RE-DRIVE THE RELEASE
-The shipping payload in `/tmp/cofout7` predates **all three** gameplay fixes
-(run 100 floor-room attribution, run 101 the drop rule, run 93 the pool). Rebuild
-it and drive it, exactly as run 94 did:
+    hardware   GameDrive online (03eb:800e) · capture /dev/video0 ok
 
-    QUALITY=playable VIDEO=0 PADTEXT=136 bash tools/build_cof.sh \
-      "/home/jvilla/Documents/Git/jag_openlara/tr1_psx/Tomb Raider (USA) (v1.6).cue" /tmp/cofout8
-    REL_ROM=/tmp/cofout8/OPENLARA.COF REL_SD=/tmp/cofout8 \
-      REL_ELF=/tmp/cofout8/OPENLARA.elf python3 tools/release_play.py --gym --tour
+Every autorun prompt still says the card is *physically unplugged* and that rig
+time needs a human at the TV, so **I did not claim the rig** - but the premise
+that blocked hardware verification for ~30 runs may no longer hold. This is
+flagged to the user; do not act on it without his word. ☠️ And remember a dead
+capture FAKED nine black boots once: `OK!` + black means the VIDEO chain, not the
+console. Ask what the TV shows.
 
-### ⬜ ALSO OPEN
-  1. CAVES 25 -> 22: the seat cell itself blocks her (moved 141, no drift - she
-     IS in room 25). Re-seating does not help; the stand-off needs a different
-     cell. Bounded harness fix, and the LAST unexplained line on either level.
-  2. `HW_TESTCARD`; the hardware boot capture (blocked on the user's permission).
+### ⬜ NEXT
+  1. **CAVES 25 -> 22** - the last unexplained line on either level. She moves
+     only 141 units and the seat does NOT drift (she really is in room 25), so
+     re-seating cannot help: the stand-off cell itself blocks her. Pick a
+     different cell along the span - `--seats --door 25,22` then trace.
+  2. `HW_TESTCARD`.
+  3. Hardware verification - the user's call, see above.
 
 ### ⚠️ BUILD STATE
-`/tmp/cofout7/` = the SHIPPING payload built this run WITH the pool fix (COF +
+`/tmp/cofout8/` = the SHIPPING payload with ALL THREE gameplay fixes (COF +
 ELF + .JV + MUSIC.PCM + GYMLOAD.DAT). `/tmp/gym.cof` = MVDIAG build with the
 entry fix. `/tmp/conf.cof` = caves, boot-checked.
 ☠️ `tools/build_conf.sh` takes **caves|gym|both** - not `mrt`.
@@ -311,21 +302,24 @@ Nothing pushed to `origin` (public `tr1-jaguar`).
 
 ## HARDWARE — READ BEFORE PLANNING ANY RIG STEP
 
-- ✅✅ **THE CAPTURE CARD IS BACK — this answers your run-25 checkpoint
-  question #1** (verified 2026-08-17): `/dev/video0` and `/dev/video1` both
-  enumerate, and a grab through the broker returned the **GameDrive menu
-  listing your own `OPENLARA.COF`, `CAVSLOAD.BIN`, `GYMLOAD.BIN`, `INPUT.BIN`**
-  off the SD card — 183 KB PNG, where no-signal is ~1 KB. The `WORLDCOUNT`
-  framebuffer diagnostic is viable again. The 2026-08-16 finding below is
-  superseded. And there is **no other channel to read
-  a number off the board** — no jaggd memory-read, no GD BIOS FWRITE, bulk IN
-  times out, CDC has no Jaguar-side write path. **Rig time currently produces a
-  picture on a TV that a human must read.** This devalues the `WORLDCOUNT`
-  framebuffer diagnostic for task #11 — plan around it.
-- **Roster is five** (openlara, quake, bubsy3d, rr, resident). A session not on
-  it is **queued, not refused**. `jaguar-shared/hw/RESOURCES.md` is the
-  agreement; `hw/GD_ACCESS.md` is openlara's gateway.
-- **openlara has the slot after `jag_bubsy3d`**, batched — items #2, #8, #10,
-  #11 plus visual confirmation of the enemy skins and the mansion are ONE
-  console session, not six.
+- ✅✅ **THE CAPTURE CARD IS BACK** (verified 2026-08-17) — this answers run-25
+  checkpoint question #1. `/dev/video0` and `/dev/video1` both enumerate, and a
+  grab through the broker returned the **GameDrive menu listing our own
+  `OPENLARA.COF`, `CAVSLOAD.BIN`, `GYMLOAD.BIN`, `INPUT.BIN`** off the SD card —
+  183 KB PNG, where a no-signal frame is ~1 KB. **The `WORLDCOUNT` framebuffer
+  diagnostic is viable again**, and rig time no longer produces a picture only a
+  human can read. The 2026-08-16 "physically unplugged" finding is superseded.
+  ⭐ What survives from it: there is still **no channel to read a number
+  *directly* off the board** — no jaggd memory-read, no GD BIOS FWRITE, bulk IN
+  times out, CDC has no Jaguar-side write path. Telemetry still has to be
+  painted into the framebuffer and read off a capture; the difference is that
+  the capture now works.
+- **The rig is shared, and arbitrated by `jagq`.** A session not on the roster
+  is **queued, not refused**. `jaguar-shared/hw/RESOURCES.md` is the agreement,
+  `hw/GD_ACCESS.md` is this project's gateway, and
+  `/home/jvilla/Documents/Git/jaguar-shared/DEVELOPMENT.md` is the working
+  agreement over both.
+- **Batch what needs the console.** Items #2, #8, #10, #11 plus visual
+  confirmation of the enemy skins and the mansion are ONE console session, not
+  six — now bounded by the 5-minute turn, so batch only what fits in a turn.
 - Claim the rig **only** for work the emulator genuinely cannot answer.
