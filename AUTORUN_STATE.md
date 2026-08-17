@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 98
+RUN: 99
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,54 +17,55 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅ CLOSED: THE MANSION "COVERAGE HOLE" IS NOT A BUG. NOTHING IS BEING CULLED.
+# ✅ CLOSED: `HOPBOOT=1` IS THE RIGHT SHIPPING SETTING. KEEP IT.
 
-Runs 95-97 chased this. It is a NEGATIVE RESULT and it is worth as much as a fix:
-**the renderer draws everything it is given, and the geometry it is given is
-complete.** Four independent tests at the same valid seat (35795, 1024, 54194,
-room 0, `g_lay=g_lafloor=1024`), 16 yaws, HOLEVIS:
+Run 97's one surviving lead, settled. Uncapping the portal-hop draw distance
+buys **nothing visible** and costs **10.8% of the frame rate**.
 
-    ALLVIS=1        rooms with an empty portal window      53.0% -> 53.2%
-    g_hopcap 1->4   drew {0,1} -> {0,1,2,3}, TWO MORE ROOMS 53.0% -> 53.7%
-    NOBFCULL=1      rastered ~600 -> ~1150, DOUBLE the faces 53.0% -> 54.4%
-    geometry        room 0 = 124 faces / 72 cells = 1.7,    normal for the level
-                    (all 19 rooms run 1.1 .. 2.3 faces/cell)
+Method: ONE Caves ROM (`EXTRA="DREWVIS=1"`), one boot, teleporting through 7 room
+centres twice via `set:` phases - once at `g_hopcap=1` (the shipping value) and
+once at 4 (uncapped). Same ROM, same seats, so nothing but the dial differs.
 
-★ Drawing twice as many faces does not fill the screen. Admitting two more rooms
-does not fill the screen. The faces that would cover those pixels DO NOT EXIST IN
-THE FRUSTUM - she is in a room that is 39% open to the sky, looking across it.
-☠️ I called this "a real coverage hole" in run 95 off a HOLEVIS frame. HOLEVIS
-proves a pixel was never COVERED; it does not prove anything SHOULD have covered
-it - sightline.py's docstring says exactly that and I read past it. **Uncovered
-is not the same as broken.** Do not reopen this without new evidence from the PS1
-footage showing geometry we do not draw.
+    seat   cap=1 fps   cap=4 fps   delta
+    r0     13.75       11.25       -2.50
+    r8     13.75       12.50       -1.25
+    r12    10.00        7.50       -2.50
+    r17    15.00       15.00       +0.00
+    r22     7.50        6.25       -1.25
+    r30    11.25       10.00       -1.25
+    r34    10.00       10.00       +0.00
+    MEAN   11.61       10.36       -10.8%
 
-### ★ WHERE THE 45% "SCREEN-SPACE REJECTED" BUCKET WENT
-`CULLCOUNT=1 BEXCNT=1 WCCNT=1` splits the faces (☠️ CUMULATIVE counters - take
-DELTAS): ~12% world-plane cull, 0-25% bottom-exit, ~30% rastered, ~45% rejected.
-NOBFCULL collapses that 45% to ~0 and doubles `rastered`, so **the whole bucket
-was backface culling** - normal, not a leak. Nothing else rejects faces.
+    rooms ONLY the uncapped dial ever drew: 3, 16, 19, 28, 29
 
-### ☠️ TWO FACTS FOUND ON THE WAY, BOTH REAL
-1. **`HOPBOOT=1` IS IN THE SHIPPING FLAG SET** (`tools/build_cof.sh:95`), so the
-   release draws the current room **plus one portal hop**; main.c's own default is
-   `#define HOPBOOT 4`. It is not a bug - it is a draw-distance/fps trade nobody
-   has re-evaluated since. Uncapping demonstrably draws more rooms (mask 3 -> 15).
-   Worth measuring for VISIBLE QUALITY at an fps cost, on a corridor seat rather
-   than an open room. **This is the one lead worth keeping from these three runs.**
-2. **`NEARCLIP=1` DOES NOT BUILD.** `gpu_geotex.gas:4099: undefined symbol
-   nc_back`, and the line's own comment reads "nothing implemented past here
-   yet". It is a STUB, not a flag - the near-plane clipper was never written.
-   `project_near_plane_face_pop` should say so; do not plan around NEARCLIP.
+### ☠️ FIVE MORE ROOMS DRAWN AND THE PICTURE IS THE SAME
+Captured the same two seats at both settings and diffed the pixels:
 
-### ⬜ NEXT: GO BACK TO THE TASK LIST - THIS THREAD IS CLOSED
-Nothing in the mansion render needs fixing. Pick from:
-  1. `HOPBOOT=4` on a CORRIDOR seat: does draw distance visibly improve, and what
-     does it cost in fps? (`tools/fps_measure.py`, and A/B on the same seat.)
-  2. The 8 untestable door seats (they resolve into an overlapping room; the
-     ranking needs a fallback).
-  3. `HW_TESTCARD`.
-  4. The hardware boot capture - still blocked on the user's permission.
+    room 0 corridor  105 of 25600 pixels differ (0.41%)
+    room 12          209 of 25600 pixels differ (0.82%)
+
+and **every differing pixel is on LARA** - the two runs caught her animation one
+frame apart. The world geometry is pixel-identical. The five extra rooms are far
+enough away to contribute nothing while costing a tenth of the frame rate.
+★ The mask said the dial WORKS; the pixels said it does not MATTER. A counter
+proving a code path ran is not evidence the path changed the output - the same
+trap as run 96, where uncapping drew two more rooms and moved coverage 0.7%.
+
+### ⚠️ CAVEAT ON THE fps NUMBERS
+Short holds (5 steps) quantise the rate to multiples of 1.25 fps. Good enough for
+a -10.8% verdict, too coarse for a 2-3% question. Use `tools/fps_measure.py` if
+anything needs finer.
+
+### ⬜ NEXT: THE TASK LIST - RENDERING IS SETTLED FOR NOW
+Runs 95-98 spent four runs on the mansion render and closed all of it as
+NOT-A-BUG. Nothing in that area needs work. Remaining:
+  1. **The 8 untestable door seats** - they resolve into an overlapping room, so
+     the seat ranking picks the wrong one; it needs a fallback. `tools/door_walk.py`
+     already classifies every other failure, so this is a bounded fix.
+  2. `HW_TESTCARD`.
+  3. The hardware boot capture - blocked on the user's permission (the capture
+     card is unplugged; a human at the TV is required).
+  4. Re-verify the release end-to-end if anything above lands.
 
 ### ⚠️ BUILD STATE
 `/tmp/cofout7/` = the SHIPPING payload built this run WITH the pool fix (COF +
