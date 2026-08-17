@@ -80,7 +80,16 @@ ROWDIET=1 STATICS=1 BANKDIET=1 LOWRES=1 FLIPASM=1 DIVZGUARD=1 MOVESET=1 \
 SPANSHADE=1 SHADEEXCL=1 TIMESTEP=1 ANIMRATE=1 OPDBL=1 LPLANES=1 \
 VCBIG=1 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 ENEMYTEX=1 BLOBCACHE=1 \
 JCENT=1 JOVL=1 SECTLONG=1 INLINEMUL=1 OFFHOIST=1 VPACK=1 NOPCLIP=1 \
-TRAPFLOOR=1 GUNS=1 BOOTVID=1 JVFASTKICK=1 PROBE_AHEAD=256}"
+TRAPFLOOR=1 GUNS=1 BOOTVID=1 JVFASTKICK=1 PROBE_AHEAD=256 RCLIPFIX=1}"
+
+# RCLIPFIX=1: paint the LAST PIXEL COLUMN. Spans are right-EXCLUSIVE
+# (SHADEEXCL) but xr was clamped to CLIPX1, which gpu_geotex_setclip sets
+# INCLUSIVE (0,319) - so the rightmost span ended at 318 and column 319 was
+# black in EVERY scene (measured: caves, mansion, and a spawn arm each showed
+# exactly one dead column). Both the texture and shade clamps take the +1;
+# fixing only one would leave 319 textured-but-unshaded, which is the "bright
+# 1px line down the right edge" this kernel already paid for once.
+# Measured free: rendered frames 232/398 identical to baseline, illegal=0.
 
 # ☠️☠️ GYMSD IS DELIBERATELY *NOT* IN THAT LIST ANY MORE (2026-08-16).
 # GYMSD left Lara's Home out of the image, and the ring menu then REFUSES the

@@ -3543,6 +3543,15 @@ shx_v2:
 	movei	#CLIPX1,r1
 	load	(r1),r1
 	.endif
+	.if RCLIPFIX=1
+	; ☠️ THE SHADE PASS NEEDS THE SAME +1 AS THE TEXTURE PASS, or column 319
+	; comes out TEXTURED BUT UNSHADED - which is the exact "bright 1px line
+	; down the right edge" this kernel already paid for once (see the
+	; fill-convention note at sp_fill: making only ONE of the two passes
+	; exclusive is what caused it). Both clamps are inclusive bounds feeding
+	; exclusive consumers, so both take the +1 or neither does.
+	addq	#1,r1
+	.endif
 	cmp	r5,r3			; XL - clipx0
 	jr	PL,shx_c1		; XL >= clipx0: keep
 	cmp	r1,r4			; slot: XR-vs-clipx1 flags

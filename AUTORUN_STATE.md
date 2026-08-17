@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 20
+RUN: 21
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,46 +17,45 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**✅ COLUMN 319 IS PAINTED — `RCLIPFIX=1`, free (throughput identical).**
+**✅ COLUMN 319 FIXED AND CLOSED — `RCLIPFIX=1`, now in the release recipe.**
 
-    dead columns   before: 1  (x 319, in EVERY scene)      after: 0
-    rendered frames  232 / 398  ->  232 / 398   (identical, f1500 / f2500)
-    illegal=0, image verified by eye, kernel proven to differ (3466 -> 3468 B)
+Run 19 left an unexplained 75-pixel residual. Run 20 explained it, and **my
+first hypothesis was wrong**: matching the shade pass's clamp changed the
+residual not at all (still exactly 75). The real answer came from varying the
+sample field:
 
-☠️ **Run 18 called this "a classic off-by-one at clipx1". It is not a mistake —
-it is the edge case of a DELIBERATE convention.** `SHADEEXCL=1` makes spans
-left-inclusive / **right-EXCLUSIVE** on purpose, so adjacent faces neither
-double-OR nor leave "a bright 1px line down the right edge of every face"
-(reported and fixed in 2026-07-30). But `xr` was clamped to `CLIPX1`, which
-`gpu_geotex_setclip(0, 319, ...)` sets **inclusive** — so the rightmost span
-ended at 318. The fix is one instruction: clamp to `CLIPX1+1` under the
-exclusive convention. ★ *An inclusive bound feeding an exclusive consumer loses
-exactly one unit — check the CONVENTION at the boundary, not the arithmetic.*
+    field 1480   col319 80   elsewhere 30
+    field 1490   col319 80   elsewhere 30
+    field 1500   col319 80   elsewhere 75
+    field 1510   col319 80   elsewhere 72
 
-⬜ **UNEXPLAINED RESIDUAL — do not treat this as fully closed.** Besides the 80
-pixels of column 319, **75 other pixels changed**:
-* 30 of them in **row 1, columns 8-29 and 104-117** — that is the debug
-  bit-block readout, so a counter it displays changed. Expected, benign.
-* ~45 in **rows 37-50 and 66-70, columns 134-184** — clustered around Lara,
-  nowhere near the right edge, and NOT explained by the clamp. Throughput is
-  identical so it is not frame-phase drift.
-**Before shipping RCLIPFIX, find out what those 45 are.** Likely the shade pass
-(which loads CLIPX1 separately at `gpu_geotex.gas` ~3527 via `r14+13`, and was
-NOT changed) now disagreeing with the texture pass about the right edge — i.e.
-the two passes may need the same +1. That is the first thing to check.
+The residual **varies with when you screenshot**; column 319 does not. So the
+extra pixels are a **partially-drawn frame caught mid-render**, and the stable
+30 is the debug bit-block readout displaying a counter that legitimately
+changed. Nothing systematic. ★ *A difference that moves when you change the
+sampling instant is an artifact of the instrument, not of the change* — the
+same lesson as the wall-clock window, arriving from the other direction.
+
+Both clamps take the `+1` anyway (texture at `sp_run`, shade at `shx_c1`) and
+that is correct on its own terms: fixing only one leaves 319 textured but
+unshaded, which is the "bright 1px line down the right edge" the kernel already
+paid for once. Measured free — 232/398 rendered frames, identical to baseline,
+`illegal=0`, image verified.
 
 ### What to do next
-1. **Explain the 45 pixels** (above). If it is the shade/texture pass mismatch,
-   apply the same `+1` at the shade clamp and re-diff — the residual should go
-   to zero apart from the debug row.
-2. Task #8 / #10 offline with the SPAWNAT + `jagemu video` method (run 18).
-   `ledge_census.py --tsv` gives CLASS ROOM RISE X Y Z YAW directly.
-3. **RIG, batched** — `PHRASEDST=1` yes/no, title-music fix, enemy skins, the
-   mansion, PHRASECLEAR, and now RCLIPFIX.
+1. **Task #8 / #10 offline** with the SPAWNAT + `jagemu video` method (run 18).
+   `ledge_census.py --tsv` gives CLASS ROOM RISE X Y Z YAW ready to spawn at.
+   For #10 drive UP+ACTION via `jagemu ctl <inst> input`.
+2. **Re-run `tools/build_cof.sh` end to end** — the recipe changed again
+   (RCLIPFIX). Last full run was run 9/10 and it passed; this is a cheap
+   re-verify plus a fresh container.
+3. **RIG, batched** — `PHRASEDST=1` yes/no (the only silicon-blocked question),
+   title-music fix, enemy skins, the mansion, PHRASECLEAR, RCLIPFIX.
 
-### Refuted / closed
-* Drop blackness is **NOT** the portal-hop cap (HOPBOOT 1 vs 4: 8.2% vs 8.3%).
-* Perf: only `PHRASEDST` is non-null; everything else measured 0 (see run 17).
+### Refuted / closed this stretch
+* Drop blackness is NOT the portal-hop cap (8.2% vs 8.3%).
+* The 319 residual is NOT a shade/texture clamp mismatch (identical with both).
+* Perf: only `PHRASEDST` is non-null; everything else measured 0.
 
 ---
 
