@@ -891,6 +891,10 @@ static int g_autoj;                   /* AUTO JUMP-REACH armed (UP at a wall
    whose only reader is a debugger has to say so. */
 static volatile int g_mvveto;   /* which move-gate clause refused (see MVDIAG) */
 static volatile int g_mvnf;     /* the floor the refused destination reported  */
+/* run 82: veto=5 (NOTHING refuses) with no movement leaves only one shape - the
+   destination already equals her position. So record the step arithmetic itself:
+   nx = g_lax + (SIN(yaw)*(spd*mv))>>16, spd = RUN_SPEED_TR1*g_ticks>>1. */
+static volatile int g_mvnx, g_mvdx, g_mvspd, g_mvticks, g_mvyaw;
 #endif
 static int g_fwdblk;                  /* forward held but BLOCKED this frame
                                          (gates the auto-reach probe)      */
@@ -8210,6 +8214,8 @@ bootvid_entry:
 #endif
                           (g_lafloor - nf2 > LARA_STEPUP)                    ? 4 : 5;
                       g_mvnf = nf2;
+                      g_mvnx = nx; g_mvdx = nx - mx0; g_mvspd = spd;
+                      g_mvticks = g_ticks; g_mvyaw = g_layaw;
                   }
 #endif
                   g_fwdblk = (mv > 0 && g_lax == mx0 && g_laz == mz0);

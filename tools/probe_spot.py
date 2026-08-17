@@ -135,9 +135,36 @@ def main():
             print("%-4s %s" % ("step", "  ".join("%-9s" % w for w in have)))
             n = 0
             for ph in sys.argv[sys.argv.index("--phases") + 1].split(","):
-                keys, _, cnt = ph.partition(":")
+                # ☠️ a set: phase contains its own colons - take the count from
+                # the RIGHT, not the first colon ("set:g_layaw=0xC000:1").
+                if ph.startswith("set:"):
+                    keys, _, cnt = ph.rpartition(":")
+                else:
+                    keys, _, cnt = ph.partition(":")
                 cnt = int(cnt or 1)
-                if keys in ("-", "none", ""):
+                if keys.startswith("set:"):
+                    # ☠️ A PHASE THAT POKES. Needed to separate two effects that
+                    # arrive together: using a switch leaves Lara SQUARED TO THE
+                    # LEVER (yaw reset to 0), which is plausibly correct TR1
+                    # behaviour, and a drive that then presses UP walks her into
+                    # the wall rather than through the door it just opened. To ask
+                    # "does the passage work" you must restore the facing without
+                    # re-testing the switch.
+                    k, _, v = keys[4:].partition("=")
+                    if k in sy:
+                        # ☠️ NOT `n` - that is the step counter, and reusing it
+                        # here renumbered every later step label to the poked
+                        # VALUE ("up49153"). A cosmetic bug that makes a log
+                        # unreadable is still a bug in an instrument.
+                        val = int(v, 0)
+                        if k == "g_layaw":              # 16-bit! see the seat note
+                            poke16(sy[k], val)
+                        else:
+                            poke(sy[k], val)
+                        print("   set %s = %s" % (k, v), flush=True)
+                    else:
+                        print("   ☠️ set %s: not in this build" % k, flush=True)
+                elif keys in ("-", "none", ""):
                     ctl("release")
                 else:
                     ctl("input", keys)
