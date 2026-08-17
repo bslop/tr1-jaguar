@@ -99,6 +99,20 @@ def main():
         # So sweep along the span and out from the plane, and PREFER a cell no
         # other room supplies a floor for - exclusive ownership is what makes the
         # runtime agree with the room we asked for.
+        def anyfloor(wx, wz):
+            """The floor room_floor_mr would land on: the LOWEST any room supplies
+            (+Y is down, so the largest value). Modelling only the source room's cell
+            is what made the approach filter blind to the step that actually stops her."""
+            best = None
+            for q in range(nroom):
+                v = cellval(q, wx, wz)
+                if v is None or v >= OPEN:
+                    continue
+                f = struct.unpack('>h', struct.pack('>H', v))[0]
+                if best is None or f > best:
+                    best = f
+            return best
+        
         def owners(wx, wz):
             n = 0
             for q in range(nroom):
@@ -241,8 +255,26 @@ def main():
                 print("  ok   %2d -> %-2d" % (r, dst), flush=True)
             else:
                 fail += 1
-                print("  ☠️ FAIL %2d -> %-2d  saw %s, moved %d  (stand %d,%d,%d yaw %d)"
-                      % (r, dst, sorted(seen), moved, sx, fy, sz, yaw), flush=True)
+                # ☠️ ASK THE GAME WHY, DO NOT PREDICT IT. Three attempts to
+                # pre-filter these by modelling the floor search in Python were
+                # each wrong in a new way (source-cell only, then past-the-plane
+                # only, then an any-room lookup) and changed nothing. MVDIAG's
+                # veto - read from the running ROM - named gym 2->5 correctly the
+                # first time: VETOZ=4, a two-click step needing a vault.
+                names = {1: "WALL", 2: "no floor", 3: "DOOR shut",
+                         4: "STEP UP (needs a vault, not a walk)",
+                         5: "nothing refused - check the FACING/axis"}
+                vx = peek("g_mvveto") if "g_mvveto" in syms else None
+                vz = peek("g_mvvetoz") if "g_mvvetoz" in syms else None
+                why = ""
+                if vx or vz:
+                    # the axis she was walking is the one whose veto is meaningful
+                    v = vz if (yaw in (0, -32768) and vz) else (vx or vz)
+                    why = "  WHY: %s" % names.get(v, "veto=%s" % v)
+                elif "g_mvveto" not in syms:
+                    why = "  (build without MVDIAG=1 - no reason available)"
+                print("  ☠️ FAIL %2d -> %-2d  saw %s, moved %d%s"
+                      % (r, dst, sorted(seen), moved, why), flush=True)
     finally:
         ctl("release")
         srv.terminate()
