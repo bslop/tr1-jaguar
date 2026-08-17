@@ -10,13 +10,23 @@ budget-bisects until the DONE magic ($0A3DD05E) lands in the mailbox
 capture -> cycles-to-done per room, no rig, no A10, seconds per room.
 
 Usage:  python3 tools/room_cycles.py [--rooms 0,5,34] [--yaw 0]
-Needs:  build/gpu_geotex.bin (make the ship flag set first), mrt.bin,
-        mrt_geom.bin, mrt_atlas.bin next to the script's parent dir.
+Needs:  build/gpu_geotex.bin (make the ship flag set first) and the level set
+        <prefix>.bin / <prefix>_geom.bin / <prefix>_atlas.bin beside the parent
+        dir.  --prefix=gym prices LARA'S HOME instead of the Caves.
+        --rooms=0,1,13  --yaw=N (N in 256ths of a turn: 64 = +X).
 """
 import os, struct, subprocess, sys, tempfile
 
 D = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-JTEST = os.path.expanduser("~/Documents/Git/cobweb/sim/target/release/jtest")
+# ☠️ THE COBWEB CHECKOUT MOVED and this path was never updated, so the tool had
+# been dead with a FileNotFoundError - which is why no one noticed it was also
+# Caves-only. Resolve it, and let JTEST= override.
+JTEST = os.environ.get("JTEST") or next(
+    (q for q in (
+        os.path.expanduser("~/Documents/Git/jag_openlara/cobweb/sim/target/release/jtest"),
+        os.path.expanduser("~/Documents/Git/cobweb/sim/target/release/jtest"),
+    ) if os.path.exists(q)),
+    os.path.expanduser("~/Documents/Git/jag_openlara/cobweb/sim/target/release/jtest"))
 KERN = os.path.join(D, "build/gpu_geotex.bin")
 MAGIC = 0x0A3DD05E
 
@@ -25,13 +35,22 @@ MAILBOX = 0x100000
 VTXCACHE = 0x190000
 FB = 0x1A0000
 
+# ☠️ THIS TOOL WAS CAVES-ONLY PURELY BECAUSE THE PATHS WERE HARDCODED.
+# Same trap mrt_boundary_audit.py had: nothing about the profiler is
+# level-specific, but "mrt.bin"/"mrt_geom.bin"/"mrt_atlas.bin" were baked in, so
+# the mansion could not be priced at all. --prefix gym switches the set.
+PREFIX = "mrt"
+
+def _p(name):
+    return os.path.join(D, PREFIX + name)
+
 def sintab(a):
     import math
     return int(round(math.sin((a & 255) * 2 * math.pi / 256) * 65536))
 
 def build_room_inputs(idx_room):
-    mrt = open(os.path.join(D, "mrt.bin"), "rb").read()
-    geom = open(os.path.join(D, "mrt_geom.bin"), "rb").read()
+    mrt = open(_p(".bin"), "rb").read()
+    geom = open(_p("_geom.bin"), "rb").read()
     n = struct.unpack(">H", mrt[0:2])[0]
     offs = []
     for i in range(n):
@@ -120,7 +139,7 @@ def cycles_for(idx, yaw, workdir, quiet=True):
     open(wg, "w").write(WRAP.format(
         klongs=(ksz + 3)//4, mailbox=MAILBOX, vtxcache=VTXCACHE, fb=FB,
         kern=KERN, camb=cb, roomb=rb,
-        atlas=os.path.join(D, "mrt_atlas.bin")))
+        atlas=_p("_atlas.bin")))
     gf = os.path.join(workdir, "cap.bin")
     def done(budget):
         if os.path.exists(gf): os.remove(gf)
@@ -146,7 +165,10 @@ def main():
     for a in sys.argv[1:]:
         if a.startswith("--rooms"): rooms = [int(x) for x in a.split("=",1)[1].split(",")]
         if a.startswith("--yaw"): yaw = int(a.split("=",1)[1])
-    mrt = open(os.path.join(D, "mrt.bin"), "rb").read()
+        if a.startswith("--prefix"):
+            global PREFIX
+            PREFIX = a.split("=",1)[1]
+    mrt = open(_p(".bin"), "rb").read()
     n = struct.unpack(">H", mrt[0:2])[0]
     if rooms is None: rooms = list(range(n))
     with tempfile.TemporaryDirectory() as td:

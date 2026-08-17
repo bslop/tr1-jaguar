@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 58
+RUN: 59
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,79 +17,84 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ⬜ THE ROOM-0 FIX IS MEASURED FOR *WORK*. FRAME RATE STILL NEEDS PRICING.
+# ☠️ THE ROOM-0 FIX COSTS 6.3x KERNEL CYCLES. DO NOT SHIP IT AS TESTED.
 
-`HOPDEPTH=5 HOPBOOT=4 ALLVIS=1` takes room 0's hole **77.8% -> 39.5%** and puts
-the mansion exterior on screen (run 56). Its cost, at that spot over 36 fields:
+Priced with `room_cycles.py` (silicon-fidelity jtest cycles), gym, yaw=64:
 
-                staged   rastered   rastered/field
-    DEFAULT      6853      2276         63.2
-    FIXED        6694      3136         87.1   (+38%)
+    room  0  202,168 cy (124 faces)     room  6  203,144 cy (134)
+    room  1  209,003 cy (153)           room  7  325,213 cy (289)
+    room  2  292,986 cy (252)           room 12  270,526 cy (239)
+    room  3  203,144 cy (134)           room 13  470,718 cy (481)
+    room  4  203,144 cy (134)
+    room  5  203,144 cy (134)
 
-**Staged is FLAT and rastered is up 38%.** The 68k transform load does not change;
-the GPU simply spends the same time drawing more faces that survive. That is the
-signature of a GPU already saturated: total work per unit time is fixed, so the
-extra rooms do not add 68k cost - they change what the frame is made of.
-☠️ That is NOT the same as "it is free". A scene needing more faces per FRAME
-renders fewer frames per second, and none of the numbers above measure frames.
+    default  drew {0,1}              411,171 cycles
+    fixed    drew {0-7,12,13}      2,583,190 cycles     **6.3x**
 
-### ☠️☠️ YOU CANNOT MEASURE FPS OFFLINE WITH ANY EXISTING COUNTER - I tried three
-    tools/fps_measure.py  reads a CAPTURE CLIP. The capture card is unplugged,
-                          so this tool cannot run at all right now.
-    frame_count           is FIELDS. It ticks exactly 12 per 12-field step.
-    g_pipeframe           is a pipeline STAGE INDEX. It sits at 1 forever.
-    a counter in the DRAW LOOP  reads 30.00 fps in a game that renders at ~6:
-                          the 68k stages work every 30 Hz LOGIC tick regardless
-                          of how far behind the GPU is. ★ With PIPELINE=1 the
-                          68k side cannot see the frame rate AT ALL - anything
-                          you count there measures the logic clock.
-`g_drawframes` (DREWVIS builds) is left in as the draw-loop tick, correctly
-labelled - useful for "how many draw passes", useless for fps.
+☠️ And that is a LOWER BOUND - room_cycles cannot see the Blitter fill, which is
+~30% of a frame. In a game at 6-7 fps this is not a trade worth making for one
+view, so `HOPDEPTH`/`ALLVIS` stay off in shipping builds.
+★ The cost is NOT the depth. Run 56 measured depth 5 alone as changing nothing:
+those rooms are admitted by **ALLVIS**, and ALLVIS draws a rescued room
+FULL-SCREEN with no portal-window clip - so the full-room price above is exactly
+what it pays. Raising HOPDEPTH to 4 instead of 5 will not help; the knob that
+costs is ALLVIS.
 
-### ⬜ NEXT: PRICE IT WITH `room_cycles.py`, THE ONE OFFLINE INSTRUMENT LEFT
-It runs bare kernels at **silicon-fidelity cycles** (`jtest run/golden
---assemble`) and gives a per-room render cost - exactly the question here, which
-is "what does drawing N more rooms cost". Sum it over the drawn set:
-    default  drew = {0,1}
-    fixed    drew = bits 0-7,12,13 (12543)
-☠️ Known limit: room_cycles cannot see the Blitter FILL, which is ~30% of the
-frame, so treat its answer as a LOWER bound on the cost.
-Then choose: **HOPDEPTH=4 before 5** - the missing rooms sat at hop 4, so 4 may
-buy the whole win at a fraction of the cost. And consider making it PER LEVEL:
-the Caves never needed a 4th hop (0 black outliers at depth 3), so the mansion
-can pay for what only the mansion uses.
+### ⬜ NEXT: FIX THE EMPTY WINDOW INSTEAD OF BYPASSING IT
+The real defect is upstream: `room_link_rect(a,b)` returns **no window** for
+rooms that are plainly visible from room 0, and ALLVIS is a sledgehammer that
+says "window failed, draw the whole room". If the window were computed correctly
+those rooms would be drawn CLIPPED to their doorway - a fraction of the 6.3x.
+  1. Instrument `portal_rect()` at the room 0 spot: for each portal 0->1->...,
+     print the projected rect and which of its early-outs fires (it returns
+     0 = none visible / 1 = rect / 2 = full screen).
+  2. Suspect the "portal fully behind" test first - room 0 is OUTDOORS and its
+     portals are large; a portal spanning the camera plane may be rejected
+     outright rather than clipped, which is the same whole-face-vs-clip mistake
+     the near plane makes elsewhere in this renderer.
+  3. Measure the fixed version the same way: `room_cycles.py` on the resulting
+     draw set, and the hole with `HOLEVIS=1`.
 
-### ★ ROOM 0 IS OUTDOORS - some of the residual 39.5% is legitimate
-`sightline.py --half 4500` (frustum width, not the default pencil beam) finds 8
-rooms / 496 faces in that view; room 14 alone has 75 faces and is still NOT in
-the drawn set at depth 5. So there is more to recover, but room 0 is the mansion
-EXTERIOR and TR1 has no sky geometry either - do not chase the last of it.
-☠️ The default `--half 520` is a pencil beam and under-reports badly; pass the
-frustum width when judging screen coverage.
+### ✅ `room_cycles.py` WAS DEAD AND NOBODY KNEW
+Two independent faults, both fixed this run:
+  * `JTEST` pointed at `~/Documents/Git/cobweb/...` - the checkout moved under
+    `jag_openlara/` and the path was never updated, so every invocation died with
+    FileNotFoundError. ★ A tool that always throws looks exactly like a tool
+    nobody needs; it had been quietly unusable.
+  * it was Caves-only, with `mrt.bin`/`mrt_geom.bin`/`mrt_atlas.bin` hardcoded -
+    the same trap `mrt_boundary_audit.py` had. Now `--prefix=gym`.
+Usage: `tools/room_cycles.py --prefix=gym --rooms=0,1,13 --yaw=64`
+(yaw in 256ths of a turn: 64 = +X). Needs `build/gpu_geotex.bin` from a ship
+build, which any recent `build_conf.sh` leaves behind.
 
-### ✅ SHIPPING IS UNCHANGED AND VERIFIED SO
-`HOPDEPTH` defaults to 3 and the rewrite (three nested loops -> bounded BFS) was
-checked byte-identical at the default: same `vis=11 drew=3`, same 77.8%. Nothing
-above is in a shipping build.
+### ☠️☠️ FPS CANNOT BE MEASURED OFFLINE (run 57, three dead ends)
+    fps_measure.py  needs a CAPTURE CLIP; the capture card is unplugged
+    frame_count     is FIELDS (12 per 12-field step)
+    g_pipeframe     is a stage index, stuck at 1
+    a draw-loop tick reads 30.00 fps in a game rendering at ~6 - with PIPELINE=1
+                    the 68k stages work every 30 Hz LOGIC tick regardless of the
+                    GPU. Nothing counted on the 68k side sees the frame rate.
+**`room_cycles.py` is now the only offline way to price a rendering change.**
 
 ### ★ INSTRUMENTS (all off in shipping builds)
     sightline.py                  what geometry exists ahead - NO BUILD NEEDED
                                   (use --half 4500 for frustum width)
+    room_cycles.py --prefix=gym   per-room kernel cycles (fill NOT included)
     DREWVIS=1                     g_visrooms / g_drewrooms / g_drawframes
     HOPDEPTH=N                    portal visibility depth (default 3)
-    CULLCOUNT=1 BEXCNT=1 WCCNT=1  per-face counters, RAW DRAM:
-                                  $1C0000 staged  $1C0004 rastered
+    CULLCOUNT=1 BEXCNT=1 WCCNT=1  $1C0000 staged  $1C0004 rastered
                                   $1C0010 bexit   $1C0014 worldcull
     probe_spot.py --raw=N=0xADDR / --set=SYM=VAL
     build_conf.sh EXTRA= / SKIP=
 ☠️ Counters ACCUMULATE - take DELTAS.
 ☠️ NOEMPTYY=1 and NOSDCULL=1 BUILD AND DO NOT RENDER (illegal=0 either way).
-   NOBFCULL=1 and ALLVIS=1 are safe.
 
-### ✅ STILL TRUE — climbing is closed (runs 46-49)
+### ✅ STATE OF THE TWO MANSION HOLES
+    room 15  MISSING GEOMETRY - nothing to draw, not a rendering bug (run 55)
+    room 0   geometry exists, window computes empty; fixable, currently 6.3x
+### ✅ climbing is closed (runs 46-49)
     CAVES    LEDGES 24/24   WALLS 6/6 refused   0 black outliers
     MANSION  LEDGES 24/24   WALLS 6/6 refused
-### ✅ room 15's hole is MISSING GEOMETRY (run 55) - not fixable by rendering
 
 ### ⬜ ALSO STILL OPEN
   * ☠️ `/tmp/cofout4` (the filmed release) predates runs 46-49. Rebuild before
