@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 34
+RUN: 35
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,69 +17,67 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ☠️☠️☠️ REGRESSION: THE TREE CURRENTLY BUILDS A 100% BLACK ROM. FIX THIS FIRST.
+# ✅ THE BLACK-ROM REGRESSION IS SOLVED: IT WAS THE TOOLCHAIN, NOT US.
 
-`make <harness flags> PADTEXT=0` -> 1,538,092 B, and every frame from f900
-onward is **100% black, maxluma 0**. Not a crash: `illegal=0`, 68k asleep in
-`cpu_stop_unless` (normal), **GPU running with 218M instructions**, DSP running,
-Blitter doing 5.4M polls, vector 64 intact. Everything renders; nothing is
-visible. That shape says the CAMERA is somewhere with no geometry in view, or
-the display/OP path is wrong - not that the renderer died.
+**cobweb `bf31dee` breaks this project. `59e5896` is good.** Same source, same
+assets, bisected in a git worktree:
 
-### KNOWN-GOOD REFERENCE
-`/tmp/cofout2/OPENLARA.COF` (the run-26 release build) still renders **43.9%
-black, maxluma 230** under the CURRENT jagemu. So the emulator is NOT the cause
-and cobweb bf31dee is exonerated.
+    59e5896  ->  1.1% black, maxluma 217   WORKING
+    bf31dee  -> 100.0% black, maxluma 0    BROKEN
 
-### WHAT I ALREADY RULED OUT (do not redo)
-* **The 49 face-hole cells** - reverting them did not fix it.
-* **A stale `mrt_sect.bin`** - I regenerated it from scratch; the fresh
-  extraction reproduces `c358f277` exactly and both patches give `bfdd5a87`,
-  identical to what was there. Sector data is correct and deterministic.
-* **The atlas** - my regeneration had skipped the four atlas patch passes
-  (ROM was 83,456 B short, exactly the patch delta). Re-ran DOORPATCH /
-  PICKPATCH / GUNPATCH / ENEMYTEX / GUNONLY / GUNANIM; atlas is back to the
-  correct **373,248 B** and the ROM is back to 1,538,092 B - **still black**.
-* **The emulator** (see reference above).
+Ruled out along the way: the emulator (a pre-update ROM still renders under the
+NEW jagemu), `jas` (all six kernels assemble **byte-identical** both ways), the
+sector data, the atlas, and the gym assets.
 
-### THE ONE UNEXPLAINED FACT — START HERE
-The run-29 harness ROM was **1,538,508 B and rendered fine**; the current build
-is **1,538,092 B — 416 bytes smaller** with what should be identical assets.
-**Find those 416 bytes.** Compare the link map of a known-good build against
-this one. Candidates: a title/ring asset (`pass_geom.bin`, `pass2_*`,
-`ctrl_*`, `photo_*`, `font_load.bin`) that my hand-run extraction did NOT
-regenerate while something else moved, or `gym_*` drift from the several gym
-re-extractions in runs 6/7/27.
+**It is `jcc68k`.** Its output changed for every C file - video.c 270 lines,
+jerry.c 115, gpu.c 79, blit.c 8. The blit.c diff is readable:
 
-### THE SAFE RECOVERY, IF BISECTION STALLS
-**Run `tools/build_cof.sh <disc> /tmp/cofoutN` end to end.** It is the only
-asset chain PROVEN to produce a working ROM (run 26, plus bit-identical assets
-across two independent runs). It regenerates everything in the right order -
-base, boundary patch, coverage patch, all four atlas patches, gun anims, title
-art, ring items, videos - which is exactly what my piecemeal hand-run did not.
-★ **Lesson: do not hand-run pieces of an asset chain.** I ran the base
-extraction alone to "verify" the sector file and silently dropped four atlas
-passes; the tree has been inconsistent since.
+    -  move.w 24(a6),d0        +  move.w 26(a6),d0     (x3)
+                               +  and.l  #$FF,d0       (x2, new)
 
-### The user's standing request (blocked on the above)
-"Test the entire level and home... notate what works vs the PSX version, then
-fix the Jaguar version." Progress so far:
-* `tools/conformance.py` WORKS - teleport, drive, verdicts. Caves sweep gave
-  **20/26 CLIMBED, 2 PARTIAL, 4 NO-CLIMB** (run 32; CLIMB3 is fine, run 31's
-  "all six fail" was the harness window being too short).
-* Confirmed real hole: **room 22 cell (17,11)** - zero faces cover it,
-  60-73% black AT EVERY YAW. `floor_coverage.py --faces` finds 49 such cells.
-  ☠️ **Walling them is the WRONG remedy** (it was in the tree when the blackness
-  appeared, though reverting did not fix it). A hole needs GEOMETRY, not less
-  collision. Left opt-in behind `--faces`, default off.
-* Still to do: jump-drive for JUMPGRAB 1792, sweep Lara's Home, compare to the
-  PSX footage in `res/` (Part 2 = Caves, 3m20 -> 23m24).
+A **16-bit parameter read moved by +2**. `26(a6)` may be the *more* correct half
+of a big-endian 4-byte slot - which is the danger: **this project links
+gcc-compiled main.c with jcc68k-compiled blit/video/gpu/jerry**, so if one side
+moves and the other does not, every cross-boundary call passes garbage. A
+`blit_span(..., uint16_t c)` taking its colour from the wrong half gives exactly
+what we saw: full-speed renderer, nothing visible.
 
-### Face-record layout (decoded this run, needed by any geometry work)
-Quads are **36 bytes**: 12-byte PLANE prefix (FACE_PLANES=1), 4x u16 vertex
-indices at +12, then 8x u16 UVs. Tris are **30 bytes** (12 + 3x u16 + 6x u16).
-NOT the 24/18 the kernel header comment states - parsing at 24 overflows every
-index immediately, which is the tell. Verified against every room's blob length.
+### ACTIONS TAKEN
+* `Dockerfile` ARG and `tools/cobweb_check.sh` both **pinned to 59e5896**, with
+  the reason in the script so no future run silently updates past it.
+* Written up in `jaguar-shared/COBWEB_ISSUES_JCC68K_ABI.md` (b5736f3) - the
+  owner's question is stated plainly: *did the calling convention change, or
+  only the callee's read?*
+
+### ★★★★★ THE LESSON, AND IT COST FOUR RUNS
+`cobweb_check.sh --update` said **"renderer byte-identical - safe"** and that
+was TRUE and USELESS: it only re-assembles `gpu_geotex.gas`. It says nothing
+about the C compiler, which is what actually broke.
+**A toolchain-safety check must exercise what the toolchain builds.**
+⬜ Next: make `--update` screenshot a ROM and compare black%, not just cmp a
+kernel. That is the fix that would have caught this in run 32 instead of 36.
+
+### TO REBUILD A WORKING ROM RIGHT NOW
+    git -C ../../../../cobweb worktree add /tmp/cobweb-old 59e5896
+    cargo build --release --manifest-path /tmp/cobweb-old/sim/Cargo.toml
+    make <flags> COBWEB_DIR=/tmp/cobweb-old
+Verified: 1,292,812 B, 1.1% black, maxluma 217.
+☠️ Do NOT `git checkout` an old rev in the SHARED cobweb tree - four sessions
+build from it. Use a worktree.
+
+### Then resume the user's standing request
+"Test the entire level and home... notate what works vs PSX, then fix."
+* `tools/conformance.py` works; Caves sweep was **20/26 CLIMBED, 2 PARTIAL,
+  4 NO-CLIMB** (run 32). Re-run it once the toolchain is settled.
+* Still to do: jump-drive for JUMPGRAB 1792, sweep Lara's Home, compare against
+  `res/` PSX footage (Part 2 = Caves, 3m20 -> 23m24).
+* ⬜ Room 22 cell (17,11) is a REAL geometry hole (zero faces, 60-73% black at
+  every yaw). `floor_coverage.py --faces` finds 49 such cells but **walling them
+  is the wrong remedy** - it is opt-in and off by default.
+
+### ⬜ AWAITING THE USER (run-25 checkpoint)
+  1. Capture card replugged? 2. Ship Lara's Home? 3. Release or keep polishing?
+Nothing pushed to `origin` (public `tr1-jaguar`).
 
 ---
 

@@ -27,6 +27,17 @@ if [ ! -d "$CW/.git" ]; then
     exit 2
 fi
 
+# ☠️☠️ PINNED TO 59e5896 - DO NOT --update PAST IT WITHOUT RE-TESTING THE ROM.
+# jcc68k at bf31dee moves a 16-bit parameter read by +2 bytes (blit.c:
+# "move.w 24(a6)" -> "move.w 26(a6)"), and this project links gcc-compiled
+# main.c with jcc68k-compiled blit/video/gpu/jerry. The result builds and runs
+# - GPU 218M instrs, no illegal instruction, vblank vector intact - and renders
+# a COMPLETELY BLACK screen. See jaguar-shared/COBWEB_ISSUES_JCC68K_ABI.md.
+# ★ "renderer byte-identical after the update" is NOT a sufficient safety check:
+#   it only re-assembles gpu_geotex.gas and says nothing about the C compiler.
+#   Screenshot a ROM after any toolchain move.
+COBWEB_PIN=59e5896
+
 git -C "$CW" fetch -q origin 2>/dev/null || { echo "cobweb: fetch failed (offline?)"; exit 1; }
 LOCAL=$(git -C "$CW" rev-parse --short HEAD)
 REMOTE=$(git -C "$CW" rev-parse --short origin/main)
