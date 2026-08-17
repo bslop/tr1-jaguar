@@ -390,6 +390,18 @@ make RMAC="$RMAC" ${JAS:+JAS="$JAS"} ${JCC68K:+JCC68K="$JCC68K"} \
 # ── 4. stage the GameDrive payload (everything the SD card needs, together) ───
 mkdir -p "$OUT"
 cp build/openlara.cof "$OUT/OPENLARA.COF"
+# ☠️ KEEP THE ELF BESIDE THE ROM. Symbol addresses are PER-BUILD, so without the
+# matching .elf the release ROM cannot be instrumented AT ALL - no peek, no
+# probe_spot, no entity_check. Run 66 hit exactly that: a "LOADING..." screen
+# appeared mid-walk in the release and could not be chased, because the only
+# build that reproduces it had no symbols. A conformance ROM is NOT a substitute
+# (different flags, different addresses).
+# It is a debug artifact, not an SD file - it is deliberately left OUT of
+# COPY-THESE-TO-SD-ROOT.txt below.
+if [ -f build/openlara.elf ]; then
+    cp build/openlara.elf "$OUT/OPENLARA.elf"
+    echo "   kept OPENLARA.elf beside the ROM (symbols for probe_spot/entity_check)"
+fi
 [ -f MUSIC.PCM ] && cp MUSIC.PCM "$OUT/MUSIC.PCM" || true
 # the front-end clips and the Lara's-Home loading art stream from the card too
 for v in EIDOS.JV CORE.JV INTRO.JV CAVES.JV; do

@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 66
+RUN: 67
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,60 +17,60 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅✅ PICKUPS WORK. The "pickups are broken" signal was the WRONG VARIABLE.
+# ✅ THE RELEASE IS NOW INSTRUMENTABLE. `build_cof.sh` KEEPS ITS ELF.
 
-Run 64 stood Lara on MEDIKIT_SMALL (entity 29) and reported `g_pickups` stuck at
-0, and flagged it as a possible headline defect. It is not. **`g_pickups` is a
-`DEMO_PROPS` counter for a single spinning demo cube at `g_itemx/g_itemz`, and
-`DEMO_PROPS` is not in the shipping flag set at all** - the whole block is
-compiled out, so that counter can never move in a real build.
+Chasing the mid-walk "LOADING..." from run 63 ran straight into a wall: **the
+release ROM had no symbols**, so nothing could be peeked in the only build that
+reproduces it. `tools/build_cof.sh` now copies `OPENLARA.elf` beside the ROM.
 
-The entity pickups are a different system (main.c:8384): types 83 CRYSTAL,
-93 MEDIKIT_SMALL, 94 MEDIKIT_BIG, grabbed when `|dx|+|dz| < PICKUP_REACH 700`
-with `|dy| < 512`, which sets **`g_pickgot[entity]`** and heals (94 = full,
-93 = +500).
+Verified by a full release rebuild -> `/tmp/cofout6`:
+    OPENLARA.COF 1,538,700 B  (byte-identical size to run 60 - reproducible)
+    OPENLARA.elf 1,571,556 B  258 data symbols, all key ones resolve
+    NOT listed in COPY-THESE-TO-SD-ROOT.txt - it is a debug artifact, not an SD file
+★ And the addresses PROVE why a conformance ROM was never a substitute:
+`g_health` is 0x17b7f6 in the release and 0x13f936 in the conformance build.
+**Symbol addresses are per-build; peeking a release with another ROM's map reads
+whatever happens to live there.**
 
-Measured, with a control:
+### ⬜ THE "LOADING..." IS STILL UNEXPLAINED, but two things are now ruled out
+  * **Not a death/reload.** Walking 3000 units from the Caves level start in a
+    conformance ROM: z 3889 -> 6966, floor flat at 3072, room 0 throughout,
+    **health 1000 the whole way**. No damage, no reload.
+  * **Not the intro FMV mistaken for play.** The frames before it show Lara's
+    model in TR1's snowy opening WITH THE HUD MARKS DRAWN - that is gameplay.
+    (TR1's Caves really does start outdoors in snow, which is what made "it must
+    be the cutscene" tempting.)
+So it is a real mid-level load in the release path. ⬜ To chase it:
+  1. `probe_spot.py` needs **`--sd DIR`** (the release streams its videos) and a
+     **boot-length override** - the release needs ~8200 fields to reach the ring
+     versus the 1300 hardcoded now. Both are small.
+  2. Then drive `--play` again with position/health/room telemetry and watch what
+     changes at the moment the loading screen appears.
 
-    standing ON entity 29   g_pickgot[28..31] = 0x00010000  -> byte 29 SET
-    at the level start      g_pickgot[28..31] = 0x00000000
-
-    PG=$(m68k-neogeo-elf-nm /tmp/conf.elf | awk '$3=="g_pickgot"{print $1}')
-    tools/probe_spot.py /tmp/conf.cof /tmp/conf.elf \
-        --at 16896,6656,60928,28,0 --keys up --frames 5 \
-        --raw=pickgot=0x$(printf %x $((0x$PG+28)))
-
-★★★★★ **A zero counter is only evidence if the counter is WIRED.** Two runs were
-spent on a feature that works because I watched a variable that shares a concept
-name with the thing being tested. Before reporting "X does not happen", grep what
-increments the variable and confirm the code is COMPILED IN.
-
-### ✅ THE USER'S DONE LIST NOW HAS EVIDENCE FOR EVERY ITEM
-    enemies+pickups   BEAR + WOLVES render (run 64); MEDIKIT collected (this run)
-    Jaguar menus      title ring driven, passport opens, both levels selectable
-    videos+loading    Core logo -> FMV -> ring, filmed (run 60)
-    sound             (recorded closed in project_sound; not re-verified here)
+### ★ OBSERVED, NOT ACTIONED
+The pre-LOADING gameplay frame shows a **doorway-shaped black rectangle** in the
+cave mouth - the classic coverage-hole shape. The mansion hole thread is closed
+and this is the Caves, whose conformance sweep reports 0 black outliers, so it is
+noted here rather than chased. If it turns out to matter, `sightline.py` at that
+spot is the first command.
 
 ### ⬜ NEXT
-  1. **Hand the release over.** `/tmp/cofout5` is current, verified into gameplay
-     on both levels, and every DONE-list feature now has a captured frame or a
-     measured flag behind it. The run-25/50 direction questions are still
+  1. Give `probe_spot.py` `--sd` and a boot override, then chase the LOADING.
+  2. Bats (ents 1, 11, 31) are unseen - AIRBORNE at y -2432, a floor stand-off
+     leaves them out of frame. Needs an air teleport or camera pitch.
+  3. The release is CURRENT and verified into gameplay on both levels
+     (`/tmp/cofout6` now, with symbols). Run-25/50 direction questions still
      unanswered - "is this the release?" is the blocking one.
-  2. Bats (ents 1, 11, 31) are still unseen - they are AIRBORNE at y -2432 and a
-     floor stand-off puts Lara ~1700 below them. Needs an air teleport or a
-     camera pitch, not another stand-off tweak.
-  3. `release_play.py --play` wedges after ~4 samples and shows an unexplained
-     mid-walk "LOADING..." screen. Drive with turns and see if it recurs.
   4. ☠️ Driven mechanics tests need the rig and a human at the TV. Do NOT claim
      the rig - the capture card is unplugged.
 
 ### ☠️ CLOSED - DO NOT REOPEN
-    mansion holes (runs 50-59): room 15 = MISSING GEOMETRY (real, reachable),
-    room 0 = LARGELY OPEN SKY. `HOPDEPTH`/`ALLVIS` stay OFF.
+    mansion holes (runs 50-59): room 15 = MISSING GEOMETRY, room 0 = OPEN SKY.
+    pickups (run 65): they WORK - `g_pickups` is a DEMO_PROPS counter that is not
+    compiled in; the real state is `g_pickgot[]` + `g_health`.
 
 ### ★ INSTRUMENTS (all off in shipping builds)
     entity_check.py                 stand next to any entity and photograph it
-                                    (--list, --ents, --standoff; boots ONCE)
     release_play.py [--gym|--play]  drive the RELEASE into either level / walk it
     probe_spot.py --raw= / --set=   per-spot telemetry; teleport anywhere
     sightline.py                    what geometry is NEARBY - not what is VISIBLE
@@ -80,8 +80,7 @@ increments the variable and confirm the code is COMPILED IN.
                                     $1C0010 bexit   $1C0014 worldcull
     build_conf.sh EXTRA= / SKIP=
 ☠️ Counters ACCUMULATE - take DELTAS.
-☠️ `g_pickups`/`g_itemcollected` are DEMO_PROPS and NOT COMPILED IN. The real
-   pickup state is `g_pickgot[]` + `g_health`. `g_itemcollected` is not a symbol.
+☠️ SYMBOLS ARE PER-BUILD - use the .elf that came out of the SAME build.
 ☠️ NOEMPTYY=1 and NOSDCULL=1 BUILD AND DO NOT RENDER (illegal=0 either way).
 ☠️ FPS CANNOT be measured offline (capture card unplugged; 68k counters run at
    the 30 Hz LOGIC tick).
@@ -91,7 +90,8 @@ increments the variable and confirm the code is COMPILED IN.
                MANSION LEDGES 24/24  WALLS 6/6 refused
     enemies    BEAR and WOLVES render in-game on shipping flags
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
-    release    CURRENT, both levels verified into gameplay -> /tmp/cofout5
+    release    CURRENT, both levels verified into gameplay, NOW WITH SYMBOLS
+               -> /tmp/cofout6
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,
