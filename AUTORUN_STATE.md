@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 95
+RUN: 96
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -15,53 +15,65 @@ summarise that checkpoint away.**
 
 ---
 
-## NEXT STEP# ✅ THE RELEASE PLAYS WITH THE POOL FIX IN. THE FRAME CHECKER WAS CRYING WOLF.
+## NEXT STEP
 
-Rebuilt the SHIPPING ROM from the disc with run 93's water fix and drove it:
+# ☠️☠️☠️ THE MANSION HAS A REAL COVERAGE HOLE. RUN 94's "IT IS OPEN SKY" WAS WRONG.
 
-    QUALITY=playable VIDEO=0 PADTEXT=136 bash tools/build_cof.sh \
-      "/home/jvilla/Documents/Git/jag_openlara/tr1_psx/Tomb Raider (USA) (v1.6).cue" /tmp/cofout7
-    REL_ROM=/tmp/cofout7/OPENLARA.COF REL_SD=/tmp/cofout7 \
-      REL_ELF=/tmp/cofout7/OPENLARA.elf python3 tools/release_play.py --gym --tour
+HOLEVIS=1 over the spot run 94 flagged (the 86%-black driven frame), 16 yaws
+from ONE seat, measured with the new `tools/holevis_scan.py`:
 
-Boots -> ring -> **page 4 -> Lara's Home loads** -> 24-step tour, 51,321 units
-travelled, health 1000 throughout, Lara drawn correctly in every frame. Caves 38
-rooms and gym 19 in the image; ROM 1,538,988 B. **No regression from the water
-change** - and it could not have caused one, the Caves have ZERO water rooms.
-☠️ the disc lives at `tr1_psx/`, NOT in a `disc/` dir beside the Dockerfile.
+    mean 53.0% of the frame UNCOVERED; worst 83.0%
+    uncovered pixels reach the BOTTOM ROWS in 15 of 16 directions
 
-### ☠️☠️ TWO INSTRUMENTS CRIED WOLF, BOTH BECAUSE A CONSTANT STOOD IN FOR EVIDENCE
-1. **`min-colours 24`** failed 7 of 24 good frames. Measured over the 28 drive
-   frames the mansion runs **20..55 colours, median 27** - the threshold sat
-   INSIDE the legitimate range. What the check exists to catch is runs 53/54's
-   flat luma-76 plane, which is **ONE** colour. Floor is now `FLAT_FIELD_FLOOR
-   = 12` (12x margin) plus an optional RECORDED per-level `.colours_<level>`,
-   exactly as black% already worked. `tools/.colours_gym` = 20, from this drive.
-   `--selftest` now runs **7** cases and proves the new boundary both ways: a
-   near-flat 10-colour field is still caught, a 20-colour mansion frame passes.
-2. **black% vs the gym baseline 36.8%** then failed 11 of 28 (49..86%). Also not
-   a defect: `tools/sightline.py --prefix gym --at 35795,1024,54194,0,<yaw>` says
-   **room 0 is 39% OPEN TO THE SKY** (28 of 72 cells have no ceiling) and the
-   tour NEVER LEFT ROOM 0. A level-wide average cannot bound a capture confined
-   to the most open room in that level. ★ this is the run-69 lesson a third time.
+★ Sky cannot reach the bottom of the frame while she is standing on a floor.
+Room 0 IS 39% open to the sky - that part of run 94 is true - but an open
+ceiling cannot put white pixels under the horizon, so it does not explain this.
+I called it sky from a black frame, which is the exact mistake HOLEVIS exists to
+prevent; the room's open fraction was a plausible story that fit the number I
+had. **The correction is what matters: this is a hole, and it is large.**
 
-### ⬜ NEXT: `HOLEVIS=1` OVER THE SAME TOUR - IT IS THE ONLY THING THAT CAN TELL
-### OPEN SKY FROM A COVERAGE HOLE
-Do NOT try to settle the 86%-black frames (t_11, t_16) from a normal capture: a
-hole and the sky are the same black pixels, which is what cost runs 50-59 and
-what HOLEVIS was built for (clear to WHITE, so uncovered reads unambiguously).
-Build the release flag set with `HOLEVIS=1`, re-run the same `--gym --tour`, and
-measure UNCOVERED% per frame. If it tracks the 39% open fraction, the frames are
-correct and the black baseline should become room-aware (release_play already
-peeks `g_curroom`; the open-cell fraction is computable straight from
-`gym_sect.bin`, see sightline.py's ceiling loop). If it does not, there is a
-real hole and it is the first one found in the mansion since run 59.
+☠️ THE SEAT IS VALID - checked, because run 91 died on this: `g_lay=1024
+g_lafloor=1024 g_curroom=0 g_floorroom=0` at (35795, 54194). She is standing on
+a real floor in room 0, not wedged and not falling.
 
-### ⬜ ALSO WORTH DOING: THE TOUR ONLY EVER SEES ONE ROOM
-24 wall-following steps covered 51,321 units and visited **[0]**. A 19-room level
-"playthrough" that never leaves the first room proves much less than its name
-suggests. Seed the tour from the door list (`tools/door_walk.py` already knows
-every doorway) instead of wall-following, or drive it room-to-room.
+### ✅ RULED OUT BY MEASUREMENT: `ALLVIS`
+The Makefile has ALLVIS=1 for exactly this shape of bug (a room whose portal
+window computes EMPTY is dropped whole, leaving a doorway-shaped hole) and it is
+in **neither** flag set, so it looked like the answer. Built it, re-captured the
+same 16 frames from the same seat:
+
+    mean uncovered  53.0% OFF  ->  53.2% ON     (+0.2%, i.e. nothing)
+
+★ A knob that changes NOTHING is evidence about the INPUT, not the knob - the
+same lesson as the guns. The rooms are being admitted; something inside them is
+not being drawn. Do NOT re-test ALLVIS.
+
+### ⬜ NEXT: `DREWVIS=1` AT THIS EXACT SEAT - VISIBLE vs DREWN
+The probe printed `not in this build, so not shown: g_visrooms, g_drewrooms` -
+those counters are compiled out, and they are precisely the ones that split the
+remaining possibilities:
+  * `g_visrooms` high, `g_drewrooms` low  -> rooms admitted then dropped later
+  * both high but the screen stays white  -> the rooms ARE drawn and their FACES
+    are being rejected (near-plane whole-face rejection is a KNOWN open bug and
+    lands exactly here - see project_near_plane_face_pop, NEAR is 32 in main.c
+    and 64 in the kernel)
+Build `EXTRA="HOLEVIS=1 DREWVIS=1"`, re-run the same probe line (below), and read
+both counters per yaw. Reproduce with:
+
+    tools/build_conf.sh gym          # EXTRA="HOLEVIS=1 DREWVIS=1"
+    python3 tools/probe_spot.py /tmp/gym.cof /tmp/gym.elf \
+      --at 35795,1024,54194,0,0 --shots /tmp/holevis \
+      --phases "set:g_layaw=0x0000:2,set:g_layaw=0x2000:2,set:g_layaw=0x4000:2,\
+set:g_layaw=0x6000:2,set:g_layaw=0x8000:2,set:g_layaw=0xA000:2,\
+set:g_layaw=0xC000:2,set:g_layaw=0xE000:2"
+    python3 tools/holevis_scan.py /tmp/holevis/*.png --prefix gym --room 0
+
+### ★ NEW TOOL: `tools/holevis_scan.py`
+Gives HOLEVIS frames a VERDICT instead of a percentage. Splits uncovered pixels
+above/below the horizon and reports how many rows up from the bottom edge they
+reach, because that is what separates legitimate sky from a ground hole. ☠️ It
+REFUSES a set that is 0% uncovered rather than reporting a clean bill of health -
+on a non-HOLEVIS build every frame is 0% and that would look like success.
 
 ### ⚠️ BUILD STATE
 `/tmp/cofout7/` = the SHIPPING payload built this run WITH the pool fix (COF +
