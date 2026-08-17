@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 26
+RUN: 27
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,47 +17,45 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-**✅✅ END-TO-END CONFIRMED: the climb works AND lands somewhere rendered.**
-Task #10 (second ledge grab) is closed; #8 (ivy drop) is very likely closed with
-it and just needs the same check at that location.
+**✅✅ FULL RELEASE RE-VERIFIED from the disc, with all three recipe changes.**
+`tools/build_cof.sh` -> `/tmp/cofout2`, ~18 min.
 
-Driven at a post-patch census spot (room 12, CLIMB3 rise 768, X 45568 Y 7680
-Z 53760, yaw 0):
+    OPENLARA.COF 1,538,236 B    __bss_end 0x1E0A30 = 112,080 B UNDER the guard
+    boots in jagemu off its own SD card: EIDOS -> CORE logo, illegal=0
 
-    spawn        Y 7680  floor 7680
-    walk (UP)    Y 7680 constant, Z advancing        flat ground
-    UP+B held    7658 7590 7522 7455 7387 7093 7003  smooth, ~70/step
-                 6912  floor -> 6912                 LANDS, exactly 7680-768
-    screen       0.7% black (was 81-97% before the wall patch)
+**★★★ THE ASSET PIPELINE IS BIT-FOR-BIT REPRODUCIBLE.** All five hashes match
+the run-12 build exactly, from an independent full run:
 
-★ **The wall patch is validated by its effect on the census itself**: spot count
-dropped to 26 and every room-11 entry vanished — those were the phantom floors
-that put run 21's test in a black void. The census is trustworthy again.
+    fe150ad3b1458e13fb3e017ebcd12ea6  CAVES.JV
+    2068149d3f2c147035dfae4467beef59  CORE.JV
+    e40b6096b980c366fafc52323c21d493  EIDOS.JV
+    973a4a7ebee1892a2b363eabb7231a13  INTRO.JV
+    2ce85536c4f3ec71c2b3bb84bc25a365  MUSIC.PCM
 
-☠️ **Hold the buttons through the whole pull-up.** My first pass released at
-Y 7387 and she stalled mid-climb (floor still 7680) — that looked like a failed
-climb and was purely my input. Releasing aborts it, as in the original game.
-☠️ Keep holding UP after landing and she walks straight off the far side
-(Y 6948 -> 7380, floor 7424). Expected; not a bug.
+And every fix reproduces from a FRESH extraction rather than surviving as
+hand-edited state (which matters: `mrt_sect.bin` and `mrt_entex.h` are
+regenerated every build):
+
+    boundary patch   403 cells -> 0x7FFE   size 24720 unchanged
+    coverage patch   350 cells -> 0x7FFF   size 24720 unchanged   (correct order)
+    enemy skins      553 faces, 0 untextured, atlas 373,248 B
+    gym_lskin guard  "alias valid, saves 110016 B"
 
 ### What to do next
-1. **Re-run `tools/build_cof.sh` end to end.** Now THREE recipe changes since
-   its last full run: RCLIPFIX (run 20), the collision coverage patch (run 24),
-   and everything they imply. ~20 min, video is the slow part. Then rebuild the
-   container and diff `/tmp/dockout` against `/tmp/cofout`.
-2. **Task #8 (ivy drop)** — same driven method at that location; expect it to be
-   fixed already. If blackness remains there, it is an INSIDE-the-bbox hole and
-   needs the per-face coverage pass (see 3).
-3. ⬜ **Per-face coverage pass.** `floor_coverage.py` flags only cells outside
-   the mesh bbox — certain but a LOWER BOUND. Holes inside the bbox need
-   per-face XZ coverage. Build it only if a real symptom survives.
-4. **RIG, batched** — `PHRASEDST=1` yes/no (the only silicon-blocked question
-   left), title-music, enemy skins, mansion, PHRASECLEAR, RCLIPFIX, collision.
+1. **Task #8 (ivy drop)** — the last open gameplay bug. Use the driven telemetry
+   method; expect it fixed by the coverage patch. If blackness remains there it
+   is an INSIDE-the-bbox hole and needs the per-face pass (2).
+2. ⬜ **Per-face coverage pass** — `floor_coverage.py` flags only cells outside
+   the mesh bbox (certain, but a LOWER BOUND). Build it only if a symptom
+   survives; do not speculatively broaden the patch.
+3. **Rebuild the container** and diff against `/tmp/cofout2` — the image is
+   pinned at `COBWEB_REV=59e5896` and predates RCLIPFIX + the coverage patch.
+4. **RIG, batched** — `PHRASEDST=1` yes/no (only silicon-blocked question),
+   title-music, enemy skins, mansion, PHRASECLEAR, RCLIPFIX, collision fix.
 
-### ⬜ AWAITING THE USER (run-25 checkpoint, unanswered)
-Three direction questions were put to him and none is answered yet; do not act
-on them unilaterally:
-  1. Can the capture card be replugged? (biggest unblock by far)
+### ⬜ AWAITING THE USER (run-25 checkpoint, still unanswered)
+Do not act on these unilaterally:
+  1. Can the capture card be replugged? (biggest unblock)
   2. Ship Lara's Home in the release? (fits, works, costs 254KB)
   3. Is this the release, or keep polishing?
 Nothing is pushed to `origin` (public `tr1-jaguar`). Keep it that way.
@@ -68,6 +66,7 @@ Nothing is pushed to `origin` (public `tr1-jaguar`). Keep it that way.
     symbols are PER-BUILD - read them from that arm's own `nm`.
 ☠️ Room blob header is 16 B (`>HHHHH` then `>hhh`), verts at +16 as `>hhhH`;
 sector cell is `floor:h, ceiling:h, slantX:b, slantZ:b`.
+☠️ Hold UP+B through the WHOLE pull-up; releasing aborts it mid-climb.
 
 ---
 
