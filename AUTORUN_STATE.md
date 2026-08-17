@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 50
+RUN: 51
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,58 +17,71 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅✅ BOTH LEVELS ARE FULLY CONFORMANT. CLIMBING IS DONE.
+# ⬜ THE MANSION HOLE IS REAL AND FIVE EXPLANATIONS ARE NOW DEAD
 
-                LEDGES climbed        WALLS correctly refused    black outliers
-    CAVES       24/24  (0 PARTIAL)    6/6                        0
-    MANSION     24/24  (0 PARTIAL)    6/6                        7
+The room 15/16/17 black band is a **genuine coverage gap**: built with
+`HOLEVIS=1` (paints uncovered pixels white) the band goes **33.1% WHITE** and
+black falls to 2%. The renderer never covers a third of that screen. Frame saved
+at `/tmp/hole15_holevis.png`; ☠️ these are 320x**80**, upscale 3x vertically.
 
-Every climbable ledge climbs; every step Lara does not fit on is refused. That
-closes the user's "try out every ledge/jump/obstacle" request for climbing.
+### ☠️ WHAT IT IS NOT — all measured, not reasoned
+Every one of these left the gap at **33.1%**, unchanged to 0.1%:
 
-### ✅ `FITSTEP=1` — TR1's headroom rule on the AUTOMATIC 256 STEP-UP
-Run 48 put `climb_fits()` on the three CLIMB entries, which left the one path
-that never asks to climb: a <=256 step is performed by the WALK itself, so she
-still walked up into gaps a third of her height. `FITSTEP` adds the same test to
-the move gate, both axes.
-★ It short-circuits on `g_lafloor - nf <= 0`, so it is only evaluated on a step
-UP — flat ground and drops never call it, which is why putting a check in the
-per-frame move gate is affordable here. Only step-ups are gated, deliberately:
-demanding 762 of clearance to walk ANYWHERE would wall her out of low corridors
-she is meant to use.
-Measured, both levels: **walls 6/6 refused (from 4/6 caves, 2/6 mansion), ledges
-unchanged at 24/24, render baseline exactly 1.1% / maxluma 217.**
-Now in the shipping set (`build_cof.sh`) and the conformance set. `build_conf.sh`
-gained `EXTRA=` so an A/B needs no edit; the flag is verified in the compile line.
+    ALLVIS=1     "room whose portal window computes EMPTY is dropped" -> 33.1%
+    XCULL off    the room bounding-radius cull (SKIP=XCULL)           -> 33.2%
+    NEARLOW=1    near plane 64 -> 16, the whole-face rejection        -> 33.1%
 
-### ⬜ NEXT: TWO REAL RENDERING HOLES, AND THEY ARE DIFFERENT SHAPES
-The mansion's 7 black outliers are not noise — I LOOKED at the frames (saved as
-`/tmp/hole_room0.png` and `/tmp/hole_room15.png`; ☠️ upscale 3x vertically, they
-are 320x**80**):
+and two more ruled out from the data:
 
-  * **room 0, 77.8% black** — she stands on a lit floor and EVERYTHING above it
-    is pure black. A 2560 wall is in front of her and no wall is drawn at all.
-  * **rooms 15/16/17, ~45% black** — the upper half renders correctly (walls,
-    doorway, furniture) and the **lower half is a solid black band where the
-    FLOOR should be**.
+    * the PORTAL EXISTS: gym_portalv has 15->13, 16->13, 17->13 (and 13 back to
+      all of them). Not a missing-portal or vertical-sector-link case.
+    * the GEOMETRY EXISTS: room 13 carries 471 quads over 216 cells (2.23
+      faces/cell, the DENSEST room in the set). The faces are not missing.
 
-HYPOTHESIS, NOT YET TESTED, for the second one: near-plane whole-face rejection
-(`project_near_plane_face_pop`) — the floor polygon under the camera is the face
-most likely to have one vertex behind NEAR, and the renderer drops the WHOLE
-face. That predicts the band is fixed to the bottom of the screen and follows the
-camera. ☠️ NEAR is 32 in main.c and 64 in the kernel.
-**The test:** `tools/probe_spot.py <rom> <elf> --at ... --keys up --shots DIR` at
-a room 15 spot, then look at consecutive frames. Band pinned to the lower screen
-while the world scrolls = near plane. Band tied to one patch of ground = a
-missing/culled face, a different bug. Do not fix before deciding which.
-`HOLEVIS=1` exists for this (`project_coverage_holes`) and NOPCLIP already fixed
-the portal-clip-rect family, so this is a NEW family, not that one.
+★★★★★ **Four very different culling changes producing byte-identical coverage is
+itself the finding.** Nothing in the cull path is deciding this. Stop A/B-ing
+render flags — the next step is to make the renderer SAY what it drew.
+
+### ⬜ NEXT: INSTRUMENT THE DRAW SET, DO NOT GUESS AT IT
+Add a peekable counter/bitmask of the rooms submitted this frame (a `uint32_t
+g_drewrooms` ORed with `1<<r` at the point geometry is queued, cleared per
+frame), build the gym ROM, and `probe_spot.py` the room 15 spot. Then it is one
+read:
+  * **bit 13 clear** -> room 13 is never submitted. Walk back from the submission
+    site through `room_link_rect(15,13,...)`; note ALLVIS claims to cover the
+    empty-window case and demonstrably does not, so verify ALLVIS is actually
+    reached before trusting its comment.
+  * **bit 13 set** -> it IS submitted and its faces die later - in the kernel,
+    per-face. Then dump face counts submitted vs drawn for that room.
+This is the "STOP DECODING, START READING" lesson from the 68k campaign applied
+to the renderer.
+
+### ☠️ NOTE: room 0's hole is a DIFFERENT shape, do not assume one cause
+Room 0 (77.8% black, `/tmp/hole_room0.png`) shows a lit floor with EVERYTHING
+above it black — no wall at all where a 2560 wall stands. Rooms 15/16/17 show a
+correct upper half with a band missing in the MIDDLE distance and the nearest
+floor strip drawn. Two shapes, possibly two bugs. Room 0 is adjacent only to room
+1, so it is the simpler case and may be the better one to instrument first.
+
+### ★ TOOLING ADDED THIS RUN
+  * `build_conf.sh EXTRA="FOO=1"` — append flags for an A/B without editing.
+  * `build_conf.sh SKIP="XCULL"` — REMOVE a flag from the set. ☠️ Needed because
+    `make XCULL=0` still DEFINES XCULL in this Makefile, so the obvious way to
+    turn a feature off leaves it on. Both are verified in the build log.
+  * The verifier now also accepts assembler symbols: NEARLOW is `.if NEARLOW=1`
+    in gpu_geotex.gas and arrives as `-d NEARLOW=1`, so a -D-only check called a
+    correctly-built ROM invalid and would have thrown away a good A/B.
+
+### ✅ STILL TRUE FROM RUN 49 — climbing is closed
+    CAVES    LEDGES 24/24   WALLS 6/6 refused   0 black outliers
+    MANSION  LEDGES 24/24   WALLS 6/6 refused   7 black outliers (this hole)
+`FITSTEP=1` is in the shipping set.
 
 ### ⬜ ALSO STILL OPEN
-  * ☠️ `/tmp/cofout4` (the filmed release) predates runs 46-49: no jump-reach
-    solve, neither collision fix, no FITSTEP. **Rebuild before shipping.**
-  * The three run-25 direction questions are still unanswered (capture card,
-    ship Lara's Home, release vs keep polishing).
+  * ☠️ `/tmp/cofout4` (the filmed release) predates runs 46-49. **Rebuild before
+    shipping** — no jump-reach solve, neither collision fix, no FITSTEP.
+  * The run-25/50 direction questions are unanswered (capture card, ship Lara's
+    Home, release vs keep polishing). The run-50 report was delivered.
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,

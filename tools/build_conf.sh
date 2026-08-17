@@ -66,7 +66,15 @@ build_one() {
     # EXTRA=... appends flags for an A/B without editing this file. They are
     # verified below like every other flag, so a typo shows up as "NOT in the
     # compile line" instead of quietly measuring the baseline twice.
-    if ! make $BASE $extra ${EXTRA:-} > "/tmp/build_$name.log" 2>&1; then
+    # SKIP="XCULL BEXIT" REMOVES flags from BASE for an A/B. ☠️ It has to remove
+    # them: `make XCULL=0` still DEFINES XCULL in this Makefile, so the obvious
+    # way to turn a feature off actually leaves it on.
+    local use="$BASE"
+    for k in ${SKIP:-}; do
+        use=$(echo "$use" | sed -E "s/(^| )$k=[^ ]*/ /g")
+        echo "    SKIP: $k removed from the flag set"
+    done
+    if ! make $use $extra ${EXTRA:-} > "/tmp/build_$name.log" 2>&1; then
         echo "☠️ $name build FAILED — tail of /tmp/build_$name.log:"
         tail -12 "/tmp/build_$name.log"
         return 1
@@ -75,12 +83,26 @@ build_one() {
     cp build/openlara.elf "/tmp/$name.elf"
     echo "    /tmp/$name.cof  $(stat -c%s /tmp/$name.cof) B"
     # Verify the flag actually landed rather than trusting the command line.
+    for k in ${SKIP:-}; do
+        grep -q -- "-D$k" "/tmp/build_$name.log" \
+            && echo "    ☠️ $k STILL in the compile line - the A/B is invalid" \
+            || echo "    $k: confirmed absent"
+    done
     for f in $extra ${EXTRA:-}; do
         case "$f" in
             *=1) k="${f%=1}"
-                 grep -q -- "-D$k" "/tmp/build_$name.log" \
-                    && echo "    $k: in the compile line" \
-                    || echo "    ☠️ $k NOT in the compile line" ;;
+                 # ☠️ CHECK THE ASSEMBLER TOO. Some flags are jas symbols, not C
+                 # defines - NEARLOW is `.if NEARLOW=1` inside gpu_geotex.gas and
+                 # reaches the build as `-d NEARLOW=1`. Looking only for -D
+                 # reported a correctly-built ROM as "NOT in the compile line",
+                 # which would have thrown away a valid A/B as invalid.
+                 if grep -q -- "-D$k" "/tmp/build_$name.log"; then
+                     echo "    $k: in the compile line"
+                 elif grep -q -- "-d *$k=1" "/tmp/build_$name.log"; then
+                     echo "    $k: passed to the assembler (-d $k=1)"
+                 else
+                     echo "    ☠️ $k reached NEITHER the compiler nor the assembler"
+                 fi ;;
         esac
     done
 }
