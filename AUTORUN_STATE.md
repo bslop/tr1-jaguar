@@ -68,9 +68,30 @@ upstream cabling and **no capture can verify this**. Only the TV can.
     black      -> A10 lottery; `tools/roll_walk.sh <arm> 0 136 272 408 544 816`
     error      -> a real fault (roll_walk scores an error screen as "LIT")
 
-### ★ ROSTER: jag_bubsy3d IS SCRAPPED (user, run 76) - recorded and pushed
-Roster is FOUR: openlara, quake, rr, resident. The first slot is vacant and
-openlara is no longer batched behind bubsy3d.
+### ★ ROSTER IS FIVE AGAIN (2026-08-17): jag_viewpoint IN, jag_bubsy3d OUT
+    jag_quake · jag_openlara · jag_resident · jag_viewpoint · jag_rr
+`jag_viewpoint` (Viewpoint, Neo Geo NGH-051 -> Jaguar) was admitted by the user
+and filled the vacancy bubsy3d left; it takes NO rig time yet (no ROM that
+reaches a picture), following jag_rr's precedent. Pulled as jaguar-shared 814ccd3.
+
+☠️☠️ **A ROSTER CHANGE RECORDED ONLY IN PROSE IS A ROSTER CHANGE THAT DID NOT
+HAPPEN.** I wrote bubsy3d's removal into `hw/RESOURCES.md` prose (run 76) and left
+`hw/PROTOCOL.md`'s TABLE stale, so the two docs disagreed. `jag_viewpoint` caught
+it and fixed the table: **the table is what a new session reads to decide whether
+it may touch the rig.** Update both, or neither counts.
+★ Also from them: removing a project from the roster does NOT release its lease -
+a dead jag_bubsy3d token was still sitting in `~/.jaguar-hw/OWNER`.
+★ **`jaghw` is re-entrant via `JAGHW_HELD`** (hw/jaghw:117 tests it, :171 exports
+it). That is what lets a loop script wrap cycle+settle+upload+capture in ONE outer
+acquisition and still call `jag_gd.sh` inside it - the inner leases nest instead
+of deadlocking. Both `tools/vroll_game.sh` and `tools/climb_matrix.sh` rely on it;
+without it they would have to inline raw `jaggd`, which is how they originally got
+split into the racy multi-lease shape bubsy3d found on 2026-08-16.
+★ For the record, checked this run: **`jag_gd.sh` never self-power-cycles.** On
+LIBUSB_ERROR_TIMEOUT it dies and asks for a human cycle; `upload` already rides a
+single lease (reboot-to-stub + `-ux` together).
+⚠️ A session **`sonic2-jaguar-port-cleanup`** appeared and is NOT on the roster.
+Surfaced to the user; do not edit the roster on its behalf.
 
 ### ⬜ ALSO OPEN
   * The pool: swim down through the room 14 water surface, expect room 18.
