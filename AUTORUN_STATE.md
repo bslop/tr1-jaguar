@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 62
+RUN: 63
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,55 +17,53 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅✅✅ THE RELEASE IS VERIFIED INTO GAMEPLAY ON **BOTH** LEVELS
+# ✅ CENSUS NOW REQUIRES THAT SHE FITS WHERE SHE **STANDS**, TOO
 
-`/tmp/cofout5` - 7 files, `OPENLARA.COF` **1,538,700 B**, pinned toolchain,
-`-DFITSTEP` in the compile line. Driven from a cold boot with
-`tools/release_play.py`, no compile-time shortcuts:
+TR1's `checkClimb` headroom rule was applied to the climb TARGET (run 48). The
+standing cell was never checked, so the census offered pairs where Lara cannot
+be in the first place - not a ledge, not a wall control, just noise:
 
-    CAVES         ring -> A (passport "Start Game") -> A -> snow cutscene
-                  -> **caves, 1.1% black** (the recorded in-game baseline)
-    LARA'S HOME   ring -> RIGHT x4 to page 4 -> A
-                  -> **mansion interior, 3.2-3.5% black**, checkerboard floor,
-                     windows, Lara undeformed
-Frames: `/tmp/release_ring.png`, `/tmp/release_ingame.png`,
-`/tmp/release_gym_ingame.png`.
+    CAVES    12 of 290 step-up pairs (4%)   e.g. room 20 floor 4608, ceiling 4352
+    MANSION  15 of 304 step-up pairs (5%)   e.g. room  8 floor  512, ceiling  256
 
-★ This is the SHIPPING path, not a test hook. `AUTOGYM`/`GYMTEST` skip the menu
-exit; this is a real A-press on ring page 4, so it exercises the loading screen,
-level setup and the whole handover. And the release carries every fix from runs
-46-49 - the TR1 jump-reach solve, the ledge-probe window, `climb_fits`,
-`FITSTEP` - which had never been in a release ROM together.
+Those are dropped now (not reclassified - a spot she cannot stand at is not a
+WALL control either). Both levels still yield a balanced 6 per class.
 
-### ☠️ DRIVING THE RING: TWO TRAPS, BOTH NOW IN THE SCRIPT
-  * **The ring swallows input while it spins.** At 60 fields per press only 2 of
-    4 RIGHT presses registered; the ring sat on "Sound" (page 2) while the script
-    believed it was on page 4 and reported a dead selection. It needs ~200 fields
-    per press (the ring also PACES itself to ~10fps). The script now captures
-    after EVERY press so the page is READ, never assumed.
-  * **The passport needs TWO A presses** (ring -> "Start Game" -> start), and
-    "Start Game" plays an FMV before the level.
-★ `jagemu video` has NO input, so a filmstrip can never get past the ring. Any
-"does the game run" check must be a ctl session.
+★★★★★ **HONEST SCOPE, recorded because it would be easy to claim otherwise:**
+this does NOT explain the room 15 hole that cost runs 50-55. That spot has
+**4608** of standing headroom and is perfectly reachable - the missing riser
+there is real. The rule is worth having on its own merits; it is not a
+retro-justification for that hunt.
 
-### ⬜ NEXT: THE OFFLINE WORK HAS CONVERGED - this is a good place to stop
-Everything the emulator can settle is settled. What remains needs either the rig
-or a decision from the user:
-  1. **The release is CURRENT and verified on both levels.** `/tmp/cofout5` is
-     what he would flash. The run-25/50 direction questions are still unanswered,
-     and "is this the release?" is now answerable with a real ROM behind it.
-  2. **Driven mechanics tests** (`project_caves_mechanics_audit` still lists
-     r17's dead doors and others) - `tools/drive.sh` needs the rig and a human at
-     the TV. ☠️ Do not claim the rig.
-  3. If more offline work is wanted, the honest candidates are SMALL: the census
-     invents spots TR1 would never reach (room 15's riser came from one), so
-     tightening `ledge_census.py` against reachability would stop manufacturing
-     non-bugs.
+### ✅ VERIFIED NON-REGRESSIVE - both levels re-swept on clean ROMs
+    CAVES    LEDGES 24/24 climbed   WALLS 6/6 refused   0 black outliers
+             render baseline exactly 1.1% / maxluma 217
+    MANSION  LEDGES 24/24 climbed   WALLS 6/6 refused   6 black outliers
+             (rooms 15/16/17 - the known open-sky / missing-riser views)
+
+### ⬜ NEXT: THE OFFLINE WORK IS DONE. WHAT REMAINS NEEDS THE USER OR THE RIG.
+Say this plainly rather than inventing another sweep:
+  1. **The release is CURRENT and verified into gameplay on BOTH levels**
+     (`/tmp/cofout5`, run 60-61). It carries every fix from runs 46-49. This is
+     what he would flash. The run-25/50 direction questions are still
+     unanswered - "is this the release?" now has a real ROM behind it.
+  2. **Driven mechanics tests** (`project_caves_mechanics_audit`: r17's dead
+     doors and the rest) need `tools/drive.sh`, the rig, and a human at the TV.
+     ☠️ Do NOT claim the rig - the capture card is unplugged.
+  3. If another offline increment is wanted, the remaining candidates are small
+     and none is a known defect. Prefer re-verifying the release over inventing
+     work: rebuild, drive both levels, look at the frames.
+
+### ★ CONTRIBUTED TO `jaguar-shared` THIS RUN
+`techniques/driving-a-menu-in-jagemu.md` - `jagemu video` has no input so a
+filmstrip can never pass a title screen; a spinning menu swallows presses (~200
+fields each, capture after every one); and `illegal=0` is NOT "it rendered".
+All three cost this project a pass each.
 
 ### ☠️ CLOSED - DO NOT REOPEN
-    mansion holes (runs 50-59): room 15 = MISSING GEOMETRY, room 0 = LARGELY
-    OPEN SKY (28/72 cells have no ceiling; rooms 13/17 are 6-7 PORTAL HOPS away,
-    so the run-56 "fix" drew through walls at 6.3x kernel cycles).
+    mansion holes (runs 50-59): room 15 = MISSING GEOMETRY (real, reachable),
+    room 0 = LARGELY OPEN SKY (28/72 cells have no ceiling; rooms 13/17 are 6-7
+    PORTAL HOPS away, so the run-56 "fix" drew through walls at 6.3x cycles).
     `HOPDEPTH`/`ALLVIS` stay OFF; shipping verified byte-identical at HOPDEPTH=3.
 
 ### ★ INSTRUMENTS (all off in shipping builds)

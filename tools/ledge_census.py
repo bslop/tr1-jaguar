@@ -130,6 +130,19 @@ def census(rooms):
                     # and it was reported as a JUMPGRAB the engine then "failed".
                     # The engine was right and the census was wrong; those spots
                     # cost two runs of hunting a bug that was not there.
+                    # ☠️ AND SHE HAS TO FIT WHERE SHE STANDS. TR1's rule is
+                    # about the target, but a pair whose STANDING cell is
+                    # shorter than Lara is not a test at all - she can never be
+                    # there to attempt it, so it is neither a ledge nor a wall
+                    # control. 12 such pairs in the Caves and 15 in Lara's Home
+                    # (4-5% of all step-ups), e.g. gym room 8 standing on floor
+                    # 512 under a ceiling at 256.
+                    # ★ HONEST SCOPE: this does NOT explain the room 15 hole
+                    # that cost runs 50-55 - that spot has 4608 of standing
+                    # headroom and is perfectly reachable. The missing riser
+                    # there is real. Do not let this rule take credit for it.
+                    if hf - hcy < LARA_HEIGHT:
+                        continue
                     # ...but do NOT drop the pair: reclassify it as WALL. An
                     # unclimbable step is exactly what a WALL spot is, and WALL
                     # spots are the NEGATIVE CONTROL - they are how the sweep
