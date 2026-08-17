@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 102
+RUN: 103
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -13,49 +13,88 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+### What may interrupt the 25 — and what may not (user, 2026-08-17)
+
+Run the 25 autonomously. Exactly **two** things break the loop early, and only
+one of them ends it:
+
+1. **A question for the user.** Direction, an irreversible change, a fact only
+   they can supply. Stop, ask, wait.
+2. **Needing the real Jaguar — this does NOT stop the loop.** Queue it and
+   carry on:
+
+   ```sh
+   jagq run <rom> --frames 3   # queue → flash → capture → hand back
+   jagq status                 # who holds it, who is waiting
+   ```
+
+   `jagq run` blocks until your turn arrives, so *waiting for the rig is part of
+   the run*, not a reason to end it. Exit 0 = ran; 3 = job failed
+   (`jagq log <id>`); 4 = broker down (`jagq up`).
+
+⭐ **The arbiter is now `jagq`, not `jaghw`** (user's call, 2026-08-17).
+`jag_gd.sh` keeps working unchanged — `hw/jaghw` forwards to `jagq`, and `jagq`
+exports `JAGHW_HELD` as well as `JAGQ_HELD` so its re-entrant nesting still
+composes. Two things that were this project's problem are now the broker's:
+
+- **The turn cap is enforced centrally** — 300 s for every lease, session token
+  and hold, whatever the caller asks for.
+- **The capture card is inside the exclusion.** `climb_matrix.sh:110`'s five
+  acquisitions with the settle and the `grab` *unlocked* — the shape that
+  photographs another project's frame — cannot happen through `jagq run`, which
+  flashes and captures inside one turn. Worth re-reading that loop against
+  `jagq run --capture`.
+
+See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
+
 ---
 
 ## NEXT STEP
 
-# ✅ SHE NO LONGER FALLS THROUGH THE FLOOR AT A STEP. ONE TEST TRADED FOR IT.
+# ✅✅ BOTH LEVELS FULLY EXPLAINED. THE FLOOR FIX IS REGRESSION-CLEAN.
 
-### 1. RUN 100's FIX IS CLEAN - THE FLAGGED REGRESSION CHECK IS DONE
-    CAVES   24/24 ledges, 6/6 walls        MANSION  24/24 ledges, 6/6 walls
-Nothing regressed from changing the core floor query. That item is closed.
+    CAVES   doors 55 crossed / 3 FAILED     climbs 24/24 ledges, 6/6 walls
+    MANSION doors 15 crossed / 3 FAILED     climbs 24/24 ledges, 6/6 walls
 
-### 2. GYM 7 -> 9 WAS A FALL-THROUGH, AND IT IS FIXED
-Traced the approach cell by cell: room 7's next cell is **-512** (a two-click step
-UP, a vault in TR1) while room 8 lies **1280 BELOW**. Ground mode ranks a floor
-at/below the feet ahead of one above regardless of WHICH room it came from, so
-room 8 won and she walked at the step and **fell through the floor**:
+**Every remaining failure on either level is explained**, and all four sweeps
+match the pre-fix baseline:
 
-    BEFORE  up0 y=0 room=7  ->  up1 y=1108 room=8  ->  up2 y=1280 room=8
-    AFTER   y=0, room 7, stopped at x=57302 - refused by the step, as TR1 does
+    CAVES   11 -> 12  DOOR shut   correct - its switch is in the same cell
+    CAVES   25 -> 28  DOOR shut   correct
+    CAVES   25 -> 22  moved 141   WEDGED on the stand-off cell - harness, see below
+    GYM      2 -> 5   STEP UP     correct - a vault, not a walk
+    GYM      2 -> 6   STEP UP     correct
+    GYM      7 -> 9   STEP UP     correct - and this was the FALL-THROUGH bug
 
-### 3. ☠️ THE FIRST FIX WAS TOO BLUNT AND BROKE ROOM CROSSING
-Preferring the current room outright fixed 7->9 and broke **7->2**: rooms 7 and 2
-BOTH supply floor 0 across the whole seam (measured, z 48016..46096), so room 7
-won every tie and never handed over - she walked **7073 units** and stayed in
-room 7. ★ The distinction is the **DROP**, not the room. Final rule: take the
-normal winner UNLESS it sits BELOW the best floor her own room offers. A TIE
-falls through untouched, so seams still hand over.
+### ★★★★★ THE ONE "REGRESSION" WAS THE HARNESS TESTING ITSELF
+Run 101 traded gym 8->11 for the 7->9 fix and I refused to call that harmless
+without looking. It was not a game defect: **8->11 walks room 8 -> room 11
+perfectly on a fresh boot at the SAME seat** (measured - she holds y=1280 through
+room 8, crosses at x=58450 into room 11, then follows the floor down 1506 ->
+3950). door_walk runs all 18 doors in ONE boot, so a test starts from wherever
+the previous walk left her - mid-fall, on a slope, carrying velocity - and that
+is what moved the seat into room 10.
+FIX: `door_walk` now **re-seats up to 3 times** before believing a drift, and
+`--door R,D` works on a LIVE run, not just `--seats`, so any single doorway can
+be re-run in isolation. Mansion went **14/4 -> 15/3 with all three explained**.
+☠️ A sweep that reports its own sequencing as a door failure is worse than
+useless - it invents defects, and I nearly recorded one.
 
-### 4. WHAT IT COST - STATE IT PLAINLY
-    CAVES doors      55 crossed / 3 FAILED     IDENTICAL to baseline
-    MANSION climbing 24/24, 6/6                IDENTICAL to baseline
-    MANSION doors    15/3  ->  **14/4**
-      7 -> 9   was "saw [7,8] WALL" (the fall-through)  ->  now STEP UP, explained
-      8 -> 11  was ok  ->  now FAILS, **and its seat drifted into room 10**
-A drifted seat means that test is compromised, not necessarily the game - but I
-am not going to call it harmless without looking. It is the first thing to check.
+### ⬜ NEXT: REBUILD AND RE-DRIVE THE RELEASE
+The shipping payload in `/tmp/cofout7` predates **all three** gameplay fixes
+(run 100 floor-room attribution, run 101 the drop rule, run 93 the pool). Rebuild
+it and drive it, exactly as run 94 did:
 
-### ⬜ NEXT
-  1. **GYM 8 -> 11** - seat now resolves to room 10 and she ends there after 5790
-     units. Is that a real crossing failure or just the seat moving because the
-     floor query changed? `--seats --door 8,11` then trace the cells, same method.
-  2. ☠️ **CAVES climb conformance has NOT been re-run on the refined build** -
-     only the Caves DOORS and the MANSION climbs were. Run it before trusting this.
-  3. Re-verify the release once 1 and 2 land.
+    QUALITY=playable VIDEO=0 PADTEXT=136 bash tools/build_cof.sh \
+      "/home/jvilla/Documents/Git/jag_openlara/tr1_psx/Tomb Raider (USA) (v1.6).cue" /tmp/cofout8
+    REL_ROM=/tmp/cofout8/OPENLARA.COF REL_SD=/tmp/cofout8 \
+      REL_ELF=/tmp/cofout8/OPENLARA.elf python3 tools/release_play.py --gym --tour
+
+### ⬜ ALSO OPEN
+  1. CAVES 25 -> 22: the seat cell itself blocks her (moved 141, no drift - she
+     IS in room 25). Re-seating does not help; the stand-off needs a different
+     cell. Bounded harness fix, and the LAST unexplained line on either level.
+  2. `HW_TESTCARD`; the hardware boot capture (blocked on the user's permission).
 
 ### ⚠️ BUILD STATE
 `/tmp/cofout7/` = the SHIPPING payload built this run WITH the pool fix (COF +

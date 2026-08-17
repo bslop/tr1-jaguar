@@ -215,6 +215,18 @@ def main():
             cand = cands[0][3:]
         if cand:
             tests.append((r, dst) + cand)
+    # ☠️ --door R,D ON A LIVE RUN TOO, NOT JUST --seats. Every door is walked in
+    # ONE boot, one after another, so a test inherits whatever state the previous
+    # walk left - and a seat that resolves cleanly on a fresh boot can resolve
+    # somewhere else here. Measured: gym 8->11 reported "seat resolved to room 10,
+    # moved 5790" in the full sweep, and on a fresh boot at the SAME seat she
+    # walks room 8 -> room 11 exactly as she should. Re-running ONE door in
+    # isolation is how you tell a game defect from a sequencing artefact, and it
+    # used to mean editing the script.
+    if '--door' in sys.argv:
+        _r, _d = (int(v) for v in sys.argv[sys.argv.index('--door') + 1].split(','))
+        tests = [t for t in tests if t[0] == _r and t[1] == _d]
+        print("  --door %d,%d: running that doorway alone" % (_r, _d), flush=True)
     if limit:
         tests = tests[:limit]
     # ☠️ --seats: DRY-RUN THE SEAT CHOICE, no emulator. Seat selection is pure
@@ -273,6 +285,27 @@ def main():
             ctl("poke", hex(syms["g_layaw"]), "%d" % ((yv >> 8) & 255))  # 8-bit yaw
             ctl("run", SETTLE)
             seated = peek("g_curroom")
+            # ☠️ RE-SEAT BEFORE BELIEVING A DRIFT. All 18 doors are walked in ONE
+            # boot, so a test starts from wherever the previous walk left her -
+            # mid-fall, on a slope, with velocity. gym 8->11 reported "seat
+            # resolved to room 10, moved 5790" in the sweep and walks 8 -> 11
+            # perfectly on a fresh boot at the SAME seat (`--door 8,11`). That is
+            # the harness, not the game, and a sweep that reports it as a door
+            # failure is worse than useless - it invents defects.
+            # So poke again and re-settle before calling it drifted; only a seat
+            # that will not take after several tries is genuinely unreachable.
+            for _try in range(3):
+                if seated == r:
+                    break
+                for k in ("g_lavy", "g_fally", "g_jumped", "g_lajf", "g_hang", "g_autoj"):
+                    if k in syms:
+                        poke(k, 0)
+                poke("g_curroom", r)
+                poke("g_lax", sx); poke("g_lay", fy); poke("g_laz", sz)
+                if "g_layprev" in syms:
+                    poke("g_layprev", fy)
+                ctl("run", SETTLE)
+                seated = peek("g_curroom")
             # ☠️ A BAD SEAT IS NOT A DOOR FAILURE. Rooms overlap, so a stand-off
             # point can resolve to a different room than the one being tested
             # (one test seated in room 12 while probing room 7). Report it as
