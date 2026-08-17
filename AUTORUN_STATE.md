@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 105
+RUN: 106
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,47 +54,61 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ✅✅✅ EVERY DOORWAY ON BOTH LEVELS IS NOW ACCOUNTED FOR. NO ARTEFACTS LEFT.
+# ✅✅ `HW_TESTCARD` IS BUILT AND ASSERTABLE - THE RIG QUESTION NOW HAS A TOOL.
 
-    CAVES    56 crossed / 2 FAILED    both "DOOR shut"  - correct, they need switches
-    MANSION  15 crossed / 3 FAILED    all "STEP UP"     - correct, they need vaults
+    EXTRA="HW_TESTCARD=1" tools/build_conf.sh caves
+    jagemu screenshot /tmp/conf.cof --frames 900 -o /tmp/testcard.png
+    python3 tools/testcard_check.py /tmp/testcard.png     -> PASS, illegal=0
 
-Not one unexplained failure and not one harness artefact on either level. The
-release itself was rebuilt with all three gameplay fixes in run 103 and driven
-clean on both levels (51,321 and 88,051 units, health 1000, 0 frame complaints).
+A static 320x240 five-band card painted at boot: 5-bit RED ramp, 5-bit BLUE
+ramp, **6-bit GREEN ramp**, 1-bit checker, pure R/G/B thirds. Measured through
+the real CLUT path: **R=32, B=32, G=64 distinct levels, checker=2, illegal 0.**
+A normal build is byte-unaffected (flag absent from the compile line, conf.png
+still 65 colours / 1.1% black).
 
-### ★ CAVES 25 -> 22 WAS A ONE-COLUMN WALL AND A SEAT THAT LANDED ON IT
-The last unexplained line. The seat cell has a real floor at 6656 - so it passed
-every check - but the cell she has to walk THROUGH, room 25's own cell touching
-the plane, is `0x7FFF` WALL. She moved 141 units and the sweep called it a dead
-door for runs on end. The doorway is **6 cells wide and only ONE column is
-walled**, and the 0.5 frac landed exactly on it (x=21504 is the first x of the
-walled cell). ★ A seat that is standable is not the same as an approach that is
-walkable. `door_walk` now checks the plane-adjacent cell on HER side and rejects
-the candidate if it is solid or a step she cannot walk; the frac sweep then finds
-a clear column (x=20889) and she crosses. No other doorway changed - both levels
-still produce 58 and 18 seats.
+WHY IT EXISTS: the rig has no channel to read a number off the board and a dead
+capture once faked NINE black boots, one of them a known-lit control. `OK!` +
+black means the VIDEO CHAIN, not the console. One upload now settles which,
+without anyone having to describe a TV.
 
-### ☠️ ALSO FIXED: THE DRY RUN WAS LYING
-`--seats` still predicted with the plain lowest-floor rule, which stopped being
-the runtime's rule when run 100 added the Y-aware pass and run 101 the drop rule.
-It claimed gym 7->9 and 8->11 would seat in room 12 while the game seated them in
-7 and 8 - it cost me a wrong diagnosis twice. It now mirrors the real rule (tier,
-then closeness, then the drop rule) and agrees with the live sweeps: mrt predicts
-**0** wrong-room seats, and the live run seats all 58 correctly.
-★ A dry run that invents failures is worse than no dry run.
+### ★ THE GREEN RAMP IS THE SHARP CHECK, AND WHY THE RAMPS ARE ASYMMETRIC
+Jaguar RGB16 is `R<<11 | B<<6 | G` with **green SIX bits UNSHIFTED at 5-0**
+(cobweb `8d09c43` measured it with a framebuffer probe; run 105 confirmed it
+independently through the 8bpp CLUT). Feed all three channels 0..31 and green's
+sixth bit is never exercised - a `g << 1` packing then passes every check while
+halving green's resolution. Asserting **64** distinct greens is what separates
+them. `tools/testcard_check.py --selftest` proves all four checks can fail
+(good card, 5-bit green, R/B swapped, wrong size).
+☠️ Written up for the other five sessions in `jaguar-shared`
+`techniques/asset-formats-and-color.md`, pushed.
 
-### ⬜ NEXT - THE EMULATOR-ANSWERABLE WORK IS DONE
-The gameplay defect list is EMPTY, both levels sweep clean, and the release is
-rebuilt and driven. What is left is gated on the user:
-  1. **Hardware verification** - and ☠️ `session_run.sh start` now prints
-     `capture /dev/video0 ok`, contradicting the standing "physically unplugged"
-     premise. Flagged to him in run 103; do not claim the rig without his word.
-  2. **The run-100 checkpoint question is still open** - he was asked to choose
-     between silicon validation, frame rate (VRESN=80 is +12% and unshipped), and
-     new content. Until he rules, prefer small verifiable work over starting a
-     campaign - see `user_goal_and_endpoint`: do not start open-ended campaigns.
-  3. `HW_TESTCARD`.
+### ☠️ PAINT IT WHERE THE VIDEO PATH IS ALREADY PROVEN
+First attempt put the card straight after `video_init()` and the capture came
+back **720x12 with the illegal count climbing** - the OP list is not finished
+that early. Moving it onto the title screen's own paint (same backbuffer, same
+`video_set_clut`, same flip) gave 320x240 and illegal 0. ★ A plausible-looking
+frame of the WRONG SHAPE is worse than a blank one, which is why the size check
+runs first and returns immediately.
+
+### ★ NOTED, NOT FIXED: THE EXTRACTOR STILL WRITES 5-BIT GREEN
+`tr2jag_multiroom.py:1316` and `:4355` pack `((g5&31)<<1)`, and `main.c:1283`'s
+comment says `G<<1` while `main.c:3771`'s brighten correctly treats green as a
+full 6-bit field. They do not disagree (both land green in bits 0-5) - the
+extractor simply never sets bit 0, so every palette has 5-bit green and white is
+31,31,**62**. The PSX source is 5-5-5 so there is no sixth bit of real data;
+the honest fix is bit-replication `(g5<<1)|(g5>>4)` so 31 maps to 63. Worth
+about 1/64 of a green level - **not visible, do not spend a run on it** unless
+something else takes you into the palette path.
+
+### ⬜ NEXT - STILL GATED ON THE USER
+  1. **Hardware.** `session_run.sh start` now reports `capture /dev/video0 ok`
+     and `holder -- idle, Jaguar is free --`, contradicting the standing
+     "physically unplugged" premise in the autorun prompt. The testcard is ready
+     for exactly this. Do not claim the rig without his word.
+  2. **The run-100 checkpoint question is still open** - silicon validation vs
+     frame rate (VRESN=80, +12%, unshipped) vs new content.
+  3. Emulator-answerable gameplay work is DONE: both levels sweep clean and the
+     release is rebuilt and driven.
 
 ### ⚠️ BUILD STATE
 `/tmp/cofout8/` = the SHIPPING payload with ALL THREE gameplay fixes (COF +

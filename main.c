@@ -1299,6 +1299,44 @@ static void show_title_load(uint32_t fields)
     int done = TL_X0;
     (void)0;
 
+#ifdef HW_TESTCARD
+    /* ☠️ PAINT IT WHERE THE VIDEO PATH IS ALREADY PROVEN. The first attempt put
+       this straight after video_init() and the capture came back **720x12**
+       with the illegal count climbing - stopping there leaves the display half
+       configured, because the OP list is not finished until later in boot. The
+       title screen demonstrably renders 240 lines, so borrow its exact path:
+       same backbuffer, same CLUT call, same flip.
+       Five bands: a 5-bit RED ramp, a 5-bit BLUE ramp, a SIX-bit GREEN ramp, a
+       1-bit checker, and pure R/G/B. The green ramp is the sharp one - green is
+       six bits UNSHIFTED at 5-0 (cobweb 8d09c43), so a 5-bit-green packing
+       gives 32 distinct greens where this gives 64, and nothing else on the
+       card can tell those apart. */
+    {
+        static uint16_t tc_pal[256];
+        int tx, ty, ti;
+        for (ti = 0; ti < 256; ti++) tc_pal[ti] = 0;
+        tc_pal[1] = (uint16_t)((31u << 11) | (31u << 6) | 63u);
+        for (ti = 0; ti < 32; ti++) tc_pal[2  + ti] = (uint16_t)((unsigned)ti << 11);
+        for (ti = 0; ti < 32; ti++) tc_pal[34 + ti] = (uint16_t)((unsigned)ti << 6);
+        for (ti = 0; ti < 64; ti++) tc_pal[66 + ti] = (uint16_t)(unsigned)ti;
+        for (ty = 0; ty < 240; ty++) {
+            uint8_t *row = fb + ty * 320;
+            int band = ty / 48;
+            for (tx = 0; tx < 320; tx++) {
+                int v5 = (tx * 32) / 320, v6 = (tx * 64) / 320;
+                if      (band == 0) row[tx] = (uint8_t)(2  + v5);
+                else if (band == 1) row[tx] = (uint8_t)(34 + v5);
+                else if (band == 2) row[tx] = (uint8_t)(66 + v6);
+                else if (band == 3) row[tx] = (uint8_t)((tx & 8) ? 1 : 0);
+                else                row[tx] = (uint8_t)(tx < 107 ? 33
+                                                      : (tx < 214 ? 129 : 65));
+            }
+        }
+        video_set_clut(tc_pal);
+        video_flip();
+        for (;;) video_wait_vblank();
+    }
+#endif
     blit_copy(title_img, fb, 240);        /* Blitter, straight out of ROM -
                                              the title screen's own paint */
     video_set_clut(title_pal);

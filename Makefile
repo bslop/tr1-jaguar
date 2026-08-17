@@ -964,6 +964,21 @@ CFLAGS   += -DHOLEVIS
 CXXFLAGS += -DHOLEVIS
 endif
 
+# HW_TESTCARD=1: paint a static colour test card straight after video_init and
+# stop there. It exists to tell "the CONSOLE is broken" apart from "the VIDEO
+# CHAIN is broken" on the rig - a dead capture once faked NINE black boots,
+# including a control that was known-lit, and `OK!` + black means the video
+# path, not the Jaguar. A card whose pixels are ASSERTABLE settles that in one
+# upload instead of a conversation about what the TV looks like.
+# ☠️ The green ramp is 6 bits and the red/blue ramps are 5, deliberately
+# ASYMMETRIC: Jaguar RGB16 is R<<11 | B<<6 | G with GREEN SIX BITS UNSHIFTED at
+# 5-0 (measured in cobweb 8d09c43). Feeding 0..31 to all three would never
+# exercise green's sixth bit, so a 5-bit-green packing would pass every check.
+ifdef HW_TESTCARD
+CFLAGS   += -DHW_TESTCARD
+CXXFLAGS += -DHW_TESTCARD
+endif
+
 # ALLVIS=1: a room whose portal window computes EMPTY is dropped entirely and
 # leaves a doorway-shaped hole. Draw it full-screen instead - the same
 # conservative rule that made NOPCLIP free. Pair with HOLEVIS to verify.
