@@ -22,6 +22,23 @@ BUILD_COF_LOCK=/tmp/.build_cof.lock
 echo $$ > "$BUILD_COF_LOCK"
 trap 'rm -f "$BUILD_COF_LOCK"' EXIT
 
+# ☠️☠️ TOOLCHAIN PIN. cobweb bf31dee+ ships a jcc68k that moves a 16-bit
+# parameter read by +2 bytes, which breaks the gcc/jcc68k ABI boundary this
+# project links across: the ROM builds, runs at full speed, and renders a
+# COMPLETELY BLACK SCREEN. 59e5896 is the last good revision.
+# Forgetting this here would ship a black release, so default it rather than
+# rely on the caller exporting it. See jaguar-shared/COBWEB_ISSUES_JCC68K_ABI.md
+# and tools/toolchain_smoke.sh (which builds a ROM and looks at it).
+if [ -z "${COBWEB_DIR:-}" ] && [ -x /tmp/cobweb-old/sim/target/release/jas ]; then
+    export COBWEB_DIR=/tmp/cobweb-old
+    echo "   toolchain: pinned to /tmp/cobweb-old (cobweb 59e5896)"
+elif [ -z "${COBWEB_DIR:-}" ]; then
+    echo "   ☠️ WARNING: pinned toolchain not found at /tmp/cobweb-old."
+    echo "      git -C <cobweb> worktree add /tmp/cobweb-old 59e5896"
+    echo "      cargo build --release --manifest-path /tmp/cobweb-old/sim/Cargo.toml"
+    echo "      Building with the shared checkout may produce a BLACK ROM."
+fi
+
 DISC="${1:?usage: build_cof.sh <disc> <outdir>}"
 OUT="${2:?usage: build_cof.sh <disc> <outdir>}"
 

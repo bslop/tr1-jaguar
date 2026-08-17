@@ -778,6 +778,41 @@ static int g_watery;                  /* water surface Y for the active pool */
 #define GRAVITY_TERM 128              /* above this fallSpeed, accel is +1  */
 #define JUMP_VEL_UP  110              /* straight-up jump (anim 91)         */
 #define JUMP_VEL_FWD 100              /* any directional jump               */
+
+/* TR1's auto jump-reach launch speed (fixed/lara.h:1586):
+ *
+ *      vSpeed = sqrt(-2 * GRAVITY * (floorAhead + 800)) + 3
+ *
+ * Solve v^2 = 2*g*h for the height she must actually GAIN, which is the ledge
+ * less 800: she does not rise to the ledge, she rises until it is a hand's
+ * reach overhead (LARA_GRABREACH 720, TR1 LARA_HANG_OFFSET 724) and catches it
+ * there.  The +3 covers the discrete integration.
+ *
+ * Cross-check on the constant: at the top of the band this gives
+ * sqrt(2*6*(1920-800)) + 3 = 118, and the branch just above it in TR1 (a ledge
+ * past 1920) uses a flat 116.  Formula and constant agree, which is what makes
+ * this reading believable.
+ *
+ * isqrt is the bit-by-bit form used by the room cull - jcc68k has no 64-bit
+ * long long and no libm, and 12*1920 is small, so this stays in 32 bits.
+ *
+ * NEVER returns less than a normal up-jump, so no jump that clears its ledge
+ * today can get weaker: the change only ADDS reach in the band we refused. */
+static int jump_reach_vel(int rise)
+{
+    uint32_t n, root = 0, bit = 1u << 30;
+    int v;
+    if (rise <= 800) return JUMP_VEL_UP;
+    n = (uint32_t)(2 * GRAVITY * (rise - 800));
+    while (bit > n) bit >>= 2;
+    while (bit) {
+        if (n >= root + bit) { n -= root + bit; root = (root >> 1) + bit; }
+        else root >>= 1;
+        bit >>= 2;
+    }
+    v = (int)root + 3;
+    return v < JUMP_VEL_UP ? JUMP_VEL_UP : v;
+}
 #define JUMP_FWD_STAND 50             /* standing forward jump (anim 76)    */
 #define JUMP_FWD_RUN   75             /* running jump (anim 16/18)          */
 /* Max step she can WALK up; anything taller needs a vault.
@@ -790,6 +825,10 @@ static int g_watery;                  /* water surface Y for the active pool */
 /* ledge vault / pull-up: a step too tall to walk up but low enough to climb
    triggers a pull-up; while airborne, hands within reach of a ledge grab it. */
 static int g_vault;                   /* pull-up in progress (0/1)        */
+static int g_autojv;                  /* solved launch speed for the armed ledge
+                                         (TR1 vSpeedHack).  The arm and the launch
+                                         are different frames, so the ledge height
+                                         has to travel between them. */
 static int g_autoj;                   /* AUTO JUMP-REACH armed (UP at a wall
                                          with a grabbable ledge above)     */
 static int g_fwdblk;                  /* forward held but BLOCKED this frame
@@ -932,15 +971,35 @@ static const uint8_t g_padding[PADBYTES] __attribute__((used)) = { 1 };
 #endif
 static int g_curroom;                 /* room Lara is standing in (visibility) */
 static int g_curroom_fwd(void) { return g_curroom; }
-#define LARA_JUMPGRAB 1664            /* AUTO JUMP-REACH ceiling: up-jump apex
-                                         (110^2/2g ~= 1008) + hand reach 720,
-                                         less a catch margin — ledges to ~6.5
-                                         clicks are worth jumping for */
+#define LARA_JUMPGRAB 1920            /* AUTO JUMP-REACH ceiling = TR1's own band:
+                                           fixed/lara.h:1586 arms the up-jump for a
+                                           ledge 896..1920 ahead.  This was 1664,
+                                           derived from a FLAT 110 launch ("apex
+                                           110^2/2g + hand reach 720, less a catch
+                                           margin") - but TR1 does not jump flat, it
+                                           SOLVES the launch speed for the ledge (see
+                                           jump_reach_vel).  With the solve in place
+                                           the cap is not ours to pick: take TR1's. */
 #define LARA_CLIMB    768             /* max standing VAULT = 3 clicks (TR1-authentic;
                                          taller ledges need a jump+grab at the right
                                          height — 7-click vaults let her scale the
                                          mansion from the courtyard) */
 #define LARA_GRABREACH 720            /* hands above feet; TR1 LARA_HANG_OFFSET=724 */
+#define LARA_GRABTOP   800            /* how far overhead the grab TEST reaches.
+                                     TR1's own auto-jump solves the launch speed
+                                     for (ledge - 800) -- see jump_reach_vel --
+                                     so 800 is the height it assumes she catches
+                                     at.  Testing with 720 while launching for
+                                     800 is an 80-unit disagreement between two
+                                     halves of the same move, and it is exactly
+                                     why a 1792 ledge missed: measured rise 990,
+                                     hands 990+720+64 = 1774, ledge 1792, short
+                                     by 18.  With 800 the hands reach 1790 and
+                                     the +-64 window catches it.
+                                     Kept SEPARATE from LARA_GRABREACH because
+                                     that one still PLACES her on the lip, where
+                                     it has to stay equal to TR1's
+                                     LARA_HANG_OFFSET 724. */
 #define SLIDE_SPEED     70            /* units per 30 Hz tick down a slide     */
 #define FASTTURN_TICKS  15            /* half a second of held turn -> FAST_TURN */
 #define LARA_GRAB_TOL   64            /* TR1 checkHang: |ledge - hands| < 64.
@@ -8358,6 +8417,9 @@ bootvid_entry:
                       room_reachable(g_curroom, g_floorroom)) {
                       g_layaw = ALIGN_WALL(g_layaw);   /* square to the wall */
                       g_autoj = 1;                     /* arm the up-jump */
+                        g_autojv = jump_reach_vel(rise);  /* ...at TR1's speed FOR
+                                                             THIS ledge, not a flat
+                                                             one that cannot reach */
                   }
               }
               /* jump physics (+Y down: up = negative vy). EDGE-triggered:
@@ -8377,7 +8439,8 @@ bootvid_entry:
                             g_autoj = 0; g_autograb = 1;
                             g_lajf = 0; g_jdir = 0;
                             g_jumped = 1;
-                            g_lavy = -JUMP_VEL_UP;
+                            g_lavy = -(g_autojv ? g_autojv : JUMP_VEL_UP);
+                            g_autojv = 0;
                             g_jfwd = 0;
                         } else {
                         /* TR1 picks the jump by what is held at launch: no
@@ -8492,7 +8555,7 @@ bootvid_entry:
                 if (!grounded && ((pad & ACT_ACTION) || g_autograb)) {
                     int px = g_lax + (int)(((int32_t)SIN(g_layaw)*PROBE_AHEAD)>>16);
                     int pz = g_laz + (int)(((int32_t)COS(g_layaw)*PROBE_AHEAD)>>16);
-                    int lf, handY = g_lay - LARA_GRABREACH, lfok;
+                    int lf, handY = g_lay - LARA_GRABTOP, lfok;
                     int cy1;
                     g_flr_grab = 1;
                     lfok = room_floor_mr(rsect, roomCount, px, pz, &lf);
@@ -8506,7 +8569,7 @@ bootvid_entry:
                        ledge height at any point during this frame's motion,
                        then apply TR1's real +-64 tolerance to the swept
                        interval.  Correct at any frame rate. */
-                    { int hPrev = g_layprev - LARA_GRABREACH;
+                    { int hPrev = g_layprev - LARA_GRABTOP;
                       int hLo = (handY < hPrev ? handY : hPrev) - LARA_GRAB_TOL;
                       int hHi = (handY > hPrev ? handY : hPrev) + LARA_GRAB_TOL;
                     if (lfok &&

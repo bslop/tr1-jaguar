@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 46
+RUN: 47
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -17,43 +17,104 @@ summarise that checkpoint away.**
 
 ## NEXT STEP
 
-# ✅✅ THE CONFORMANCE SWEEP IS DONE. BOTH LEVELS, EVERY CLASS.
+# ✅✅✅ THE 1792 LEDGE WAS A REAL PSX-PARITY BUG, AND IT IS FIXED
 
-    CAVES    23/25 CLIMBED   1 PARTIAL   1 NO-CLIMB   0 spots over 51.2% black
-    MANSION  21/26 CLIMBED   3 PARTIAL   2 NO-CLIMB   0 spots over 36.3% black
+    CAVES    24/25 CLIMBED   0 PARTIAL   1 NO-CLIMB   (the 1 is a 2048 WALL)
+    MANSION  20/30 CLIMBED   0 PARTIAL  10 NO-CLIMB   (6 of the 10 are WALLs)
 
-**Every NO-CLIMB is a WALL (2048/2816) correctly refusing.** The Caves PARTIAL
-is the 1792 JUMPGRAB, and that is physics, not a bug: measured peak jump is
-**774 units** and the ledge is 1018 further up.
+Run 45 closed the Caves 1792 JUMPGRAB as "physics, not a bug: measured peak jump
+774, ledge 1018 further up." **That was wrong on both halves.** The 774 was the
+harness, and TR1 does reach that ledge.
 
-### ☠️ THE LAST FIX: A 256 WALKUP IS AN AUTOMATIC STEP
-Hand-driving a "regressed" mansion WALKUP showed she gains the ledge **during
-the WALK phase** with no button (Y -1280 -> -1536, floor following). Pressing
-UP+B afterwards then walks her off the far side and she falls — so reading the
-FINAL Y scored a successful climb as **-290**.
-★ Fixed: the verdict now uses the **BEST height reached** across the whole
-drive, plus the floor at that moment (`bestfl == best` = she actually STOOD on
-it). Mansion 18 -> 21 CLIMBED; Caves unchanged at 23, and the 1792 correctly
-became PARTIAL because the jump does gain real height.
+### ★★★★★ TR1 DOES NOT JUMP AT A FIXED SPEED — IT SOLVES FOR THE LEDGE
+`fixed/lara.h:1586`, in the engine we are porting:
 
-### ★ SEVEN INSTRUMENT FALSE-DEFECTS — the standing lesson of this campaign
-climb window (31) · 32-bit yaw poke (30) · PADMUTE flag (36) · face-pass blame
-(33) · wrong-level black baseline (42) · velocity completion (44) · final-Y vs
-best-Y (45).
-**Every uniform failure had a uniform cause in the harness, never in the game.**
-Hand-drive ONE case with telemetry before recording any defect. That single
-habit caught all seven.
+    else if (cinfo.f.floor >= -1920 && cinfo.f.floor <= -896) {
+        goalState = STATE_JUMP_UP;
+        extraL->vSpeedHack = sqrt(-2 * GRAVITY * (cinfo.f.floor + 800)) + 3;
+
+For a ledge 896..1920 above her, TR1 computes exactly the launch speed that
+arrives. We launched every auto-jump at a flat `JUMP_VEL_UP` 110 — and then,
+because a flat 110 cannot reach higher, **capped the armed band at
+`LARA_JUMPGRAB` 1664**, its own comment deriving the cap from the flat velocity.
+So the cap was a workaround for the missing solve, and a 1792 ledge was never
+even armed. ★ The formula self-checks: at the top of the band it gives 118, and
+the branch just above it (ledge past 1920) uses a flat 116.
+
+Fixed in three parts, each measured:
+  1. `jump_reach_vel()` — TR1's solve, bit-by-bit isqrt (no libm, no 64-bit).
+     Clamped to never return less than 110, so the change is MONOTONE and no
+     jump that already cleared its ledge could regress. None did.
+  2. `LARA_JUMPGRAB` 1664 -> **1920**, TR1's real band.
+  3. `LARA_GRABTOP` 800, split from `LARA_GRABREACH` 720. **This was the last 18
+     units.** With the solve in, she rose exactly 990 — the predicted discrete
+     apex for a launch of 112 — but the grab TEST still reached only 720+64, so
+     her hands topped out at 1774 against a 1792 ledge. The launch was solving
+     for 800 (the `+800` in TR1's own formula) while the catch tested 720: two
+     halves of one move disagreeing by 80. `LARA_GRABREACH` still PLACES her on
+     the lip at 720, where it must equal TR1's `LARA_HANG_OFFSET` 724.
+
+`ROSE 990 -> 1792` on that spot, and Caves went 23 -> 24 with the PARTIAL gone.
+
+### ☠️ EIGHTH INSTRUMENT FALSE-DEFECT — the "774 peak" was the harness
+`conformance.py` drove `up,a` for JUMPGRAB spots on the theory that a high ledge
+needs a running jump. It does not: `main.c` arms the AUTO JUMP-REACH on
+`(PAD_UP && g_fwdblk)` alone — walk into the wall and the game jumps for you.
+The A launched a MANUAL jump first, and with UP held that selects the
+DIRECTIONAL jump at `JUMP_VEL_FWD` 100, **apex 784**. That is the "774". It was
+never the up-jump (110, apex 954), let alone the solved one. Now it holds UP and
+stays out of the way. Same shape as the other seven: a uniform failure with a
+uniform cause in the harness.
+
+### ★★★★★ THE ANSWER CAME FROM THE SOURCE, NOT THE FOOTAGE
+Run 45 left "does TR1 reach the 1792 ledge?" for a PSX-footage comparison. The
+engine we port from answers it exactly, in a constant, with a cross-check —
+which no amount of squinting at video would have given. **When the question is
+"what does TR1 do", `OpenLara-master/src/fixed/` is a better authority than the
+capture.** `res/` still owns questions about how it LOOKS.
+
+### ☠️☠️ `tools/build_conf.sh` — THE ROM FLAGS WERE NEVER WRITTEN DOWN
+Runs 40-45 recorded only the PATHS `/tmp/conf.cof` and `/tmp/gym.cof`, never the
+flags. This run needed to re-measure and could not reproduce the ROM the old
+numbers came from — the "a value only in shell history is not a setting" trap,
+and it cost two dead builds:
+  * AUTOSTART with no BOOTVID -> flat blue screen past 2600 fields, all 25 spots
+    UNTESTABLE with garbage floor reads.
+  * FASTBOOT instead -> renders to ~frame 400, then **100% black**. (Ruled out
+    as my own patch by rebuilding the identical flags from the pre-patch source:
+    identical failure. Always do that before blaming the change under test.)
+The set that works is **`tools/toolchain_smoke.sh`'s**, deliberately, because it
+is the only combination with a RECORDED RENDERING BASELINE — `.toolchain_baseline`
+1.1% black / maxluma 217 at frame 1500, which this ROM reproduced exactly. Both
+conformance ROMs now come from one script that also verifies each flag reached
+the compile line.
 
 ### ⬜ WHAT IS ACTUALLY LEFT
-1. **The 3 mansion PARTIALs** — worth one hand-drive each, but note the pattern
-   above before believing them.
-2. **PSX comparison** — the one thing that can say whether TR1 reaches the 1792
-   ledge. If it does not, tighten `ledge_census.py`'s JUMPGRAB band (<=1920)
-   to ~1600 so it stops generating impossible spots. `res/` Part 2 = Caves,
-   3m20 -> 23m24.
-3. **Re-run `tools/build_cof.sh` end to end** — the recipe gained the gym
-   boundary patch and `--faces` on both prefixes since its last full run. This
-   is the release-readiness item.
+1. **4 genuine mansion failures**, and they CLUSTER — three in room 8 at floor
+   1280 (one CLIMB3 768, two JUMPGRAB 1024) and one CLIMB2 512 in room 1 at
+   floor -1280. Every other spot at those same classes climbs, so this is a
+   place, not a class. ☠️ Hand-drive ONE before believing it.
+2. ☠️ **ROOM 8 IS THE SUSPECT, and the two instruments agree on it.** I assumed
+   the mansion black outliers were a baseline artifact (the old 36.3% came from
+   a ROM at a different VRESN) and re-measured to prove it — **the new baseline
+   is 36.8%, essentially identical**, so that explanation is dead and the
+   outliers are REAL. What is left points one way:
+     * room 8 CLIMB3 spots read **51.1 / 38.7 / 37.4%** black *while climbing
+       successfully* — over baseline with no failure to blame it on;
+     * room 8 holds **3 of the 4** genuine climb failures, all at floor 1280;
+     * room 0 WALL reads **77.8%** twice, the highest in either level.
+   A climb failure and a black outlier in the same room is the signature both
+   earlier collision bugs had (53% and 81%). Start at room 8, floor 1280.
+3. Caves is CLEAN: 0 spots over baseline, 0 PARTIAL, walls refuse.
+
+### ✅ RELEASE READY — the full recipe ran end to end this run
+`tools/build_cof.sh` produced all 7 files, `OPENLARA.COF` 1,538,068 B, with the
+gym boundary patch and `--faces` on both prefixes for the first time. Booted in
+jagemu with `--sd` and FILMED: Core Design logo -> the full FMV intro -> TOMB
+RAIDER title with a working ring menu (passport rotating, "A Select / Game").
+The whole front-end chain is verified, not assumed. Output in `/tmp/cofout4`.
+★ `build_cof.sh` now DEFAULTS `COBWEB_DIR` to the pinned toolchain instead of
+trusting the caller to export it — forgetting it ships a black release.
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,
