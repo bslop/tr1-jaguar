@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 109
+RUN: 110
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,45 +54,46 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ✅ SOUND VERIFIED IN THE CURRENT RELEASE - THE LAST UNCHECKED "DONE" ITEM.
+# ⬜☠️ IN-GAME SFX: SHE WALKS, THE GATE IS OPEN, AND NOTHING COMES OUT.
 
-    jagemu audio /tmp/cofout8/OPENLARA.COF --sd /tmp/cofout8 --frames 2500 -o /tmp/rel.wav
-    jagemu audiocheck /tmp/rel.wav
+Run 108 proved the RELEASE makes sound during boot/FMV (rms -29.3 dBFS). This
+run went after the thing that actually matters - a FOOTSTEP - and it is missing
+in the conformance build. Every confound I could think of is ruled out:
 
-    41.7s @ 44097 Hz   peak **-14.4 dBFS**   rms **-29.3 dBFS**
-    25% silent, leading 1.44s, longest gap 2.69s, **0 clipped**, DC ~0.0004
+    she really walks      g_laz 3584 -> 10632 = **7048 units** under `ctl input up`
+    Jerry is up           **g_jerry_ok = 1**
+    SFX are enabled       **g_sfx_ok = 1**   (sfx_play returns early if this is 0)
+    audio, walking        **-120.0 dBFS, 100% silent**
+    audio, idle           -120.0 dBFS, 100% silent
+    audio, boot           -120.0 dBFS, 100% silent
 
-Healthy levels, nothing clipping. The gaps and the 25% are the boot sequence
-(logo -> FMV -> transitions), not dropouts.
+`sfx_play` is gated only on `g_sfx_ok`, which is `g_jerry_ok`, and both read 1 -
+so the usual explanation (Jerry never came up, SFX silently dropped) is WRONG
+here. Something between `sfx_play` and the DAC is not producing samples.
 
-### ★ THE NEGATIVE CONTROL CAME FREE, AND IT IS WHAT MAKES THIS EVIDENCE
-The same command on the CONFORMANCE ROM reads **-120.0 dBFS, 100% silent**. Two
-ROMs, one tool, -120 vs -29.3: the measurement discriminates rather than
-reporting whatever it finds. ☠️ And that silence is NOT a defect - the
-conformance ROM is idle with no SD payload, and most SFX are event-driven.
+### ☠️ DO NOT CALL THIS A SHIPPING DEFECT YET - THE RELEASE IS UNTESTED IN-GAME
+The release proved audible at boot; only the CONFORMANCE build has been driven
+into gameplay. The conformance set differs (AUTOSTART, no SD payload), and this
+project has burned runs on defects that were arms-only. **The test that settles
+it**: serve the RELEASE with `--sd /tmp/cofout8`, drive it exactly as
+`release_play.py` does (two A presses at the ring, then through the cutscene),
+walk, and capture. If that is silent too, it is real and it is worth fixing
+before any video gets made.
 
-### ☠️ `jagemu audio` TAKES `--sd`, THOUGH `--help` DOES NOT SAY SO
-Without it the release streams no `MUSIC.PCM` and reads silent for a reason that
-has nothing to do with the audio path. Written up for the other sessions in
-`jaguar-shared` `techniques/audio.md`, pushed.
-
-### ⬜ NEXT: IN-GAME SFX (this run only covered the first 2500 fields)
-2500 fields is boot + FMV. Nothing here proves a FOOTSTEP. `jagemu serve` has a
-ctl `audio f.wav` command, so the way to get it is to drive gameplay exactly as
-`release_play.py` does and capture audio over the walking segment, then
-`audiocheck` that. Judge it from a DRIVEN capture - an idle one is silent by
-design and would read as a defect.
+### ★ `ctl audio f.wav` RETURNS A FIXED 2.0-SECOND BUFFER
+88,220 samples every time, regardless of how many fields you ran beforehand -
+it is the RECENT window, not the session. So capture immediately after the
+action you care about, and do not expect a long `run` to accumulate. (The
+standalone `jagemu audio <rom> --frames N` DOES give you the whole run - that is
+how run 108 got 41.7s.)
 
 ### ⬜ ALSO STILL GATED ON THE USER
   1. **The run-100 direction question**, with live numbers: silicon validation /
      **VRESN=80 = +14.7%** at a visible cost (`/tmp/vres_ab.png`, sent) / new
      content.
-  2. **Hardware** - `start` reports `capture /dev/video0 ok` and the Jaguar idle,
-     against the prompt's standing "physically unplugged". `HW_TESTCARD=1` +
+  2. **Hardware** - `capture /dev/video0 ok` and the Jaguar idle, against the
+     prompt's standing "physically unplugged". `HW_TESTCARD=1` +
      `tools/testcard_check.py` are ready. Do not claim the rig.
-  3. All four of the user's DONE items are now re-verified on the CURRENT tree:
-     enemies+pickups (107), menus+videos via the driven release (103), sound
-     (108). No known defect is open.
 
 ### ⚠️ BUILD STATE
 `/tmp/cofout8/` = the SHIPPING payload with ALL THREE gameplay fixes (COF +
