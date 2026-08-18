@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 117
+RUN: 118
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,95 +54,173 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ✅✅✅ LARA'S HOME WAS SOFT-LOCKED, AND "THE MANSION IS SILENT" WAS A SYMPTOM
-# OF IT. FIXED, GATED, AND THE MANSION NOW HAS FOOTSTEPS (-33.4 dBFS).
+# ★★★★★ THE "GRAINY" FMV IS **SILICON-ONLY**, AND IT IS NOT THE ENCODER.
+# ✅ ENEMIES TURN, WALK AND STAND ON THE GROUND - FOR FREE.
+# ✅ ROOM 22 (THE BRIDGE ROOM) IS **+20.6%** FASTER.
 
-Run 115 ended on "is anim 104 the right animation?". **It is not an animation
-the walk code ever picks: 104 is `LANIM_SLIDEBACK`.** She was not walking in the
-mansion at all - she was wedged in a looping SLIDE_BACK with the pad completely
-dead, and SLIDE_BACK carries no footfall, which is the whole of the "silence".
+The user played the release on the TV and reported three things. All three are
+now diagnosed, and two are fixed and measured.
 
-### THE BUG, one line, `main.c` ~8942
-    g_slideang = (g_sliding == 2) ? ((d8 + 128) & 255) : d8;   /* WRONG */
-    g_slideang = d8;                                            /* right */
-`d8` is the DOWNHILL direction. SLIDE_BACK flips the **facing**, never the
-travel, so the old line drove her **UP** the slope. In Lara's Home the uphill
-neighbour of room 0's slope column is a WALL, both axis moves were rejected by
-`room_wall_at`, and the slide branch sits ABOVE the walk branch in the else-if
-chain - so she could neither slide nor walk. Permanent lock, pad inert.
-★ OpenLara is the authority and it is in this tree: `Lara::slide()` sets
-`angle.y = dir + PI` for the back case and the movement step then adds PI again
-for `STATE_SLIDE_BACK` (`lara.h` ~3421) - the two cancel, travel is downhill.
+### 1. ★★★★★ "GRAINY VIDEO" ON EIDOS/CORE/INTRO - DO NOT RE-ENCODE
+He sent a photo: dense speckle over the whole picture, image still legible
+underneath. **The same ROM, the same `.JV` file, is CLEAN in jagemu** (frames in
+`/tmp/fmv_emu`) and CLEAN when the file is decoded offline
+(`tools/jv_decode.py`, new). The hardware capture measures **~14% of pixels far
+from their local median**; the emulator measures none.
+⇒ The file is right, the encoder is right, the kernel LOGIC is right, and the
+corruption happens in the **write path on real silicon**. This is case 7 of the
+emulator-passes/silicon-dies class.
+☠️ I spent the first half of this thread sweeping VQ encoder settings
+(`JV_VQCOLS=256` bought +0.27 dB PSNR, nothing visible) before taking the one
+measurement that split the hypothesis in half. **Ask "does it reproduce
+offline" BEFORE tuning the thing you assume is at fault.**
+⬜ NEXT for this: `gpu_jvdec.gas` writes decoded blocks straight into the
+framebuffer. Suspects, in order - phrase alignment of the block writes, and
+writes landing while the OP reads the same buffer (the kernel header already
+records a CRT flash from writing the DISPLAYED buffer, so this path has form).
+★ The encoder now has knobs (`JV_VQDN`, `JV_VQTRAIN`, `JV_VQITER`) and
+`tools/jv_decode.py` scores any clip in PSNR against its source - keep them,
+they are how a real quality change gets judged, but they are not this bug.
 
-### ✅ ALSO LANDED: SHE TURNS TO FACE THE SLOPE (TR1's `angle.y = dir`)
-`g_layaw` is snapped to `d8` (forward slide) or `d8+128` (backward) while
-sliding, written after the pad's turn step so a slide cannot be steered.
-**Verified by A/B, not asserted**: same drive, same slope
-(`slx=+1 slz=-5` -> `d8=0`), arm WITHOUT the snap slid at `yaw=232` (whatever
-heading the player left her in), arm WITH it slid at `yaw=128` = `d8+128`.
-☠️ Two earlier A/Bs of this same change came back BYTE-IDENTICAL and proved
-nothing - in the gym she already faced exactly uphill (192 = 64+128), so the
-snap was a no-op. **A no-op A/B is not a passing A/B**; the third arm was built
-specifically to make the two ROMs disagree.
+### 2. ✅ "THE LAND ENEMIES FLOAT TOWARDS LARA" - fixed, and it costs NOTHING
+Three separate defects, all confirmed in the source before touching it:
+  * `build_ent_model` had **no rotation term at all** - every wolf/bear/bat was
+    drawn in its baked orientation whatever direction it moved.
+  * the chase stepped X and Z **independently** at a fixed speed - a homing box.
+  * `g_baty[e]` tracked **Lara's** Y, so they hovered to her height.
+  * the run cycle came off `g_batframe`, ONE counter shared by every enemy and
+    stepped on the bat's wing-flap clock.
+Now: a per-enemy heading (`ent_ang8` + a 33-byte atan table) that turns at a
+RATE and then walks FORWARD; the floor sampled under its own feet; a per-enemy
+gait driven by distance covered; and the model rotated by that heading (.14
+fixed so gcc emits `muls.w` - 16.16 would call the 32x32 helper per vertex on a
+264-vertex wolf).
+**Measured in room 22, Lara walking in: 6.02 fps before, 6.07 after.** Free.
 
-### THE EVIDENCE
-| | old ROM (cofout8) | fixed (cofout11) |
-|---|---|---|
-| pad released, 300 fields | 0 units (wedged) | 0 units (stands) |
-| pad held UP, 300 fields | **0 units** | **6,844 units** |
-| `g_lanim_id` | 104 SLIDE_BACK, forever | 0 RUN |
-| mansion walking audio | -120.0 dBFS silent | **-33.4 dBFS** |
-| Caves release_check | 7/7 | **9/9** |
-| mansion release_check | 6/7 (audio) | **9/9** |
+### 3. ☠️☠️ THE FIRST CUT OF THAT COST 31% OF THE FRAME RATE (6.02 -> 4.13)
+Two causes, both worth remembering:
+  * `room_floor_mr(rsect, g_nrooms, ...)` **scans every room it is handed** -
+    all 38, per enemy, per frame. The spawn code already had the cheap form:
+    hand it ONE room (`&rsect[room], 1`). Now it also only re-asks when the
+    animal actually moved.
+  * the blob was rebuilt every frame for a wolf standing still. It is keyed on a
+    **pose generation** counter now (exact, not a hash - a collision would
+    freeze an animal mid-stride), so a biting wolf rebuilds zero times.
 
-### ★★★★★ THE GATE PASSED A SOFT-LOCKED LEVEL THREE RUNS RUNNING
-`release_check.py` asked "did she move?" and broke out of its loop on the FIRST
-success - and the one press that reached her before she wedged had already moved
-her 8,548 units. Runs 113, 114 and 115 all called that level good.
-**Control is a PAIR**: she moves when pressed **and stops when released**. Both
-checks are in the gate now (9 checks, not 7), plus a third:
-**the walk-audio sample must be taken while `g_lanim_id` is RUN or WALK** -
-the only in-game SFX is the footfall, so a sample taken mid-slide measures
-nothing and reads as an audio defect. The drive is blind, so a heading that
-does not walk now TURNS and retries (6 headings) instead of being believed.
-★ `--inst` added so the Caves and mansion arms run at the same time.
+### 4. ✅ THE BRIDGE ROOM: +20.6%, MEASURED, AND THE CEILING IS KNOWN
+Room 22 is the level's worst room and it holds **all twelve** bridge entities
+plus 2 wolves. They were gated on DISTANCE only (6144), so bridges behind the
+camera were submitted in full every frame.
+    bridges drawn (baseline)        6.02 fps
+    ENTVIEWCULL=1 (behind camera)   **7.32 fps   +20.6%**
+    NOBRIDGEDRAW=1 (the ceiling)    8.07 fps   +33%
+So the cull banks 62% of everything the bridges cost. It is BEHIND-ONLY on
+purpose: a wrong lateral test pops a bridge out at the screen edge, trading a
+visible bug for invisible cycles.
+⚠️ **The cull is reasoned, not pixel-verified** - see the trap below - so it is
+a FLAG, not yet in the shipping recipe. The user is sitting in that room; if a
+bridge pops, that is what to look for.
+
+### ☠️ FOUR INSTRUMENT TRAPS, ALL HIT THIS RUN
+  1. **`frame_count` is FIELDS.** Reading it as frames says 60.00 fps on every
+     arm. `g_drawframes` is the rendered counter (main.c:1143 says so).
+  2. **`g_drawframes` was OPTIMISED AWAY.** Nothing in a shipping build reads
+     it, so gcc deleted it and `nm` had no symbol - the offline fps instrument
+     the source documents could not be read on any shipping-flag arm. It is
+     `static volatile` now.
+  3. **A STATIC SCENE PRICES NOTHING.** Room 22 with Lara idle and the wolves
+     asleep beyond their 8192 activation radius gave two arms with completely
+     different enemy code the same 400 frames. `tools/fps_offline.py --drive up`
+     exists for this.
+  4. **A PIXEL A/B BETWEEN ARMS IS INVALID IN THIS ENGINE.** Movement advances
+     per RENDERED frame, so the faster arm is somewhere else at the same field
+     number: 10 of 10 frames differed, one by 74%, for a change that touches
+     nothing visible. Even "stand still and turn" diverges, because the turn is
+     per-frame too.
 
 ### ⬜ NEXT
-  1. **Slopes have never been driven anywhere else.** The Caves have 147 slide
-     cells (room 10 has 34, room 14 has 27, and room 0 - the SPAWN room - has
-     5); the mansion has 100. Only the gym slope and one room-11 slope have been
-     ridden. `CAVES_MECHANICS_AUDIT.md` lists "skid - spawn r2/r3, run downhill"
-     as still undriven.
-  2. Both quality arms need re-gating on the new tree if the user picks
-     `pretty` (only `playable`/VRESN=80 was gated this run).
-  3. Rig rules still contradict the autorun prompt (run 111); `/tmp/TESTCARD.COF`
-     staged, rig untouched. Nothing this run needed the rig.
+  1. The FMV write path on silicon (item 1) - the one open defect, and the
+     user can see it.
+  2. Get `r22_try_p408.cof` in front of the user (queued, see RIG below).
+  3. If no bridge pops, put `ENTVIEWCULL=1` in `tools/build_cof.sh`'s shipping
+     flags and re-gate both levels with `release_check.py`.
+  4. Wolves still have no PATH - they walk into walls on the way to Lara. The
+     visible complaint is fixed; TR1's zones/moods are not implemented.
 
 ### ⚠️ BUILD STATE
-`/tmp/cofout11/` = the SHIPPING payload with the slide fixes (COF + ELF + .JV +
-MUSIC.PCM + GYMLOAD.DAT), `QUALITY=playable`/VRESN=80, PADTEXT=136, md5
-`eb73701d8800e6455c064f3b6d4135bc`. Two independent builds of the same tree came
-out byte-identical, which is also what proved the arm-A revert had been undone
-cleanly. `/tmp/cofout8` = the previous (soft-locked) payload, kept as the
-negative control. `/tmp/slideA.cof`/`slideB.cof` = the facing-snap A/B pair
-(AUTOSTART + SPAWNAT room 10).
+`/tmp/cofout11/` = the shipping payload with the SLIDE fixes, `QUALITY=playable`
+/VRESN=80, PADTEXT=136, md5 `eb73701d8800e6455c064f3b6d4135bc` - **this is the
+one that boots and that the user played.**
+Arms built on top of it (enemy AI + `ENTVIEWCULL=1`):
+    /tmp/ship_ai_p408.cof   shipping path (title ring) - **BOOTS on silicon**
+    /tmp/r22_try_p408.cof   AUTOSTART + SPAWNAT room 22 - queued, untested
+    /tmp/r22_{base,ai,ai2,cull,nobr}_dv.cof   the measured A/B set (DREWVIS=1)
+☠️☠️ **ANY CODE CHANGE RE-ROLLS THE A10 PAD.** PADTEXT=136 booted the slide-fix
+ROM and is BLACK with the enemy AI in it. Rolled: 136 black · 0 black · 544
+black · **408 BOOTS**. Build all six pads first (`make PADTEXT=$pt ...`), then
+flash them one at a time; the emulator cannot tell you which.
+☠️ jagq reports `signal content` on a frame that is 1501 bytes of nearly-black.
+**Look at the frame**; its blank/content threshold is not a boot verdict.
 ★ Only `main.c` changed, so a ROM rebuild + `cp` into a copy of the payload dir
 is enough - the disc extraction does not have to be re-run.
 ☠️ `tools/build_conf.sh` takes **caves|gym|both** - not `mrt`.
 ☠️ SPAWNAT does NOT land where you ask when the point is inside two rooms'
-boxes: room 10's (56832, 57856, y 3328) put her in room **11** at y 6656,
-because she fell to the lower room's floor. Walk her to a slope instead of
-spawning on one, or pick a cell no other room's box contains.
-☠️ `release_play.py` now WIPES its output dir first: OUT is a fixed path and a
-drive that dies while booting leaves the PREVIOUS run's complete frame set
-sitting there. I read 54 stale PNGs as this run's output; only the mtimes gave
-it away. ☠️ `find -newermt "12:29"` is INVALID here (bfs wants ISO 8601) and
-prints an error to stderr while the pipeline reports 0 - a check that never ran.
+boxes: room 10's (56832, 57856, y 3328) put her in room **11** at y 6656.
+Walk her to the spot instead, or pick a cell no other room's box contains.
+☠️ `release_play.py` WIPES its output dir first: a drive that dies while booting
+otherwise leaves the PREVIOUS run's complete frame set sitting there (54 stale
+PNGs read as this run's output; only the mtimes gave it away).
 
 ### ⬜ ALSO OPEN
-  1. Capture the hardware boot **if the user grants permission** -
-     upload -> observe -> `jag_gd.sh endturn` inside ONE 5-minute turn.
+  1. `jagq run /tmp/r22_try_p408.cof` - queued and FAILED for rig reasons twice
+     ("Jaguar GameDrive not found / Insufficient permission"); jag_viewpoint's
+     reboot failed in the same minute, so it is the shared board re-enumerating,
+     not our ROM. Re-queue it.
   2. The 8 untestable door seats; `HW_TESTCARD`.
+
+### ⭐ jaguar-shared MOVED - re-read on the user's instruction (2026-08-18)
+14 new commits. The four that touch this project:
+  * **`hw/POWER.md`** - the Kasa cycle is now a shared, documented PROCESS, and
+    the driver moved to `hw/jagpower`. Use
+    `jagq exec --lease 120 -- ~/Documents/Git/jaguar-shared/hw/jagpower cycle`
+    rather than this repo's `./jag_power.sh`, and walk its "is it actually
+    hung?" table first - reaching for the plug too early has cost sessions their
+    turn.
+  * **"a wedged USB link looks like your own bug"** - SIX turns failed across
+    FIVE projects on 2026-08-17 before anyone said so. That is exactly what my
+    `exit -6` and "GameDrive not found" were; jag_viewpoint's reboot failed in
+    the same minute. **Check `jagq history` across projects before blaming your
+    ROM or re-queueing.**
+  * **"one clone per project" + "a foreign commit in your clone can invalidate
+    every number you have"** - jag_quake's cobweb had a stray commit in the
+    OBJECT PROCESSOR model, the part of jsim that sets display bus load. ✅
+    CHECKED OURS: `jag_openlara/cobweb` is 12 behind origin/main, **0 ahead,
+    clean** - no stray, so this run's fps numbers stand. ⭐ The rule to carry:
+    after ANY shared-instrument change (cobweb pull, jas fix, new jagemu),
+    RE-MEASURE THE BASELINE before trusting a comparison against it.
+  * **video: the OP-list rebuild must follow the field WRAP** (jag_rr, measured
+    on hardware) and **jsim reports PAL while the rig is NTSC**. Not our symptom,
+    but the same family as the FMV grain: a display-path defect the emulator
+    cannot show.
+★ A LEAD FOR THE GRAIN FROM THAT TABLE: "per-field gate compares raw VC - bit 11
+is the FIELD flag, so it misses every second field and the capture AVERAGES the
+two". `gpu_jvdec.gas` writes the BACK buffer only and re-applies the previous
+frame's tokens to keep the pair coherent. If that re-apply is not exact, buffers
+A and B differ by the blocks that changed two frames ago - and a display
+alternating between them is speckle on a CRT and in a capture, while jagemu
+grabs ONE buffer and looks clean. **Test offline first: grab consecutive
+published frames during the FMV and see whether the picture alternates between
+two versions.**
+
+### ☠️ THE RIG, LEARNED THE HARD WAY THIS RUN
+  * **`jaggd ... exit -6` means the USB link is WEDGED, not that the ROM is
+    bad.** It began right after a `--no-reboot` turn left a ROM running and
+    another upload went in on top of it. `jagq reboot` did NOT clear it.
+    What did: `jagq exec --lease 120s -- ./jag_power.sh cycle` (the Kasa plug),
+    then the very next upload succeeded. ★ Take the power cycle UNDER A LEASE -
+    raw `jag_power.sh` yanks the board out from under whoever holds it.
+  * The rig is genuinely busy now - five projects, a real queue. `--no-wait`
+    plus `jagq status` beats blocking on `jagq run`.
 
 ### ☠️ CLOSED - DO NOT REOPEN
     mansion holes (50-59) · pickups (65) · mid-walk LOADING (67) ·

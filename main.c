@@ -1147,7 +1147,12 @@ static volatile int g_entdrawn, g_entdrawn_rooms;  /* entities submitted this fr
    fps = 60 * delta(g_drawframes) / delta(frame_count).
    The capture card is unplugged, so tools/fps_measure.py (which reads a capture
    clip) cannot run at all; this is how a render cost gets measured offline. */
-static uint32_t g_drawframes;
+/* ☠️ VOLATILE, OR IT DOES NOT EXIST. Nothing in a shipping build READS this
+   counter, so gcc deleted it and `nm` had no symbol - the offline fps
+   instrument the comment above describes could not actually be read on any
+   arm built from this flag set. Found by measuring room 22 and getting a flat
+   60.00 fps from frame_count, which is fields. */
+static volatile uint32_t g_drawframes;
 #endif
 static int g_curroom_fwd(void) { return g_curroom; }
 #define LARA_JUMPGRAB 1920            /* AUTO JUMP-REACH ceiling = TR1's own band:
@@ -2529,6 +2534,12 @@ static int  g_health = 1000;             /* TR1 full health              */
 #define ENT_BAT_MAXDRAW 4
 #define ENT_WOLF_MAXDRAW 2
 #define ENT_BEAR_MAXDRAW 1
+#ifdef BLOBCACHE
+/* enemy blob keys - declared here because they are sized by the MAXDRAW caps
+   just above, which are defined after the other sig tables. */
+static uint32_t wolf_sig[ENT_WOLF_MAXDRAW];
+static uint32_t bear_sig[ENT_BEAR_MAXDRAW];
+#endif
 /* ★★★ THE ENEMY BLOBS COST NOTHING - they share the TITLE SCREEN's arena.
  * Plumbing ENEMIES for the first time overflowed BSS by 52,368 bytes, and the
  * enemy blobs are 39,424 of that.  But their lifetime is DISJOINT from the two
@@ -2701,6 +2712,42 @@ static void ring_stage(void)
 
 static uint8_t g_batframe;               /* shared fly-cycle frame    */
 static int g_batx[MRT_ENTCOUNT], g_baty[MRT_ENTCOUNT], g_batz[MRT_ENTCOUNT];
+/* ☠️ ENEMIES USED TO HAVE NO HEADING AT ALL. build_ent_model only ever
+   TRANSLATED the model, so a wolf was drawn in its baked orientation whatever
+   direction it was travelling, and the chase closed on X and Z independently
+   at a fixed speed - which is why the user's first words on seeing them run
+   were "the land walking enemies FLOAT towards Lara". A heading fixes the look
+   and the movement at once: it turns at a rate, and then it walks FORWARD. */
+static uint8_t g_batyaw[MRT_ENTCOUNT];   /* which way the animal is facing   */
+static uint16_t g_batgait[MRT_ENTCOUNT]; /* distance walked, drives the cycle */
+/* POSE GENERATION, bumped only when something about how this enemy is DRAWN
+   changed (position, heading, gait frame, death sink). The blob for a
+   standing enemy is then rebuilt zero times instead of once per frame -
+   which matters because the rebuild now rotates every vertex. Exact, not a
+   hash: a hash collision would freeze an animal mid-stride. */
+static uint16_t g_batgen[MRT_ENTCOUNT];
+static int g_batfy[MRT_ENTCOUNT];        /* floor last read under its feet */
+
+/* atan of i/32 in SINTAB units (256 = a full turn), 33 entries. A linear
+   ratio approximation is ~4 degrees out at the octant edges, which on a
+   quadruped reads as running slightly sideways - the exact thing being
+   fixed here - so the table is worth its 33 bytes. */
+static const uint8_t ATAN32[33] = {
+   0,  1,  3,  4,  5,  6,  8,  9, 10, 11, 12,
+  13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+  25, 25, 26, 27, 28, 29, 29, 30, 31, 31, 32 };
+
+/* heading from a delta, in SINTAB units: 0 = +Z, 64 = +X - the same
+   convention Lara's g_layaw uses (movement is SIN(yaw) on X, COS(yaw) on Z). */
+static uint8_t ent_ang8(int x, int z)
+{
+    int ax = x < 0 ? -x : x, az = z < 0 ? -z : z, a;
+    if (!ax && !az) return 0;
+    if (az >= ax) a = ATAN32[(ax * 32 + az / 2) / az];
+    else          a = 64 - ATAN32[(az * 32 + ax / 2) / ax];
+    if (x >= 0) return (uint8_t)(z >= 0 ? a : 128 - a);
+    return (uint8_t)(z >= 0 ? 256 - a : 128 + a);
+}
 static uint8_t g_batinit;                /* positions seeded from spawn  */
 static uint8_t g_batdead[MRT_ENTCOUNT];  /* killed by Lara               */
 static uint8_t g_enhp[MRT_ENTCOUNT];     /* hit points left (TR1 values)  */
@@ -2747,24 +2794,42 @@ static int ent_is_enemy(int t) { return t==7 || t==8 || t==9; }
 #define ENT_TONE_WOLF  3
 #define ENT_SW_UL(c)  ((c)*MRT_LARA_CELL + 1)
 #define ENT_SW_UH(c)  (((c)+1)*MRT_LARA_CELL - 2)
+/* yaw = the model's heading in SINTAB units, or ENT_NOYAW to keep the baked
+   orientation (doors, bridges, pickups - anything whose rotation is already in
+   its vertices). ☠️ The rotate is .14 fixed on PURPOSE: COS/SIN are 16.16, and
+   a 16.16 factor forces the 68000 into a 32x32 multiply library call per
+   vertex. Shifted to .14 both operands fit 16 bits and gcc emits `muls.w`,
+   which is the difference between a few thousand cycles and a few tens of
+   thousands on a 264-vertex wolf. Same trick the camera basis uses at the top
+   of the render: COS(g_layaw)>>2, noted there as .14 so it fits 16 bits for
+   muls.w. */
+#define ENT_NOYAW 0x7FFF
 static void build_ent_model(uint8_t *buf, int atlasW, int wx, int wy, int wz,
                             const short *V, int vc,
                             const unsigned short (*Q)[4], int qc,
                             const unsigned short (*T)[3], int tc, int tone,
                             const unsigned short (*QUV)[8],
-                            const unsigned short (*TUV)[6])
+                            const unsigned short (*TUV)[6], int yaw)
 {
     const int su0 = ENT_SW_UL(tone), su1 = ENT_SW_UH(tone);
     int offX = wx>>8, offZ = wz>>8, rx0 = wx&255, rz0 = wz&255, i;
+    int yc = 0, ys = 0;
     uint16_t *h = (uint16_t *)buf; uint16_t *w;
+    if (yaw != ENT_NOYAW) { yc = (int)(COS(yaw) >> 2); ys = (int)(SIN(yaw) >> 2); }
     h[0]=(uint16_t)vc; h[1]=(uint16_t)qc; h[2]=(uint16_t)tc;
     h[3]=(uint16_t)atlasW; h[4]=(uint16_t)g_ltx_atH;
     h[5]=(uint16_t)offX; h[6]=0; h[7]=(uint16_t)offZ;
     w = (uint16_t *)(buf + 16);
     for (i=0;i<vc;i++) {
-        w[0]=(uint16_t)(int16_t)(V[i*3]+rx0);
+        int vx = V[i*3], vz = V[i*3+2];
+        if (yaw != ENT_NOYAW) {
+            int rx = ((int32_t)vx * yc + (int32_t)vz * ys) >> 14;
+            int rz = ((int32_t)vz * yc - (int32_t)vx * ys) >> 14;
+            vx = rx; vz = rz;
+        }
+        w[0]=(uint16_t)(int16_t)(vx+rx0);
         w[1]=(uint16_t)(int16_t)(wy+V[i*3+1]);
-        w[2]=(uint16_t)(int16_t)(V[i*3+2]+rz0);
+        w[2]=(uint16_t)(int16_t)(vz+rz0);
         w[3]=255; w+=4;
     }
     for (i=0;i<qc;i++) {
@@ -2813,10 +2878,11 @@ static void build_ent_bat(uint8_t *buf, int atlasW, int e, int frame)
                        on a budget note GYMSD had already made obsolete. The
                        bat is skinned now, so these tables carry real UVs. */
                     #ifdef ENEMYTEX
-                    MRT_BAT_quv, MRT_BAT_tuv);
+                    MRT_BAT_quv, MRT_BAT_tuv,
                     #else
-                    0, 0);
+                    0, 0,
                     #endif
+                    g_batyaw[e]);
 }
 static void build_ent_wolf(uint8_t *buf, int atlasW, int e, int frame)
 {
@@ -2825,10 +2891,11 @@ static void build_ent_wolf(uint8_t *buf, int atlasW, int e, int frame)
                     MRT_WOLF_quads, MRT_WOLF_QCOUNT,
                     MRT_WOLF_tris, MRT_WOLF_TCOUNT, ENT_TONE_WOLF,
                     #ifdef ENEMYTEX
-                    MRT_WOLF_quv, MRT_WOLF_tuv);
+                    MRT_WOLF_quv, MRT_WOLF_tuv,
                     #else
-                    0, 0);
+                    0, 0,
                     #endif
+                    g_batyaw[e]);
 }
 static void build_ent_bear(uint8_t *buf, int atlasW, int e, int frame)
 {
@@ -2842,10 +2909,11 @@ static void build_ent_bear(uint8_t *buf, int atlasW, int e, int frame)
                        on a budget note GYMSD had already made obsolete. The
                        bear is skinned now, so these tables carry real UVs. */
                     #ifdef ENEMYTEX
-                    MRT_BEAR_quv, MRT_BEAR_tuv);
+                    MRT_BEAR_quv, MRT_BEAR_tuv,
                     #else
-                    0, 0);
+                    0, 0,
                     #endif
+                    g_batyaw[e]);
 }
 #endif
 
@@ -8501,28 +8569,100 @@ bootvid_entry:
                         if (g_health <= 0) g_health = 1000;
                         g_batinit = 1;
                     }
-                    /* AI: home toward Lara, bite on contact. Per-type: bats fly
-                       at head height and are fast; wolves charge on the ground;
-                       bears are slow but hit hard. */
+                    /* AI: TURN toward Lara, then WALK FORWARD - bite on
+                       contact. Per-type: bats fly at head height and are fast
+                       and nimble; wolves charge on the ground; bears are slow
+                       to turn but hit hard.
+                       ☠️☠️ THIS USED TO BE AXIS HOMING WITH NO HEADING AND NO
+                       GROUND. It stepped X and Z independently toward Lara,
+                       drew the model in its baked orientation because
+                       build_ent_model had no rotation at all, and tracked
+                       **Lara's** Y rather than the floor under the animal's own
+                       feet. The user, seeing it on the TV: "all the land
+                       walking enemies FLOAT towards Lara". All three parts of
+                       that are fixed here - it faces where it is going, it goes
+                       where it is facing, and it stands on the ground.
+                       ★ An animal that must TURN before it can close also gives
+                       the fight its first real shape: circle-strafing a wolf
+                       now works, because the wolf has to come round. */
                     for (be=0; be<MRT_ENTCOUNT; be++) {
-                        int t, tx, ty, tz, d, bdx, bdz, reach, dmg;
+                        int t, sdx, sdz, d, tr, bdx, bdz, reach, dmg, fly, stride;
+                        int want, diff, moved = 0, oldy;
                         t = mrt_ent[be].type;
                         if (!ent_is_enemy(t) || g_batdead[be]) continue;
-                        bdx=g_lax-g_batx[be]; bdz=g_laz-g_batz[be];
-                        if (bdx<0)bdx=-bdx; if (bdz<0)bdz=-bdz;
+                        sdx=g_lax-g_batx[be]; sdz=g_laz-g_batz[be];
+                        bdx = sdx<0?-sdx:sdx; bdz = sdz<0?-sdz:sdz;
                         if (bdx+bdz > 8192) continue;         /* dormant if far */
-                        tx = g_lax; tz = g_laz;
-                        if (ent_is_bat(t))      { ty = g_lay - 640; d = 24*g_ticks; reach = 400; dmg = 2; }
-                        else if (ent_is_wolf(t)){ ty = g_lay;       d = 20*g_ticks; reach = 500; dmg = 3; }
-                        else                    { ty = g_lay;       d = 12*g_ticks; reach = 600; dmg = 5; }
+                        if (ent_is_bat(t))      { d=24*g_ticks; tr=10*g_ticks; reach=400; dmg=2; fly=1; stride=0;   }
+                        /* ★ the stand-off is measured from CENTRE to CENTRE and
+                           a wolf is about 1000 units nose to tail, so 500 put
+                           its whole body inside Lara - the render showed the
+                           two models interpenetrating. 700 leaves its nose at
+                           her, which is where it bites from. */
+                        else if (ent_is_wolf(t)){ d=20*g_ticks; tr= 6*g_ticks; reach=700; dmg=3; fly=0; stride=160; }
+                        else                    { d=12*g_ticks; tr= 3*g_ticks; reach=850; dmg=5; fly=0; stride=0;   }
+                        /* turn at a RATE - an animal cannot strafe */
+                        want = (int)ent_ang8(sdx, sdz);
+                        diff = (want - (int)g_batyaw[be]) & 255;
+                        if (diff > 128) diff -= 256;
+                        if (diff >  tr) diff =  tr;
+                        if (diff < -tr) diff = -tr;
+                        g_batyaw[be] = (uint8_t)((int)g_batyaw[be] + diff);
+                        if (diff) moved = 1;
                         /* close in only until at bite range - never stack ON Lara
-                           (that occludes the enemy behind her and looks wrong).
-                           Y still tracks so ground enemies follow ramps. */
+                           (that occludes the enemy behind her and looks wrong). */
                         if (bdx + bdz > reach) {
-                            if (g_batx[be] < tx-d) g_batx[be]+=d; else if (g_batx[be] > tx+d) g_batx[be]-=d; else g_batx[be]=tx;
-                            if (g_batz[be] < tz-d) g_batz[be]+=d; else if (g_batz[be] > tz+d) g_batz[be]-=d; else g_batz[be]=tz;
+                            g_batx[be] += (int)(((int32_t)SIN(g_batyaw[be]) * d) >> 16);
+                            g_batz[be] += (int)(((int32_t)COS(g_batyaw[be]) * d) >> 16);
+                            /* the run cycle is driven by DISTANCE COVERED, so
+                               the feet stop skating: one stride of ground per
+                               keyframe, whatever the frame rate is doing. It
+                               used to be `g_batframe`, ONE counter shared by
+                               every enemy and stepped on the bat's wing-flap
+                               clock. */
+                            if (stride) g_batgait[be] = (uint16_t)(g_batgait[be] + d);
+                            moved = 1;
                         }
-                        if (g_baty[be] < ty-d) g_baty[be]+=d; else if (g_baty[be] > ty+d) g_baty[be]-=d; else g_baty[be]=ty;
+                        oldy = g_baty[be];
+                        if (fly) {
+                            int ty = g_lay - 640;
+                            if (g_baty[be] < ty-d) g_baty[be]+=d;
+                            else if (g_baty[be] > ty+d) g_baty[be]-=d;
+                            else g_baty[be]=ty;
+                        } else if (moved || g_baty[be] != g_batfy[be]) {
+                            /* STAND ON THE FLOOR UNDER ITS OWN FEET.
+                               ☠️ room_floor_mr WRITES g_floorroom, g_floorwater
+                               and g_flr_slx/slz - the globals Lara's own floor
+                               attribution and the SLIDE test read on this very
+                               tick. Calling it for an enemy without putting
+                               them back is the "two writers, one g_floorroom"
+                               bug that cost the boundary campaign 403 phantom
+                               floors; the enemy would win the race and Lara
+                               would be attributed to the wolf's room. */
+                            /* ☠️ ONE ROOM, NOT ALL 38. room_floor_mr scans every
+                               room it is handed; passing the whole level for
+                               every enemy on every frame cost 18% of room 22's
+                               frame rate, measured (6.67 -> 5.45 fps) - most of
+                               a fix that was supposed to be free. The spawn code
+                               already shows the cheap form: hand it ONE room.
+                               And only re-ask when the animal actually moved -
+                               a wolf standing at bite range has the same floor
+                               under it as it did last frame. */
+                            int efy, step = 96*g_ticks;
+                            const uint8_t *r1 = rsect[mrt_ent[be].room];
+                            int sv_room = g_floorroom, sv_w = g_floorwater;
+                            int sv_slx = g_flr_slx, sv_slz = g_flr_slz;
+                            if (room_floor_mr(&r1, 1, g_batx[be], g_batz[be], &efy)) {
+                                g_batfy[be] = efy;
+                                if (g_baty[be] < efy-step) g_baty[be]+=step;
+                                else if (g_baty[be] > efy+step) g_baty[be]-=step;
+                                else g_baty[be]=efy;
+                            }
+                            g_floorroom = sv_room; g_floorwater = sv_w;
+                            g_flr_slx = sv_slx;    g_flr_slz = sv_slz;
+                        }
+                        if (g_baty[be] != oldy || g_endying[be]) moved = 1;
+                        if (moved) g_batgen[be]++;
                         if (bdx + bdz < reach && g_health > 0)  /* bite */
                             g_health -= dmg * g_ticks;
                     }
@@ -10173,6 +10313,22 @@ bootvid_entry:
                       ns++; ndrawn++;
                   } }
                 /* the bridge platforms in this room (were invisible) */
+                /* ENTVIEWCULL: an entity BEHIND THE CAMERA costs a full model
+                   submission - transform, setup, the lot - and paints nothing.
+                   Room 22 draws all twelve bridges on a pure DISTANCE gate, and
+                   the bridges are worth 33% of that room's frame rate (measured:
+                   6.07 fps with, 8.07 without, Lara walking in). This is the
+                   half of them she is not looking at.
+                   ☠️ BEHIND ONLY, no side test. A wrong lateral cull pops a
+                   bridge out at the screen edge - a visible bug traded for
+                   invisible cycles - and the margin below is a bridge's own
+                   width so a platform straddling the camera plane still draws. */
+                /* NOBRIDGEDRAW=1: DIAGNOSTIC. Room 22 is the level's worst room
+                   (3.69 fps in the 38-room sweep) and it is the only one with
+                   bridges - all twelve of them. This gate prices them: it is the
+                   CEILING on anything a bridge cull could win, and it is worth
+                   knowing before building the cull. */
+#ifndef NOBRIDGEDRAW
                 { int e, nb = 0;
                   for (e = 0; e < MRT_ENTCOUNT && ndrawn < 39; e++) {
                       if (g_useset) break;
@@ -10184,6 +10340,12 @@ bootvid_entry:
                       { int ddx = g_lax - mrt_ent[e].x, ddz = g_laz - mrt_ent[e].z;
                         if (ddx < 0) ddx = -ddx; if (ddz < 0) ddz = -ddz;
                         if (ddx + ddz > 6144) continue; }
+#ifdef ENTVIEWCULL
+                      { int vdx = mrt_ent[e].x - g_camx, vdz = mrt_ent[e].z - g_camz;
+                        int zc = (int)((((int32_t)vdx * (g_camsY >> 8))
+                                      + ((int32_t)vdz * (g_camcY >> 8))) >> 8);
+                        if (zc < -1024) continue; }        /* behind the camera */
+#endif
                       if (nb >= ENT_BR_MAXDRAW) break;
 #ifdef BLOBCACHE
                       /* a bridge reads nothing mutable - key on the entity alone */
@@ -10196,6 +10358,7 @@ bootvid_entry:
                       displist[1+ndrawn*4+3] = 0;
                       nb++; ndrawn++;
                   } }
+#endif
                 /* uncollected pickups near Lara, spinning */
                 { int e, np = 0;
                   for (e = 0; e < MRT_ENTCOUNT && ndrawn < 39; e++) {
@@ -10277,8 +10440,15 @@ bootvid_entry:
                         if (ddx < 0) ddx = -ddx; if (ddz < 0) ddz = -ddz;
                         if (ddx + ddz > 6144) continue; }
                       if (na >= ENT_WOLF_MAXDRAW) break;
+#ifdef BLOBCACHE
+                      /* pose generation + entity index: a wolf standing at bite
+                         range rebuilds ZERO times, and a slot that changes hands
+                         between frames still misses because `e` is in the key. */
+                      if (!blob_hit(wolf_sig, na, ((uint32_t)(e + 1) << 16) | g_batgen[e]))
+#endif
+                      /* per-wolf gait, not the shared wing-flap counter */
                       build_ent_wolf(ent_wolf_blob[na], atlasW, e,
-                                     g_batframe % MRT_WOLF_FRAMES);
+                                     (g_batgait[e] / 160) % MRT_WOLF_FRAMES);
                       displist[1+ndrawn*4+0] = (uint32_t)ent_wolf_blob[na];
                       displist[1+ndrawn*4+1] = 319u;
                       displist[1+ndrawn*4+2] = (uint32_t)(VIEW_H-1);
@@ -10296,6 +10466,9 @@ bootvid_entry:
                         if (ddx < 0) ddx = -ddx; if (ddz < 0) ddz = -ddz;
                         if (ddx + ddz > 6144) continue; }
                       if (na >= ENT_BEAR_MAXDRAW) break;
+#ifdef BLOBCACHE
+                      if (!blob_hit(bear_sig, na, ((uint32_t)(e + 1) << 16) | g_batgen[e]))
+#endif
                       build_ent_bear(ent_bear_blob[na], atlasW, e, 0);
                       displist[1+ndrawn*4+0] = (uint32_t)ent_bear_blob[na];
                       displist[1+ndrawn*4+1] = 319u;

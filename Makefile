@@ -1013,6 +1013,17 @@ endif
 # ☠️ OFF BY DEFAULT because menu_text is 68000 pixels, one byte per store with
 # four bounds compares, EVERY FRAME - measured at ~5 fps per 25 glyphs. Turn it
 # on for a test arm that needs to see the kill count; do not ship it as text.
+# NOBRIDGEDRAW=1: diagnostic - do not submit the 12 bridge models in room 22.
+# Prices what the bridges cost, which is the ceiling on any bridge-culling work.
+# ENTVIEWCULL=1: skip entity models that are behind the camera.
+ifdef ENTVIEWCULL
+CFLAGS   += -DENTVIEWCULL
+CXXFLAGS += -DENTVIEWCULL
+endif
+ifdef NOBRIDGEDRAW
+CFLAGS   += -DNOBRIDGEDRAW
+CXXFLAGS += -DNOBRIDGEDRAW
+endif
 ifdef HUDTEXT
 CFLAGS   += -DHUDTEXT
 CXXFLAGS += -DHUDTEXT

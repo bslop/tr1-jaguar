@@ -88,10 +88,17 @@ def encode_vq():
                              "-af", os.environ.get("JV_AF", "afade=t=in:d=0.12,dynaudnorm=p=0.75:m=12"),
                          "-f", "s8", "-ar", "11025", "-ac", "1", apath])
         audio = open(apath, "rb").read() if r2.returncode == 0 and os.path.exists(apath) else b""
+        # ☠️ THE PRE-FILTER IS A QUALITY KNOB, NOT A CONSTANT. MDEC noise in
+        # the source is what the codebook spends its 256 entries on: in a dark
+        # scene every 4x4 block of near-black-plus-noise trains a slightly
+        # different entry, and the result on a TV is the SPECKLE the user
+        # called "grainy". JV_VQDN raises or lowers that filter so it can be
+        # traded against detail with a number instead of an opinion.
+        DN = os.environ.get("JV_VQDN", "hqdn3d=4:3:12:12")
         subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", SRC,
-                        "-vf", ("crop=%d:%d:%d:%d,hqdn3d=4:3:12:12,fps=%d,"
+                        "-vf", ("crop=%d:%d:%d:%d,%s,fps=%d,"
                                 "scale=%dx%d:flags=lanczos")
-                        % (r - l, b - t, l, t, FPS, W2, H2),
+                        % (r - l, b - t, l, t, DN, FPS, W2, H2),
                         os.path.join(td, "f_%04d.png")])
         # no check: STR tails often carry junk sectors the demuxer trips on
         names = sorted(f for f in os.listdir(td) if f.startswith("f_"))
@@ -109,7 +116,10 @@ def encode_vq():
                 for f in fr]
         def blocks(a):
             return a.reshape(H2//4, 4, W2//4, 4).transpose(0, 2, 1, 3).reshape(-1, 16)
-        tstride = max(2, len(idxf) // 120)   # cap training set for long clips
+        # Training set and iteration count: both are quality knobs paid for in
+        # BUILD TIME only - nothing about them reaches the Jaguar.
+        NTRAIN = int(os.environ.get("JV_VQTRAIN", "120"))
+        tstride = max(2, len(idxf) // NTRAIN)   # cap training set for long clips
         allb = np.concatenate([blocks(a) for a in idxf[::tstride]], axis=0)
         vec = pal[allb].reshape(len(allb), -1)
         rng = np.random.default_rng(7)
@@ -121,7 +131,7 @@ def encode_vq():
             p = d2min / d2min.sum()
             cent[k] = vec[rng.choice(len(vec), p=p)]
             d2min = np.minimum(d2min, ((vec - cent[k])**2).sum(1))
-        for _ in range(14):
+        for _ in range(int(os.environ.get("JV_VQITER", "14"))):
             assign = np.empty(len(vec), dtype=np.int32)
             for i in range(0, len(vec), 8192):
                 dd = ((vec[i:i+8192, None, :] - cent[None, :, :])**2).sum(2)
