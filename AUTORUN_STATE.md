@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 12
+RUN: 13
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,72 +54,69 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ★★★★★ **THE CORRUPTION CLEARS WITH TIME, NOT POSITION.** SAME ROM, SAME PAD,
-# SAME CLIP: SPECKLED AT t=35s, **PERFECTLY CLEAN AT t=70s AND t=86s.**
+# ⏸ **THE USER IS SWAPPING IN ANOTHER JAGUAR** (2026-08-18, mid-run 12).
+# EVERY HARDWARE RESULT IN THIS FILE WAS TAKEN ON THE OLD CONSOLE. RE-BASELINE
+# BEFORE COMPARING ANYTHING ACROSS THE SWAP.
 
-### ✅✅✅ THE MEASUREMENT (the user's suggestion: "go back / just check")
-    job 294   sg1024_p272.cof, default delay (~35 s)   CORRUPT (EIDOS logo)
-    job 299   the SAME ROM, `--delay 70 --interval 8`  **CLEAN, all 3 frames**
-              (the cafe scene from INTRO.JV, flawless on silicon)
+### ★★★★★ WHY THE SWAP IS THE RIGHT TEST - AND WHAT IT WOULD MEAN
+A **marginal console that misbehaves cold and settles as it warms** fits every
+observation at once, which no software hypothesis has managed:
+  * silicon-only, and no emulator reproduces it (they model no analogue margin)
+  * **clears with time** - the same ROM at the same pad is speckled at t=35 s
+    and perfectly clean at t=70 s and t=86 s (jobs 294 vs 299)
+  * exquisitely sensitive to code LAYOUT (`PADTEXT`) and to bus load, which is
+    what a marginal timing margin looks like from software
+  * hits exactly the content that plays FIRST - EIDOS, CORE, the start of INTRO
+  * leaves the title, the game and CAVES.JV (all later) looking right, which is
+    the user's own objection and is EXPLAINED rather than contradicted by it
+⬜ **If the new console renders the boot clips clean, the fault was never in
+this code.** That is a two-turn test and it outranks everything else queued.
+⬜ If it is still corrupt, the console is exonerated and the campaign resumes -
+with the time axis now known to matter.
 
-Only the capture moment differs. That single pair explains the user's report
-with no theory at all: **EIDOS, CORE and INTRO are the first ~2 minutes of the
-boot chain, and CAVES.JV only plays after the title** - by which time whatever
-this is has settled. Every corrupt grab I have is at the default ~35 s delay.
+### ⬜ RUN 13 STARTS HERE - THE RE-BASELINE, IN THIS ORDER
+1. ⬜ **Roll a booting pad first.** The regression fix (run 11) changed the code
+   layout, so the A10 lottery is re-rolled and **pad 272 no longer boots** -
+   jobs 303/305 came back 12 and 4 blank frames respectively. Build set is on
+   disk: `WORK_ROMS/fx{0,256,1024}_p{272,136,0}.cof` and
+   `WORK_ROMS/nbc_p{272,136,0,408}.cof`.
+2. ⬜ **The time sweep**: `fx0_p<good>.cof --frames 12 --interval 6 --delay 12`.
+   Gives the transition time and says whether corruption RETURNS at each clip
+   boundary (per-clip warm-up) or only clears once (power-on warm-up).
+3. ⬜ **The user's objection, answered directly**: `nbc_p<good>.cof`
+   (`NOBOOTCLIPS=1`) puts the TITLE on screen at t~5 s. Capture at t=10-25 s,
+   inside the bad window.
+      title CLEAN early  -> the display is fine cold and the FMV path is not
+      title DIRTY early  -> it is the machine/warm-up, not the FMV
+   ☠️ This is the one test that separates "time" from "the FMV", because every
+   other measurement has them confounded - the title and the game only ever
+   happen late.
 
-⬜ **RUN 12 STARTS HERE: jagq #303** - 12 stills, 6 s apart, t=12s..78s, on
-`fx0_p272.cof`. It gives the transition time AND says whether the corruption
-comes BACK when a new clip starts (which would make it per-clip warm-up rather
-than warm-up from power-on).
-⬜ **AND ASK THE USER** (asked, not blocking): is the TV on the same HDMI
-converter as the capture card, and does the picture settle after a minute? If
-the TV settles too, the suspect is the video chain locking on; if the TV is bad
-for the whole two minutes, it is the Jaguar.
-☠️ Do NOT re-run any A/B at the default 35 s delay. Every stimulus arm I ran
-(flat card, 256-index card, codebook, 68k walk, plain object, copy mode, early
-switch, CAVES-in-boot-slot) was captured inside the corrupt window, so **they
-are all uninformative** - they measured the window, not the arm.
+### ☠️ THE RIG WAS BADLY FLAKY BEFORE THE SWAP
+`LIBUSB_ERROR_TIMEOUT` / `_NO_DEVICE` / exit -6 / exit -15 on most uploads for
+the last hour, needing a `jagpower cycle` between nearly every turn. Some of
+that was the console coming out. **Do not read any pre-swap "blank" as an A10
+miss without checking the job log for a USB error first** - blank-because-it-
+did-not-upload and blank-because-the-pad-lost look identical in the summary.
 
-### ☠️☠️☠️ AND A REGRESSION I INTRODUCED, WHICH CONTAMINATES RUNS 8-10
-`video.c:318` used `g_op_plain240` **80 lines before its definition**.
-video.c is compiled by **jcc68k, which accepted the undeclared identifier
-SILENTLY** (gcc errors on the identical code - that is how the same mistake in
-`main.c` was caught in seconds the same day). The condition evaluated **true**
-with the variable's value 0, so every build from run 8 on shipped the PLAIN
-TYPE-0 probe object **with the probe switched off**:
-
-    known-good (HEAD~3)   fs_ph1 = 0xC13C0101  TYPE=1   fs_ph5 = 0x2020
-    runs 8-10             fs_ph1 = 0x143C0100  TYPE=0   fs_ph5 = 4
-    after the fix         fs_ph1 = 0x153C0101  TYPE=1   fs_ph5 = 0x2020
-
-✅ Fixed by moving the definition above `build_object_list`, with a comment that
-says why it must stay there. Filed against jcc68k in jaguar-shared
-(`6c278b4`) - a compiler that silently accepts an undeclared identifier does not
-fail the build, it emits **wrong code that renders**.
-★ Caught by jaguar-shared's `1da82fd` - *rebuild the last known-good commit
-FIRST* - which I had read that morning and applied three runs late. The user
-independently said "just check out an earlier commit and see what happens".
-★★★★★ **`jagemu dump` reads live DRAM where `jagemu peek` returns 0x7F filler.**
-That is what made the comparison possible; recorded in
-`COBWEB_ISSUES_OPENLARA.md` (`ee0e4d6`) as the workaround.
-
-### ✅ REBUILT AND READY (post-fix, verified TYPE=1)
-    WORK_ROMS/fx{0,256,1024}_p{272,136,0}.cof
-      mask 0    = boot clips as shipped
-      mask 256  = CAVES.JV in the boot slot
-      mask 1024 = CAVES.JV via the Start-Game path
-
-### ✅ STILL BANKED
-  * ✅ TWO real 68k DRAM spins fixed (pacing loop; `gpu_jvdec_wait`'s 240,000-
-    read mailbox poll). The first measured **54.65% -> 0.00%** on silicon -
-    though ☠️ that A/B was ALSO taken at 35 s, so re-verify it now that the
-    window is understood. Both are right regardless: they are the documented
-    law, and the fixed cobweb detector scores our ROM 5 against a budget of 128
-    where the pre-fix ROMs score 4216 and 6100.
-  * ✅ The FMV audio-ring overrun (7,224 B past `g_arena`) - independent of all
-    of this.
-  * ☠️ Never A/B across two PADTEXT values; never judge a capture by file size;
-    LOOK at every capture; and now: **never A/B across two capture TIMES**.
+### ✅ WHAT IS SOLID AND SURVIVES THE SWAP (all software, all verified offline)
+  * ✅ **Two 68k DRAM spins fixed** - the clip pacing loop and
+    `gpu_jvdec_wait`'s 240,000-read mailbox poll. The fixed cobweb detector
+    scores the pre-fix ROMs 4216 and 6100 and ours **5**, against jag_viewpoint's
+    measured hardware budget of 128. Right regardless of what the console does.
+  * ✅ **The FMV audio ring overran `g_arena` by 7,224 bytes** every clip
+    (`mbuf` was halved 2,800 lines away and the ring never re-derived its size).
+    Fixed with a compile-time `sizeof(g_arena)` assert.
+  * ✅ **A jcc68k regression of my own**, run 8-10: `g_op_plain240` used 80 lines
+    before its definition, accepted SILENTLY, so those builds shipped the wrong
+    Object Processor object shape. Fixed; filed against jcc68k.
+  * ✅ Pushed upstream: the cobweb 68k-poll detector fix (`f377c95`), the
+    porting-notes writeups (`ff74328`, `674b403`), the `jagemu peek` filler
+    defect + `dump` workaround (`be79e43`, `ee0e4d6`), the jcc68k report
+    (`6c278b4`).
+  * ☠️ Method rules earned the hard way: never A/B across two PADTEXT values ·
+    never across two capture TIMES · never judge a capture by file size · LOOK
+    at every capture · rebuild the last known-good commit FIRST.
 
 ### ⬜ ALSO OPEN
   1. ✅ `r22_try_p408.cof` DID run - jagq job 125, 07:18 today. It is not a rig
