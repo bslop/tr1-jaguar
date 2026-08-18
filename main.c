@@ -8939,7 +8939,32 @@ bootvid_entry:
                           if (rel > 128) rel -= 256;      /* signed shortest arc */
                           if (rel < 0) rel = -rel;
                           g_sliding = (rel > 64) ? 2 : 1; }
-                        g_slideang = (g_sliding == 2) ? ((d8 + 128) & 255) : d8;
+                        /* ☠️ SHE ALWAYS MOVES DOWNHILL. SLIDE_BACK FLIPS THE
+                           FACING, NOT THE TRAVEL. This used to read
+                           `(g_sliding==2) ? d8+128 : d8`, which drove her UP
+                           the slope in the backwards case - and in Lara's Home
+                           the uphill neighbour of the slope column is a WALL,
+                           so both axis moves were rejected and she stuck in a
+                           looping SLIDE_BACK forever with the pad dead (the
+                           walk branch is below this one in the chain). That is
+                           the whole of run 114's "mansion is silent": anim 104
+                           is SLIDE_BACK and it carries no footfall.
+                           OpenLara is the authority (Lara::slide + angleExt):
+                           `angle.y = dir + PI` for the back case, then
+                           `angleExt += PI` for STATE_SLIDE_BACK - the two
+                           cancel and travel is along `dir`, downhill. */
+                        g_slideang = d8;
+                        /* ...and she TURNS to face the slope, down it for a
+                           forward slide and up it for a backward one. TR1 does
+                           this (OpenLara `angle.y = dir`), and it is what makes
+                           the ride look deliberate instead of a sideways skid;
+                           it also holds the SLIDE/SLIDE_BACK choice steady for
+                           the whole slide instead of re-deciding it per frame
+                           against a heading the player left her in. Written
+                           AFTER the pad's turn step, so a slide cannot be
+                           steered - also TR1. */
+                        g_layaw = (uint8_t)((g_sliding == 2) ? ((d8 + 128) & 255)
+                                                            : d8);
                         /* slide her downhill; TR1 slide speed is ~ (anim 70) */
                         { int st = (SLIDE_SPEED * g_ticks) >> 1;
                           int sx2 = g_lax + (int)(((int32_t)SIN(g_slideang)*st)>>16);

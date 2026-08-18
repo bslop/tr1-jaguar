@@ -16,10 +16,17 @@ WHAT IT ASSERTS, and the run that earned each one:
   2. the ring SELECTS                   two A presses, level loads    (103)
   3. gameplay renders                   frame asserted, health full   (94)
   4. she MOVES under the pad            position delta > 2000 units   (109)
-  5. audio is SILENT while idle         the negative control          (110)
-  6. audio PLAYS while walking          peak above the idle floor     (110)
+  5. she STOPS when released            the other half of control     (116)
+  6. the walk sample IS a walk          g_lanim_id is RUN or WALK     (116)
+  7. audio is SILENT while idle         the negative control          (110)
+  8. audio PLAYS while walking          peak above the idle floor     (110)
 
-☠️ 5 AND 6 ARE ONE CHECK, NOT TWO. "Walking makes noise" alone passes on a ROM
+☠️ 4 AND 5 ARE ALSO ONE CHECK. "She moved" alone passes on a ROM where a slide
+carries her with nothing pressed, and it passed on the Lara's Home soft-lock run
+116 found - one press moved her before she wedged, and the loop breaks on the
+first success. Moves-when-pressed AND stops-when-released is what proves control.
+
+☠️ 7 AND 8 ARE ONE CHECK, NOT TWO. "Walking makes noise" alone passes on a ROM
 that hums constantly; "idle is silent" alone passes on a ROM with no audio at
 all. Only the PAIR - silent then loud, same session, seconds apart - shows sound
 is event-driven and working. Run 109 measured silence while walking and it took
@@ -37,7 +44,13 @@ import json, os, subprocess, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 D = os.path.dirname(HERE)
 JE = "/home/jvilla/Documents/Git/jag_openlara/cobweb/sim/target/release/jagemu"
-INST = "relcheck"
+# ☠️ THE INSTANCE NAME IS THE ARM'S IDENTITY. It was a constant, so the Caves
+# and Lara's Home arms could not run at the same time - the second `serve`
+# lands on the first one's instance and both drives read one machine. --inst
+# gives each arm its own, which is what makes a same-tree A/B affordable
+# (two 25-minute drives in 25 minutes).
+INST = (sys.argv[sys.argv.index("--inst") + 1]
+        if "--inst" in sys.argv else "relcheck")
 
 
 def ctl(*a, timeout=3600):
@@ -164,16 +177,25 @@ def main():
             return ((peek32(syms["g_lax"]) if "g_lax" in syms else 0) or 0,
                     (peek32(syms["g_laz"]) if "g_laz" in syms else 0) or 0)
 
+        def dist(a, b):
+            return abs(b[0] - a[0]) + abs(b[1] - a[1])
+
+        def anim():
+            return peek32(syms["g_lanim_id"]) if "g_lanim_id" in syms else None
+
+        # LANIM_RUN / LANIM_WALK. Identical in mrt_lara.h and gym_lara.h - the
+        # extractor picks them by TR STATE, not by index, so both level sets
+        # land on 0 and 1.
+        WALKING = (0, 1)
+
         ctl("run", 4000)
         p0 = where()
         moved, waited = 0, 4000
         for _try in range(10):
-            ctl("audio", os.path.join(out, "idle.wav"))
             ctl("input", "up"); ctl("run", 300)
-            ctl("audio", os.path.join(out, "walk.wav"))
             ctl("release")
             p1 = where()
-            moved = abs(p1[0] - p0[0]) + abs(p1[1] - p0[1])
+            moved = dist(p0, p1)
             if moved > 2000:
                 break
             ctl("run", 600); waited += 900
@@ -182,8 +204,52 @@ def main():
         health = peek32(syms["g_health"]) if "g_health" in syms else None
         record("gameplay renders", ok, "%s  [%d fields]" % (det, waited))
         record("health is full", health == 1000, "g_health=%s" % health)
-        record("she moves under the pad", moved > 2000,
-               "moved %d units (|dx|+|dz|) after %d fields" % (moved, waited))
+
+        # ☠️☠️ "SHE MOVED" IS HALF A CHECK. CONTROL IS A PAIR: SHE MOVES WHEN
+        # THE PAD IS PRESSED **AND STOPS WHEN IT IS RELEASED**.
+        # Run 116 found Lara's Home soft-locked - wedged in a looping SLIDE_BACK
+        # with the pad completely dead - and every check here PASSED, because
+        # the one press that reached her before she wedged had already moved her
+        # 8,548 units and the loop above breaks on the first success. A gate that
+        # only asks "did she move once" cannot see a level that stops responding,
+        # which is the worst thing that can ship.
+        # The released arm is load-bearing in the other direction too: a runaway
+        # slide moves her thousands of units with nothing pressed, and would read
+        # as "she moves under the pad" on a ROM with no control at all.
+        # ☠️ AND THE WALK AUDIO MUST BE SAMPLED WHILE SHE IS WALKING. The only
+        # in-game SFX is the footfall, so a sample taken while she slides, falls
+        # or stands measures nothing and reads as an audio defect - which is
+        # exactly what runs 114/115 chased through the mansion. The drive is
+        # blind, so when a heading does not walk (a wall, or a slope she slips
+        # back off) TURN HER and try again rather than believing the sample.
+        drift = driven = 0
+        walk_anim = None
+        attempt = 0
+        for attempt in range(6):
+            ctl("release"); ctl("run", 120)               # let her settle
+            q0 = where()
+            ctl("run", 300)                               # RELEASED arm
+            ctl("audio", os.path.join(out, "idle.wav"))
+            q1 = where()
+            drift = dist(q0, q1)
+            ctl("input", "up"); ctl("run", 300)           # PRESSED arm
+            walk_anim = anim()
+            ctl("audio", os.path.join(out, "walk.wav"))
+            ctl("release")
+            q2 = where()
+            driven = dist(q1, q2)
+            if driven > 2000 and walk_anim in WALKING:
+                break
+            ctl("input", "left"); ctl("run", 90)          # new heading, retry
+            ctl("release"); ctl("run", 30)
+        record("she moves under the pad", driven > 2000,
+               "moved %d units in 300 held fields (%d headings tried)"
+               % (driven, attempt + 1))
+        record("she stops when released", drift < 500,
+               "drifted %d units in 300 released fields" % drift)
+        record("sampled while walking", walk_anim in WALKING,
+               "g_lanim_id=%s during the walk capture (want 0=RUN or 1=WALK)"
+               % walk_anim)
 
         # ☠️ WHEN A LEVEL IS SILENT, THE NEXT QUESTION IS ALWAYS "WHICH GATE".
         # There is exactly ONE in-game SFX call - sfx_play(0, SFX_STEP) from

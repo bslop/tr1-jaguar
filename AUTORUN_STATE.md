@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 116
+RUN: 117
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,55 +54,85 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ✅ THE MANSION'S SILENCE IS FULLY EXPLAINED: SHE WALKS IN AN ANIMATION THAT
-# HAS NO FOOTFALL. NOTHING ABOUT SOUND IS BROKEN.
+# ✅✅✅ LARA'S HOME WAS SOFT-LOCKED, AND "THE MANSION IS SILENT" WAS A SYMPTOM
+# OF IT. FIXED, GATED, AND THE MANSION NOW HAS FOOTSTEPS (-33.4 dBFS).
 
-Same ROM, same gate, every sound gate identically open in both levels:
+Run 115 ended on "is anim 104 the right animation?". **It is not an animation
+the walk code ever picks: 104 is `LANIM_SLIDEBACK`.** She was not walking in the
+mansion at all - she was wedged in a looping SLIDE_BACK with the pad completely
+dead, and SLIDE_BACK carries no footfall, which is the whole of the "silence".
 
-                     CAVES              MANSION
-    g_sfx_ok         1                  1
-    g_sfxvol         10                 10
-    g_jerry_ok       1                  1
-    g_useset         0                  1
-    **g_lanim_id**   **0**              **104**
-    footfall entry   (4, 15) - HAS      **(255, 255) - NONE**
-    walking audio    **-35.5 dBFS**     **-120.0 dBFS silent**
+### THE BUG, one line, `main.c` ~8942
+    g_slideang = (g_sliding == 2) ? ((d8 + 128) & 255) : d8;   /* WRONG */
+    g_slideang = d8;                                            /* right */
+`d8` is the DOWNHILL direction. SLIDE_BACK flips the **facing**, never the
+travel, so the old line drove her **UP** the slope. In Lara's Home the uphill
+neighbour of room 0's slope column is a WALL, both axis moves were rejected by
+`room_wall_at`, and the slide branch sits ABOVE the walk branch in the else-if
+chain - so she could neither slide nor walk. Permanent lock, pad inert.
+★ OpenLara is the authority and it is in this tree: `Lara::slide()` sets
+`angle.y = dir + PI` for the back case and the movement step then adds PI again
+for `STATE_SLIDE_BACK` (`lara.h` ~3421) - the two cancel, travel is downhill.
 
-There is exactly ONE in-game SFX call in the whole game - `sfx_play(0, SFX_STEP)`
-from `lara_footstep` - and it only fires when the animation's frame crosses a
-footfall frame. Anim **104 is one of the 116 of 160 animations with no footfall
-defined**, so the call is never reached. The footfall tables are byte-identical
-between the two level sets (checked 160/160), so this is not an asset-set
-mismatch either.
+### ✅ ALSO LANDED: SHE TURNS TO FACE THE SLOPE (TR1's `angle.y = dir`)
+`g_layaw` is snapped to `d8` (forward slide) or `d8+128` (backward) while
+sliding, written after the pad's turn step so a slide cannot be steered.
+**Verified by A/B, not asserted**: same drive, same slope
+(`slx=+1 slz=-5` -> `d8=0`), arm WITHOUT the snap slid at `yaw=232` (whatever
+heading the player left her in), arm WITH it slid at `yaw=128` = `d8+128`.
+☠️ Two earlier A/Bs of this same change came back BYTE-IDENTICAL and proved
+nothing - in the gym she already faced exactly uphill (192 = 64+128), so the
+snap was a no-op. **A no-op A/B is not a passing A/B**; the third arm was built
+specifically to make the two ROMs disagree.
 
-### ⬜ THE OPEN QUESTION IS WHETHER ANIM 104 IS THE RIGHT ANIMATION
-That decides the fix, and it is cheap to answer from `gym_lara.h`/the extractor:
-  * **If 104 IS correct locomotion for the mansion** -> the fix is DATA: give it
-    footfall frames, the same way the extractor emits them for anims 0-3.
-  * **If 104 is WRONG** -> the animation SELECTION differs by level set, which is
-    a code bug, and fixing it restores the pose as well as the sound. She does
-    move 8,548 units in it, so she is locomoting in something.
-★ Do not "fix" this by adding footfalls until you know which - adding data to
-paper over a wrong animation would hide the real bug and look like a success.
+### THE EVIDENCE
+| | old ROM (cofout8) | fixed (cofout11) |
+|---|---|---|
+| pad released, 300 fields | 0 units (wedged) | 0 units (stands) |
+| pad held UP, 300 fields | **0 units** | **6,844 units** |
+| `g_lanim_id` | 104 SLIDE_BACK, forever | 0 RUN |
+| mansion walking audio | -120.0 dBFS silent | **-33.4 dBFS** |
+| Caves release_check | 7/7 | **9/9** |
+| mansion release_check | 6/7 (audio) | **9/9** |
 
-### ★ HOW IT WAS FOUND, AND WHY THE GATE NOW PRINTS SOUND STATE
-`release_check.py` prints `g_sfx_ok g_sfxvol g_jerry_ok g_useset g_lanim_id`
-next to the audio verdict. "Silent" on its own sends you hunting the DSP; those
-five numbers named the animation in one run. ☠️ Note run 114 first blamed this on
-"she moved 0 units" - a z-only measurement on a level that walks along X - so
-one bad instrument had manufactured a movement defect AND an audio defect.
+### ★★★★★ THE GATE PASSED A SOFT-LOCKED LEVEL THREE RUNS RUNNING
+`release_check.py` asked "did she move?" and broke out of its loop on the FIRST
+success - and the one press that reached her before she wedged had already moved
+her 8,548 units. Runs 113, 114 and 115 all called that level good.
+**Control is a PAIR**: she moves when pressed **and stops when released**. Both
+checks are in the gate now (9 checks, not 7), plus a third:
+**the walk-audio sample must be taken while `g_lanim_id` is RUN or WALK** -
+the only in-game SFX is the footfall, so a sample taken mid-slide measures
+nothing and reads as an audio defect. The drive is blind, so a heading that
+does not walk now TURNS and retries (6 headings) instead of being believed.
+★ `--inst` added so the Caves and mansion arms run at the same time.
 
 ### ⬜ NEXT
-  1. Decide whether anim 104 is correct (above). Only open defect candidate.
-  2. The user's `pretty` vs `playable` call - both arms pass 7/7 (run 113).
+  1. **Slopes have never been driven anywhere else.** The Caves have 147 slide
+     cells (room 10 has 34, room 14 has 27, and room 0 - the SPAWN room - has
+     5); the mansion has 100. Only the gym slope and one room-11 slope have been
+     ridden. `CAVES_MECHANICS_AUDIT.md` lists "skid - spawn r2/r3, run downhill"
+     as still undriven.
+  2. Both quality arms need re-gating on the new tree if the user picks
+     `pretty` (only `playable`/VRESN=80 was gated this run).
   3. Rig rules still contradict the autorun prompt (run 111); `/tmp/TESTCARD.COF`
-     staged, rig untouched.
+     staged, rig untouched. Nothing this run needed the rig.
 
 ### ⚠️ BUILD STATE
-`/tmp/cofout8/` = the SHIPPING payload with ALL THREE gameplay fixes (COF +
-ELF + .JV + MUSIC.PCM + GYMLOAD.DAT). `/tmp/gym.cof` = MVDIAG build with the
-entry fix. `/tmp/conf.cof` = caves, boot-checked.
+`/tmp/cofout11/` = the SHIPPING payload with the slide fixes (COF + ELF + .JV +
+MUSIC.PCM + GYMLOAD.DAT), `QUALITY=playable`/VRESN=80, PADTEXT=136, md5
+`eb73701d8800e6455c064f3b6d4135bc`. Two independent builds of the same tree came
+out byte-identical, which is also what proved the arm-A revert had been undone
+cleanly. `/tmp/cofout8` = the previous (soft-locked) payload, kept as the
+negative control. `/tmp/slideA.cof`/`slideB.cof` = the facing-snap A/B pair
+(AUTOSTART + SPAWNAT room 10).
+★ Only `main.c` changed, so a ROM rebuild + `cp` into a copy of the payload dir
+is enough - the disc extraction does not have to be re-run.
 ☠️ `tools/build_conf.sh` takes **caves|gym|both** - not `mrt`.
+☠️ SPAWNAT does NOT land where you ask when the point is inside two rooms'
+boxes: room 10's (56832, 57856, y 3328) put her in room **11** at y 6656,
+because she fell to the lower room's floor. Walk her to a slope instead of
+spawning on one, or pick a cell no other room's box contains.
 ☠️ `release_play.py` now WIPES its output dir first: OUT is a fixed path and a
 drive that dies while booting leaves the PREVIOUS run's complete frame set
 sitting there. I read 54 stale PNGs as this run's output; only the mtimes gave
@@ -119,7 +149,9 @@ prints an error to stderr while the pipeline reports 0 - a check that never ran.
     caves black wedges (69) · caves room crossing (72) · swimming IN (78) ·
     7 "dead doors" (74) · caves 11->12 + switch/door (79-82) ·
     all mansion door failures (85) · all Caves door failures (86-88) ·
-    **mansion pool climb-out (93)**
+    **mansion pool climb-out (93)** ·
+    **Lara's Home soft-lock + "the mansion is silent" (116) - one bug, the
+    slide travelled uphill; do not re-open either as an AUDIO question**
 
 ### ✅ WHAT IS DONE
     climbing   CAVES 24/24 ledges, 6/6 walls · MANSION 24/24, 6/6
@@ -130,11 +162,16 @@ prints an error to stderr while the pipeline reports 0 - a check that never ran.
     pickups    MEDIKIT_SMALL collected on contact, verified against a control
     frames     asserted by checkshot at BUILD time and at every driven capture
     rig        leases capped at 5 min; `jag_gd.sh endturn` reboots at turn end
-    release    /tmp/cofout7 - verified in the EMULATOR; hardware verdict pending
+    release    /tmp/cofout11 - 9/9 in the EMULATOR on BOTH levels; hw pending
+    slopes     she slides DOWNHILL and faces the slope; mansion lock closed
 
 ### Toolchain — STILL PINNED to 59e5896 (`COBWEB_DIR=/tmp/cobweb-old`)
 `beb2c15` does NOT fix the jcc68k regression (16-bit param read moved +2,
 breaking gcc/jcc mixed links). `tools/toolchain_smoke.sh` guards updates.
+⬜ cobweb moved to `8d09c43` (6 commits: jcc68k unsigned literal suffixes, a
+jcc68k graphical smoke test, a jagemu profiling-coverage fix, the green-is-six-
+bits bench). **None of them touch the 16-bit parameter ABI**, checked by log -
+so the pin stands and taking the update buys nothing this project needs today.
 ROMs: `/tmp/conf.cof` (Caves), `/tmp/gym.cof` (mansion, AUTOGYM, **no PADMUTE**).
 
 ### Instruments (all offline, no rig)
