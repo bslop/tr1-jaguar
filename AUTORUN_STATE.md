@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 1
+RUN: 2
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,98 +54,61 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ★★★★★ THE "GRAINY" FMV IS **SILICON-ONLY**, AND IT IS NOT THE ENCODER.
-# ✅ ENEMIES TURN, WALK AND STAND ON THE GROUND - FOR FREE.
-# ✅ ROOM 22 (THE BRIDGE ROOM) IS **+20.6%** FASTER.
+# ⬜ THE FMV GRAIN: SILICON-ONLY ACROSS **TWO** EMULATOR REVISIONS, AND THE
+# FIRST MEASUREMENT THAT LOOKED LIKE THE CAUSE IS **NOT TRUSTWORTHY YET**.
 
-The user played the release on the TV and reported three things. All three are
-now diagnosed, and two are fixed and measured.
+### WHAT IS SOLID
+  * The `.JV` file is right: `tools/jv_decode.py` decodes the shipped CORE.JV
+    to clean frames and scores 30.26 dB PSNR against the disc source.
+  * The player is right in the emulator: the boot clips render CLEAN in jagemu
+    at **beb2c15 AND at 1d47eeb** - the latter includes four new commits that
+    model *the OP self-consuming its object list*, which was the most likely
+    emulator blind spot. It did not reproduce the grain.
+  * The hardware capture has **~14% of pixels far from their local median**;
+    the emulator has none. `/home/jvilla/.jagq/jobs/82/frame_00.png` is the
+    reference capture (PADTEXT=408 arm, the pyramid shot).
+  * ⇒ **NOT the encoder.** Do not re-encode; `JV_VQCOLS=256` bought +0.27 dB.
 
-### 1. ★★★★★ "GRAINY VIDEO" ON EIDOS/CORE/INTRO - DO NOT RE-ENCODE
-He sent a photo: dense speckle over the whole picture, image still legible
-underneath. **The same ROM, the same `.JV` file, is CLEAN in jagemu** (frames in
-`/tmp/fmv_emu`) and CLEAN when the file is decoded offline
-(`tools/jv_decode.py`, new). The hardware capture measures **~14% of pixels far
-from their local median**; the emulator measures none.
-⇒ The file is right, the encoder is right, the kernel LOGIC is right, and the
-corruption happens in the **write path on real silicon**. This is case 7 of the
-emulator-passes/silicon-dies class.
-☠️ I spent the first half of this thread sweeping VQ encoder settings
-(`JV_VQCOLS=256` bought +0.27 dB PSNR, nothing visible) before taking the one
-measurement that split the hypothesis in half. **Ask "does it reproduce
-offline" BEFORE tuning the thing you assume is at fault.**
-⬜ NEXT for this: `gpu_jvdec.gas` writes decoded blocks straight into the
-framebuffer. Suspects, in order - phrase alignment of the block writes, and
-writes landing while the OP reads the same buffer (the kernel header already
-records a CRT flash from writing the DISPLAYED buffer, so this path has form).
-★ The encoder now has knobs (`JV_VQDN`, `JV_VQTRAIN`, `JV_VQITER`) and
-`tools/jv_decode.py` scores any clip in PSNR against its source - keep them,
-they are how a real quality change gets judged, but they are not this bug.
+### ☠️ AND THE INSTRUMENT THAT SEEMED TO CRACK IT IS SUSPECT
+`tools/../scratch fb_coherence` peeked fb0/fb1/fb2 during playback and reported
+them disagreeing by up to 57%, which would explain everything: the decoder
+patches the back buffer plus the PREVIOUS frame (2-deep), and a THREE-buffer
+rotation leaves the third stale, so the display walks a rotation of different
+pictures = speckle on a CRT, clean in a one-buffer screenshot.
+**But the two control reads in the same call came back `0x7f7f7f7f` /
+`two_buf=127`** - filler, not data - so `video_two_buf` and `front_fb` were not
+actually being read, and the fb peeks are then equally unproven.
+☠️ Also: the buffers are **320x120 16bpp** under LOWRES (spacing 0x12C00 =
+76,800 B), not the 320x240 8bpp I assumed when picking sample offsets.
+⬜ **NEXT RUN STARTS HERE: validate the peek first.** Read back a value the ROM
+demonstrably wrote (or a known constant) at each address before believing a
+single one of those percentages. THEN re-run the comparison with offsets that
+match the real buffer geometry.
 
-### 2. ✅ "THE LAND ENEMIES FLOAT TOWARDS LARA" - fixed, and it costs NOTHING
-Three separate defects, all confirmed in the source before touching it:
-  * `build_ent_model` had **no rotation term at all** - every wolf/bear/bat was
-    drawn in its baked orientation whatever direction it moved.
-  * the chase stepped X and Z **independently** at a fixed speed - a homing box.
-  * `g_baty[e]` tracked **Lara's** Y, so they hovered to her height.
-  * the run cycle came off `g_batframe`, ONE counter shared by every enemy and
-    stepped on the bat's wing-flap clock.
-Now: a per-enemy heading (`ent_ang8` + a 33-byte atan table) that turns at a
-RATE and then walks FORWARD; the floor sampled under its own feet; a per-enemy
-gait driven by distance covered; and the model rotated by that heading (.14
-fixed so gcc emits `muls.w` - 16.16 would call the 32x32 helper per vertex on a
-264-vertex wolf).
-**Measured in room 22, Lara walking in: 6.02 fps before, 6.07 after.** Free.
+### ★ THE GOOD NEWS THE CODE ALREADY CARRIES
+`video.c` has a **2-BUFFER PIN** written for exactly this failure
+(`video_two_buf`, 2026-08-07: *"delta video patches the back buffer with the
+PREVIOUS frame's tokens, which covers exactly 2-deep staleness. The demo's
+TRIPLE rotation leaves a third buffer un-patched -> the title screen GHOSTED
+through the clip"*), and `main.c:5274` calls `video_pin_start()` once per clip.
+So either the pin is working and the cause is elsewhere, or something clears it.
+That is one peek away once the instrument is trusted.
 
-### 3. ☠️☠️ THE FIRST CUT OF THAT COST 31% OF THE FRAME RATE (6.02 -> 4.13)
-Two causes, both worth remembering:
-  * `room_floor_mr(rsect, g_nrooms, ...)` **scans every room it is handed** -
-    all 38, per enemy, per frame. The spawn code already had the cheap form:
-    hand it ONE room (`&rsect[room], 1`). Now it also only re-asks when the
-    animal actually moved.
-  * the blob was rebuilt every frame for a wolf standing still. It is keyed on a
-    **pose generation** counter now (exact, not a hash - a collision would
-    freeze an animal mid-stride), so a biting wolf rebuilds zero times.
+### ⬜ THE OTHER LIVE HYPOTHESIS - and it fits "silicon only" better
+`video.c`'s **FAST OP-LIST REPAIR**: *"the OP destroys ONLY phrase 0 of the
+bitmap object as it draws; the probe showed the full 8-long rebuild chronically
+finishing at VC 33-35 - PAST the object fetch at 32 - under render-time bus
+starvation"*. If the repair loses that race on some fields, the OP fetches a
+half-repaired object and sources pixels from the wrong place - scattered
+corruption, on hardware only, invisible to an emulator that does not model bus
+starvation. jaguar-shared's new video notes are all in this family.
+Test: build the FMV arm with the repair forced early/disabled and capture.
 
-### 4. ✅ THE BRIDGE ROOM: +20.6%, MEASURED, AND THE CEILING IS KNOWN
-Room 22 is the level's worst room and it holds **all twelve** bridge entities
-plus 2 wolves. They were gated on DISTANCE only (6144), so bridges behind the
-camera were submitted in full every frame.
-    bridges drawn (baseline)        6.02 fps
-    ENTVIEWCULL=1 (behind camera)   **7.32 fps   +20.6%**
-    NOBRIDGEDRAW=1 (the ceiling)    8.07 fps   +33%
-So the cull banks 62% of everything the bridges cost. It is BEHIND-ONLY on
-purpose: a wrong lateral test pops a bridge out at the screen edge, trading a
-visible bug for invisible cycles.
-⚠️ **The cull is reasoned, not pixel-verified** - see the trap below - so it is
-a FLAG, not yet in the shipping recipe. The user is sitting in that room; if a
-bridge pops, that is what to look for.
-
-### ☠️ FOUR INSTRUMENT TRAPS, ALL HIT THIS RUN
-  1. **`frame_count` is FIELDS.** Reading it as frames says 60.00 fps on every
-     arm. `g_drawframes` is the rendered counter (main.c:1143 says so).
-  2. **`g_drawframes` was OPTIMISED AWAY.** Nothing in a shipping build reads
-     it, so gcc deleted it and `nm` had no symbol - the offline fps instrument
-     the source documents could not be read on any shipping-flag arm. It is
-     `static volatile` now.
-  3. **A STATIC SCENE PRICES NOTHING.** Room 22 with Lara idle and the wolves
-     asleep beyond their 8192 activation radius gave two arms with completely
-     different enemy code the same 400 frames. `tools/fps_offline.py --drive up`
-     exists for this.
-  4. **A PIXEL A/B BETWEEN ARMS IS INVALID IN THIS ENGINE.** Movement advances
-     per RENDERED frame, so the faster arm is somewhere else at the same field
-     number: 10 of 10 frames differed, one by 74%, for a change that touches
-     nothing visible. Even "stand still and turn" diverges, because the turn is
-     per-frame too.
-
-### ⬜ NEXT
-  1. The FMV write path on silicon (item 1) - the one open defect, and the
-     user can see it.
-  2. Get `r22_try_p408.cof` in front of the user (queued, see RIG below).
-  3. If no bridge pops, put `ENTVIEWCULL=1` in `tools/build_cof.sh`'s shipping
-     flags and re-gate both levels with `release_check.py`.
-  4. Wolves still have no PATH - they walk into walls on the way to Lara. The
-     visible complaint is fixed; TR1's zones/moods are not implemented.
+### ⬜ ALSO QUEUED FOR THE USER
+`/tmp/r22_try_p408.cof` - boots straight into the bridge room with the enemy AI
+and the view cull, for him to feel both changes. Two attempts failed on rig
+faults ("GameDrive not found", and jag_viewpoint's reboot failed in the same
+minute), not on the ROM. Re-queue it.
 
 ### ⚠️ BUILD STATE
 `/tmp/cofout11/` = the shipping payload with the SLIDE fixes, `QUALITY=playable`
