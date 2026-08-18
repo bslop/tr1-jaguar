@@ -206,19 +206,37 @@ void gpu_jvdec_kick(const void *prevTok, uint32_t prevLen,
 
 int gpu_jvdec_wait(void)
 {
-    uint32_t i;
-    /* sparse poll of the DRAM mailbox (NOT GPU SRAM - see gpu_jvdec_kick) */
-    for (i = 0; i < 240000; i++) {
-        volatile uint32_t d;
-        /* POLL GRANULARITY (2026-08-08): 40 iterations is ~240us of 68k spin
-           between checks when the bus is quiet, and far more once Jerry is
-           mixing - so the wait routinely OVERSHOOTS Tom's actual finish by
-           milliseconds. 12 keeps the DRAM poll sparse enough not to starve
-           Tom (the porting-notes law) while cutting the overshoot. The bound
-           is scaled to keep the same wall-clock timeout. */
-        for (d = 0; d < 12; d++)
-            ;
-        if (mailbox[0] == MAGIC_DONE) {
+    uint32_t i, slept;
+    /* ☠️☠️ BOUND THE POLL, THEN SLEEP (run 8, 2026-08-18).
+     * This used to be up to 240,000 iterations of a DRAM mailbox read, every
+     * FMV frame. jaguar-shared (jag_viewpoint, 2026-08-18, HW) measured the
+     * survivable budget for a tight 68000 DRAM poll on real silicon at
+     * between **16 and ~128 reads** - past that the 68000 stops dead, while
+     * every simulator runs the same ROM to completion. Its prescription is
+     * exactly this: "bound your poll below that and re-check on the next
+     * field; do not spin".
+     * A stalled 68000 means the vblank ISR never runs, which means the OP
+     * list is never repaired, which means the Object Processor keeps
+     * consuming its own bitmap header - the corpus's oldest hazard - and the
+     * picture degrades into per-pixel noise. That is what the clips do.
+     * The pacing spin in main.c was the same defect and measured 54.65% ->
+     * 0.00% when it was changed to STOP; this is its twin, and it runs
+     * during the decode itself.
+     * 64 reads is inside the measured budget; then STOP and let the vertical
+     * interrupt wake us. A decode is ~20ms against a 4-field (66ms) slot, so
+     * a sleep costs latency we already have. */
+    for (slept = 0; slept < 90u; slept++) {
+        for (i = 0; i < 64u; i++) {
+            volatile uint32_t d;
+            for (d = 0; d < 12; d++)
+                ;
+            if (mailbox[0] == MAGIC_DONE) {
+                G_CTRL = 0;
+                return 1;
+            }
+        }
+        /* atomic check + STOP: releases the bus entirely to Tom */
+        if (cpu_stop_unless(&mailbox[0], MAGIC_DONE)) {
             G_CTRL = 0;
             return 1;
         }

@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 8
+RUN: 9
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,78 +54,85 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ★★★★★ FAULT 2 IS **CONTENT-DEPENDENT, NOT SOURCE-DEPENDENT**: A CONSTANT
-# RENDERS PERFECTLY AND *ANY* DETAILED DATA COMES BACK ~50% WRONG, WHATEVER
-# WROTE IT. THAT IS A DROPPED/DUPLICATED **FETCH**, AND THE PRIME SUSPECT IS
-# THE OP SCALER - THE USER'S OWN LEAD.
+# ★★★★★ THE USER SETTLED IT: **THE CLIP DATA IS IRRELEVANT.** CAVES.JV - the
+# clip they report renders CORRECTLY - IS CORRUPT WHEN PLAYED IN THE BOOT SLOT.
+# SAME FILE, SAME PLAYER, SAME ROM. THE FAULT IS BOOT-PATH **STATE**.
 
-### ☠️☠️ THE METHODOLOGICAL CORRECTION THAT REOPENED EVERYTHING (user, run 7)
-The user asked whether we were "being lazy and using a high video mode for the
-videos so we don't have to switch before the title screen". The literal answer
-is no - `FB8` is on the compile line and `OP_DEPTH = 3<<12` (8bpp), the same
-depth as the game. **But the question exposed a hole in my own test.**
+### ✅✅✅ THE EXPERIMENT (user's hint, run 8)
+The user: *"the caves intro renders correctly"*. CAVES.JV re-enters the SAME
+clip player from Start Game (`introplay=1; goto bootvid_entry`), i.e. AFTER
+main.c:6256 has run `video_set_disp240(1); gpu_kernel_select(1)` on the way to
+the title. EIDOS/CORE/INTRO play before that line has ever executed.
+So `JVDECMASK` bit 8 (256) plays **CAVES.JV in the boot slot**:
 
-☠️ **A FLAT TEST CARD CANNOT ACQUIT AN ADDRESSING FAULT.** Run 3-4's "the
-display path is clean, it renders a constant at 0.00%" is only true for VALUE
-corruption. A fetch that is dropped, repeated or mis-addressed lands on the same
-byte in a flat field and is INVISIBLE. Every "downstream is innocent"
-conclusion built on that card has to be re-read with this caveat.
+    job 281   CAVES.JV, boot slot           **CORRUPT** - same speckle, same band
+    job 285   + the 240 switch done EARLY   **WORSE** (monochrome noise)
 
-### THE MEASUREMENTS THAT NOW FIT ONE STORY
-All at PADTEXT=272, all with fault 1 (the 68k spin) already fixed:
+⇒ The three "bad" clips are not bad. The boot POSITION is bad. Every remaining
+hypothesis about the files, the encoder or the codec is dead, permanently.
+⇒ And the early mode switch is NOT the fix (bit 128 alone, job 270, also
+corrupt) - though it clearly does something, since doing it early changes the
+picture's whole character.
 
-    flat 4-band card              **0.00%**   constant -> perfect
-    Tom decodes the real clip     ~corrupt    detailed -> ~50% wrong
-    68k fallback token walk       ~corrupt    (job 212, WORSE - pure noise)
-    zero the shadow every frame   ~corrupt    (job 237) not accumulation
-    paint the CODEBOOK itself     ~corrupt    (job 240) not the decode at all
-    PIXEL-mode copy, not phrase   ~corrupt    (job 246) not the Blitter mode
+### ⬜ RUN 9 STARTS HERE - WHAT DOES THE TITLE PATH SET UP THAT BOOT DOES NOT?
+Everything between the boot clips and the Start Game re-entry is now the
+suspect list, and it is short:
+    * the title MUSIC starts - Jerry is playing continuously by then
+    * `gpu_kernel_select(1)` - a different GPU kernel is resident
+    * the title RING renders - rblob/fscr staged, `gpu_geotex` kicked
+    * ★ TIME: the title has been up for ~30 s before Start Game
+⬜ **Cheapest first, and it splits state from settling: at boot, WAIT ~10 s
+before the first clip.** If that alone fixes it, nothing about the title
+matters and something is not ready yet (GD/SD, the DSP, a PLL). One bit, one
+turn.
+⬜ Then bisect the rest with the same `volatile const` mask.
 
-★★★★★ The codebook arm is the decisive one. It writes `vshadow[i] =
-cbk[i & 4095]` from the 68k - **no decoder, no token stream, no Tom** - and it
-comes back corrupt. So it is not the decode, not the walker, not the tokens,
-not accumulation and not the copy mode. **The only thing that changed between
-0.00% and 50% is whether the bytes are FLAT or DETAILED.**
-★ That fill must repeat EXACTLY every 64 source rows (lcm(4096,320)/320). The
-grab still shows the period (best self-similarity +0.27 at ~lag 66 with my
-capture-scale calibration) - so the structure survives underneath ~50%
-per-pixel damage. The picture is a degraded version of the right image, not a
-different image.
+### ✅ FIXED THIS RUN - THE SECOND 68k DRAM SPIN
+`gpu.c: gpu_jvdec_wait()` polled the DRAM mailbox **up to 240,000 times** per
+FMV frame. jaguar-shared (jag_viewpoint, 2026-08-18, **[HW]**, `a447241`)
+measured the survivable budget for a tight 68000 DRAM poll on real silicon at
+**between 16 and ~128 reads** - past that *the 68000 stops dead* while every
+simulator runs the ROM to completion. A stalled 68k means the vblank ISR never
+runs, the OP list is never repaired, and the Object Processor keeps consuming
+its own bitmap header - which is exactly this corpus's oldest hazard and
+exactly what the clips look like.
+✅ Bounded to 64 reads then `cpu_stop_unless` (90 sleeps max). Same defect as
+run 6's pacing spin, which measured 54.65% -> 0.00%. Both are now fixed; the
+clips are still corrupt, so neither was the whole story - but both were real
+and both are the documented law.
 
-### ⬜ RUN 8 STARTS HERE - THE SCALER
-`video.c:~300`: the clips do NOT get a plain object. They are displayed through
-the GAME's **scaled TYPE-1 object with the scale set to 1.0x**
-(`fs_ph5 = 0x2020`, and the comment says it outright: *"a 1:1 'scaled' object
-IS a plain display"*). That is the shortcut the user asked about, and
-`jaguar-shared` records that **the OP horizontal scaler starves the bus 15-20x
-on real Tom**. A scaler still runs its remainder accumulator at 1.0x.
-A scaler losing fetches under load predicts EXACTLY what is measured: flat
-fields perfect, detail ~50% wrong, and a contiguous band of scanlines
-(src ~24-56) clean where it keeps up.
-✅ THE ARM: build a PLAIN UNSCALED object for `g_disp240` instead of the 1.0x
-scaled one. `OPPLAIN` already exists in this file as a 4-long object shape
-(see `video_flip_force`), so the machinery is there - it has to be reached from
-`build_object_list` under `g_disp240`, and the ISR's repair path has to match
-(the scaled path restores phrase 0 AND the scale phrase's remainder).
-☠️ Keep using the `volatile const` mask so one pad roll covers both arms.
+### ☠️☠️ TWO CORRECTIONS TO MY OWN METHOD (both cost me conclusions)
+1. **"Flat content renders perfectly" was a PAD CONFOUND.** Put the 4-band card
+   and the real decode in ONE binary at ONE pad (masks 0/32/64) and the flat
+   card is **speckled at pad 272** while it was 0.00% at 136 and 0. Worse:
+   *within a single flat band*, source rows ~24-52 are clean and the rest are
+   speckled. **The same index, the same band, different scanlines.** So it is
+   not content-dependence at all - **specific SCANLINES are corrupt and a fixed
+   window of ~28 is not.** Raster position, not data.
+   ⇒ every "no change" result taken at pad 272 (68k walk, zeroing, codebook,
+   pixel copy, plain object, early switch) is UNINFORMATIVE, because that
+   layout is corrupt for everything.
+2. ☠️ **NEVER JUDGE A CAPTURE BY ITS FILE SIZE** - jaguar-shared `25a6186`
+   (jag_sonic2), landed today, and I had been doing exactly that all afternoon.
+   A flat fill scores as "content". **LOOK AT EVERY CAPTURE.** Re-checked the
+   ones I had only sized; the readings held, but that was luck.
 
-### ✅ STILL TRUE AND BANKED
-  * FAULT 1 IS REAL AND FIXED: the 68k paced the clips by busy-polling a DRAM
-    long for three fields in four; same build, same pad, one byte apart,
-    **54.65% -> 0.00%**. `cpu_stop_unless_ge` (new, cpu68k.S) + two
-    `cpu_stop_unless`. That fix stays whatever fault 2 turns out to be.
-  * ☠️ Never A/B across two PADTEXT values - the same spin build is 0.00% at
-    136 and 54.65% at 0.
-  * PADTEXT=272 boots the current JVDECDIAG layout; 0 and 136 do not.
-
-### ☠️ THE RIG IS FLAKY TODAY AND IT IS NOT US
-`LIBUSB_ERROR_TIMEOUT` / `_PIPE` / "GameDrive not found" hit **seven times**
-across this run and run 6. `jagq exec --lease 120 -- jaguar-shared/hw/jagpower
-cycle` clears it, sometimes needing two. Five sessions are queueing hard
-(jag_sonic2, jag_quake, jag_viewpoint, jag_rr all active), so a `jagq run` can
-sit 10 minutes. ★ Submit ONE job per call and check `jagq history` for it
-rather than blocking on a loop of them - a shell timeout kills the wait but the
-job still runs, and the result is there under its job id.
+### ⭐ jaguar-shared RE-READ ON THE USER'S INSTRUCTION (14 new commits)
+The four that change what I do:
+  * `a447241` **[HW]** 68k DRAM poll stalls silicon at >~128 reads (above).
+    jsim now charges the 68000 a load-dependent OP bus tax - **re-measure any
+    stored baseline after pulling cobweb.**
+  * `25a6186` never judge a capture by file size (above).
+  * `1da82fd` when bisecting a silicon regression, **rebuild the last
+    known-good commit FIRST** - prove the harness still reproduces "good".
+  * `2dbf6da`/`a51f640` the live roster is **9, not 5**, and no document names
+    a current holder any more - the broker decides. Do not cite RESOURCES.md's
+    old holder table.
+☠️ Also: `jagemu peek` returns **0x7F filler** for a DRAM address the ROM
+demonstrably wrote, in `--sd` runs (0x4000 reads real code in the same run).
+This is the SECOND session to hit it - the previous one recorded it as "the
+instrument is unproven" and dropped a whole line of inquiry over it. ⬜ File it
+in `COBWEB_ISSUES_OPENLARA.md` with the repro and fix it in the clone.
 
 ### ⬜ ALSO OPEN
   1. ✅ `r22_try_p408.cof` DID run - jagq job 125, 07:18 today. It is not a rig

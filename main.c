@@ -5340,13 +5340,52 @@ bootvid_entry:
 #elif defined(NOBOOTCLIPS)
             for (vc = 3; vc < (introplay ? 4 : 3); vc++) {
 #else
+#ifdef JVDECDIAG
+            /* ★★★★★ bit 8 (256): PLAY CAVES.JV IN THE BOOT SLOT (run 8).
+               The user reports that the Caves intro renders CORRECTLY while
+               EIDOS, CORE and INTRO do not - same ROM, same player, same
+               decoder, same object. The only difference is WHEN: CAVES.JV
+               re-enters this player from Start Game, after main.c has run
+               `video_set_disp240(1); gpu_kernel_select(1)` on the way to the
+               title. So run the clip that WORKS in the position that does
+               not. Corrupt here = the clip data is irrelevant and the fault
+               is state that the boot path has not set up yet (pair it with
+               bit 128, which does the switch early). Clean here = it really
+               is something about the three boot clips' own files. */
+            for (vc = (g_jvdmask & 256u) ? 3 : (introplay ? 3 : 0);
+                 vc < (introplay ? 4 : ((g_jvdmask & 256u) ? 4 : 3)); vc++) {
+#else
             for (vc = introplay ? 3 : 0; vc < (introplay ? 4 : 3); vc++) {
+#endif
 #endif
                 int vh = -1, mi2, vw, vhh, vfps, vnf, fi, remain, have, pos;
                 uint32_t t0, plen = 0;
                 uint8_t *pcur = ptkA, *pprev = ptkB;
                 { extern void video_pin_start(void);
-                  video_pin_start(); } /* 2-buffer pin (less rotation churn;
+                  video_pin_start(); }
+#ifdef JVDECDIAG
+                /* ★★★★★ bit 7 (128): DO THE TITLE-MODE SWITCH BEFORE THE BOOT
+                   CLIPS TOO (run 8, and it is the USER'S OBSERVATION that
+                   named it: "the caves intro renders correctly").
+                   CAVES.JV re-enters this same player from Start Game - AFTER
+                   main.c has run `video_set_disp240(1); gpu_kernel_select(1)`
+                   on its way to the title. EIDOS, CORE and INTRO play BEFORE
+                   that line has ever executed. Same code, same decoder, same
+                   object builder; the only difference between the clip that
+                   works and the three that do not is whether the display was
+                   ever switched into 240 mode. That is precisely the "don't
+                   switch before the title screen" shortcut. */
+                { extern void video_set_disp240(int);
+                  extern void gpu_kernel_select(int);
+                  if (g_jvdmask & 128u) { video_set_disp240(1);
+                                          gpu_kernel_select(1); } }
+                /* bit 4 (16): display the clips through a PLAIN TYPE-0 object
+                   instead of the game's 1.0x-scaled one (run 8). */
+                { extern int g_op_plain240;
+                  extern void video_set_disp240(int);
+                  if (g_jvdmask & 16u) { g_op_plain240 = 1;
+                                         video_set_disp240(1); } }
+#endif /* 2-buffer pin (less rotation churn;
                                           the shadow copy makes correctness
                                           independent of it) */
                 { uint32_t *fw = (uint32_t *)vshadow, k9;
@@ -5705,6 +5744,45 @@ bootvid_entry:
                              DRAM mailbox (tomok) is the honest verdict, and
                              the 68k walk is still there if it fails. */
 #ifdef JVDECDIAG
+                          if (g_jvdmask & 64u) {
+                              /* ☠️ THE 4-BAND CARD, BACK IN THE SAME BUILD
+                                 (run 8). It measured 0.00% at pads 136 and 0
+                                 and every corrupt grab since has been at pad
+                                 272 - two variables again, which is the exact
+                                 mistake run 6 caught the first time. Put all
+                                 three stimuli in ONE binary so the pad is
+                                 held constant and only the mask moves. */
+                              int by;
+                              for (by = 0; by < 240; by++) {
+                                  uint8_t v = (by < 60) ? 0x00 : (by < 120) ? 0x40
+                                            : (by < 180) ? 0x80 : 0xC0;
+                                  int bx;
+                                  for (bx = 0; bx < 320; bx++)
+                                      vshadow[by*320 + bx] = v;
+                              }
+                          }
+                          if (g_jvdmask & 32u) {
+                              /* ★★★★★ THE 256-INDEX CARD (run 8). Fault 2 is
+                                 flat-perfect and detail-~50%-wrong from EVERY
+                                 writer, with a corrupt-pixel mask that is
+                                 identical between frames (Jaccard 0.991).
+                                 There is one mechanism that does exactly that
+                                 and that every previous card was blind to:
+                                 **the CLUT**. My 4-band card used four
+                                 indices; if those four entries are right and
+                                 most of the other 252 are wrong, a flat card
+                                 renders perfectly and any real picture comes
+                                 back as stable, per-pixel wrong colour.
+                                 So: a 16x16 grid of FLAT blocks covering all
+                                 256 indices. Flat blocks are immune to a lost
+                                 fetch, so anything wrong here is the palette.
+                                 Compare block-for-block against jagemu. */
+                              int gy, gx;
+                              for (gy = 0; gy < 240; gy++)
+                                  for (gx = 0; gx < 320; gx++)
+                                      vshadow[gy*320 + gx] =
+                                          (uint8_t)(((gy / 15) << 4) | (gx / 20));
+                          }
                           if (g_jvdmask & 4u) {
                               /* SHOW THE INPUT, NOT THE OUTPUT (run 7). The
                                  display path is proven clean (a full-screen
@@ -5731,7 +5809,7 @@ bootvid_entry:
                               uint32_t *zf = (uint32_t *)vshadow, zk;
                               for (zk = 0; zk < (320u*240u)/4u; zk++) zf[zk] = 0;
                           }
-                          if (gpu_ok && !(g_jvdmask & 5u)) {
+                          if (gpu_ok && !(g_jvdmask & 101u)) {
 #else
                           if (gpu_ok) {
 #endif
@@ -5752,7 +5830,11 @@ bootvid_entry:
                               tomok = gpu_jvdec_wait();
 #endif
                           }
-                          if (!tomok && !(g_jvdmask & 4u))
+#ifdef JVDECDIAG
+                          if (!tomok && !(g_jvdmask & 100u))
+#else
+                          if (!tomok)
+#endif
                           { const uint8_t *s = tk, *e = tk + L;
                             uint8_t *dA = vshadow;
                             int bx = 0, left = 4800;

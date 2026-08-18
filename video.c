@@ -301,20 +301,36 @@ static void build_object_list(uint32_t fb_addr)
        shows in the loading screen and in the game (both scaled 120->240) but
        never on the title or the FMVs (plain 240, 1.0x). */
     { uint32_t t_srcl  = g_disp240 ? 240u : (uint32_t)RENDER_H;
-      fs_ph5 = g_disp240 ? 0x2020u                       /* 1.0x V, 1.0x H */
+      /* ☠️ PLAIN-OBJECT PROBE (run 8, 2026-08-18, the user's lead). The clips
+         are displayed through this SCALED TYPE-1 object with the scale set to
+         1.0x - the comment above says so outright - purely so nothing has to
+         be switched before the title. But a 1:1 scaled object still runs the
+         OP's SCALER, and jaguar-shared records the scaler starving the bus
+         15-20x on real Tom. Fault 2 behaves exactly like a lost fetch: a flat
+         field renders 0.00% and ANY detailed data comes back ~50% wrong, from
+         any writer. So build a real TYPE-0 PLAIN bitmap instead and see.
+         The shape stays 6 longs so the ISR's repair (d[0..5]) is untouched:
+         the object is 4 longs, the STOP moves to [4]/[5], and fs_ph5 - which
+         the ISR stores into d[5] - carries the STOP's TYPE instead of the
+         scale word. */
+      uint32_t t_type = 1u;
+      uint32_t stop_i = 6u, stopB_i = 14u;
+      if (g_op_plain240 && g_disp240) { t_type = 0u; stop_i = 4u; stopB_i = 12u; }
+      fs_ph5 = (t_type == 0u) ? 4u
+             : g_disp240 ? 0x2020u                       /* 1.0x V, 1.0x H */
                          : (((uint32_t)FS_VSCALE << 8) | (uint32_t)FS_HSCALE);
     /* FIX (HW-verified 2026-07-08): a BARE scaled object (scaled bitmap ->
      * STOP, NO branch gating) is correct. My earlier BRANCH
      * gating (VC vs a_vdb/a_vde) was masking the ENTIRE display -> black. The
      * scaled object as the first/only object works; the room renders scaled
      * 120->240. (a_vdb_g/a_vde_g now unused by LOWRES; kept harmless.) */
-    uint32_t link = ((uint32_t)&op_list[6]) >> 3;   /* STOP at op_list[6] */
+    uint32_t link = ((uint32_t)&op_list[stop_i]) >> 3;
 
     op_list[0] = (fb_addr << 8) | (link >> 8);
     op_list[1] = (link << 24)
                | (t_srcl << 14)                     /* source lines - 1 (scaled) */
                | ((uint32_t)BASE_Y << 4)            /* YPOS                       */
-               | 1u;                                /* TYPE 1 = scaled bitmap     */
+               | t_type;                            /* 1 = scaled, 0 = plain      */
 
     op_list[2] = SCREEN_PWIDTH >> 4;
     op_list[3] = ((uint32_t)SCREEN_PWIDTH << 28)
@@ -323,10 +339,11 @@ static void build_object_list(uint32_t fb_addr)
                | OP_DEPTH                         /* DEPTH 16bpp */
                | BASE_X;
 
-    op_list[4] = 0;                                 /* SCALE: REMAINDER = 0 */
-    op_list[5] = fs_ph5;
+    op_list[4] = 0;                                 /* SCALE: REMAINDER = 0,
+                                                       or the STOP's high long */
+    op_list[5] = fs_ph5;                            /* scale word, or STOP TYPE */
 
-    op_list[6] = 0;                                 /* STOP */
+    op_list[6] = 0;                                 /* STOP (scaled shape only) */
     op_list[7] = 4;
 
     /* cache everything the ISR must restore, so the ISR itself only stores */
@@ -340,13 +357,13 @@ static void build_object_list(uint32_t fb_addr)
        STOP is at [14], not [6]). Everything the ISR needs is precomputed here,
        outside the deadline. */
     {
-        uint32_t linkB = ((uint32_t)&op_list[14]) >> 3;
+        uint32_t linkB = ((uint32_t)&op_list[8 + (stopB_i - 8)]) >> 3;
         uint32_t a, b;
         op_list[8]  = (fb_addr << 8) | (linkB >> 8);
         op_list[9]  = (linkB << 24)
                     | (t_srcl << 14)
                     | ((uint32_t)BASE_Y << 4)
-                    | 1u;
+                    | t_type;
         op_list[10] = op_list[2];
         op_list[11] = op_list[3];
         op_list[12] = 0;
@@ -376,6 +393,9 @@ static void build_object_list(uint32_t fb_addr)
 /* TITLE 240 switch (task #4): call with Tom idle + a just-flipped display.
  * Rebuilds both OP lists + every precomputed repair value for the new mode. */
 int g_disp240 = 1;   /* PROBE: boot in title-240 (scaled-1x) */
+/* run-8 probe: 1 = build a TYPE-0 PLAIN bitmap for the 240 display instead of
+   the 1.0x-scaled TYPE-1 object. Set BEFORE video_set_disp240() rebuilds. */
+int g_op_plain240 = 0;
 void video_set_disp240(int on)
 {
     g_disp240 = on;
