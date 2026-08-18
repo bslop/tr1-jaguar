@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 115
+RUN: 116
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,48 +54,49 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ⬜☠️ LARA'S HOME IS SILENT IN-GAME. THE CAVES IS NOT. SAME ROM, SAME GATE.
+# ✅ THE MANSION'S SILENCE IS FULLY EXPLAINED: SHE WALKS IN AN ANIMATION THAT
+# HAS NO FOOTFALL. NOTHING ABOUT SOUND IS BROKEN.
 
-`release_check.py` now covers BOTH levels (`--gym` drives ring page 4). The
-mansion passes 6 of 7 - and the one failure is real, measured, and specific:
+Same ROM, same gate, every sound gate identically open in both levels:
 
-    CAVES    walking rms **-35.5 dBFS**, peak -15.5   (moved 17,484 units)
-    MANSION  walking rms **-120.0 dBFS**, 100% silent (moved  8,548 units)
+                     CAVES              MANSION
+    g_sfx_ok         1                  1
+    g_sfxvol         10                 10
+    g_jerry_ok       1                  1
+    g_useset         0                  1
+    **g_lanim_id**   **0**              **104**
+    footfall entry   (4, 15) - HAS      **(255, 255) - NONE**
+    walking audio    **-35.5 dBFS**     **-120.0 dBFS silent**
 
-Same binary, same session structure, movement CONFIRMED in both, so "she never
-walked so there were no footsteps" is ruled out - that was the z-only artefact
-below, and it is fixed. Idle is silent in the mansion too, so there is no music
-either.
+There is exactly ONE in-game SFX call in the whole game - `sfx_play(0, SFX_STEP)`
+from `lara_footstep` - and it only fires when the animation's frame crosses a
+footfall frame. Anim **104 is one of the 116 of 160 animations with no footfall
+defined**, so the call is never reached. The footfall tables are byte-identical
+between the two level sets (checked 160/160), so this is not an asset-set
+mismatch either.
 
-☠️ **This may be unimplemented rather than broken.** The mansion is a different
-level SET (`g_useset=1`) and nothing has ever verified its audio; TR1's Lara's
-Home does have footsteps. Do NOT file it as a regression without checking
-whether mansion SFX were ever wired.
-⬜ CHEAPEST NEXT TEST: read `g_sfx_ok` after the mansion loads. It is set once at
-init from `g_jerry_ok`, so if it still reads 1 the gate is open and the samples
-are missing; if it reads 0 something in the level-set switch turned sound off.
+### ⬜ THE OPEN QUESTION IS WHETHER ANIM 104 IS THE RIGHT ANIMATION
+That decides the fix, and it is cheap to answer from `gym_lara.h`/the extractor:
+  * **If 104 IS correct locomotion for the mansion** -> the fix is DATA: give it
+    footfall frames, the same way the extractor emits them for anims 0-3.
+  * **If 104 is WRONG** -> the animation SELECTION differs by level set, which is
+    a code bug, and fixing it restores the pose as well as the sound. She does
+    move 8,548 units in it, so she is locomoting in something.
+★ Do not "fix" this by adding footfalls until you know which - adding data to
+paper over a wrong animation would hide the real bug and look like a success.
 
-### ☠️☠️ MY CHECK READ ONE AXIS - AGAIN. THIS IS RUN 84'S LESSON REPEATING.
-The gym gate first reported **"z moved 0 units after 13000 fields"** for a level
-that is perfectly controllable. The Caves start walks along Z, so a z-only delta
-looked correct there; **Lara's Home walks along X** (run 103's tour: x 37376 ->
-30796, z UNCHANGED). Measuring `|dx|+|dz|` turned 0 into 8,548 on the FIRST
-attempt. ★ Run 84 hit exactly this: MVDIAG watched only X and called a +Z walk
-"nothing refused". An instrument that reads one axis will eventually be pointed
-at the other one - and the false silence came bundled with it, which is how one
-bad measurement manufactures two defects.
-
-### ✅ ALSO THIS RUN: THE RING PAGE IS READ, NOT ASSUMED
-`--gym` photographs each of the four rotations; `1b_page3.png` shows the ring on
-**"Lara's Home"** with "A Select". The old failure mode (only 2 of 4 presses
-registering, ring left on "Sound") cannot pass silently.
+### ★ HOW IT WAS FOUND, AND WHY THE GATE NOW PRINTS SOUND STATE
+`release_check.py` prints `g_sfx_ok g_sfxvol g_jerry_ok g_useset g_lanim_id`
+next to the audio verdict. "Silent" on its own sends you hunting the DSP; those
+five numbers named the animation in one run. ☠️ Note run 114 first blamed this on
+"she moved 0 units" - a z-only measurement on a level that walks along X - so
+one bad instrument had manufactured a movement defect AND an audio defect.
 
 ### ⬜ NEXT
-  1. **Mansion audio** - the `g_sfx_ok` test above. It is the only open defect
-     candidate on either level.
+  1. Decide whether anim 104 is correct (above). Only open defect candidate.
   2. The user's `pretty` vs `playable` call - both arms pass 7/7 (run 113).
   3. Rig rules still contradict the autorun prompt (run 111); `/tmp/TESTCARD.COF`
-     staged. Untouched.
+     staged, rig untouched.
 
 ### ⚠️ BUILD STATE
 `/tmp/cofout8/` = the SHIPPING payload with ALL THREE gameplay fixes (COF +

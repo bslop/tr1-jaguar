@@ -185,6 +185,18 @@ def main():
         record("she moves under the pad", moved > 2000,
                "moved %d units (|dx|+|dz|) after %d fields" % (moved, waited))
 
+        # ☠️ WHEN A LEVEL IS SILENT, THE NEXT QUESTION IS ALWAYS "WHICH GATE".
+        # There is exactly ONE in-game SFX call - sfx_play(0, SFX_STEP) from
+        # lara_footstep - and it returns early on `!g_sfx_ok` or `!g_sfxvol`.
+        # The footfall tables are byte-identical between the two level sets
+        # (checked: 160/160), so if a level is silent it is runtime state, not
+        # data. Print the state rather than making anyone guess it.
+        diag = " ".join("%s=%s" % (k, peek32(syms[k]))
+                        for k in ("g_sfx_ok", "g_sfxvol", "g_jerry_ok", "g_useset",
+                                  "g_lanim_id")
+                        if k in syms)
+        print("  %-24s      %s" % ("(sound state)", diag), flush=True)
+
         ai = audiocheck(os.path.join(out, "idle.wav"))
         aw = audiocheck(os.path.join(out, "walk.wav"))
         ir, wr = ai.get("rms_dbfs"), aw.get("rms_dbfs")
