@@ -2606,6 +2606,43 @@ static union {
  * halved - a 14,336 B overrun that ran 7,224 B past g_arena itself. Anything
  * that indexes this union belongs next to the union, and must be bounded by
  * sizeof(g_arena) at COMPILE time (see vid_aring_fits in the clip player). */
+/* ☠️☠️☠️ THE CLIP PLAYER MUST **SLEEP**, NEVER SPIN (run 6, 2026-08-18).
+ * MEASURED ON SILICON, same build, same boot pad, ONE BYTE APART:
+ *      bare `while (...) ;`  -> **54.65%** of pixels wrong
+ *      STOP between checks   -> **0.00%**
+ * The player paced itself with `while ((int)(frame_count - t0) < tgt) ;` -
+ * a 68000 busy-poll of a DRAM long, held for THREE FIELDS OUT OF FOUR at
+ * 15 fps. That starves the OBJECT PROCESSOR's bitmap fetch, and the clips
+ * come out speckled on a real Jaguar while every emulator renders them
+ * clean (they model neither the fetch deadline nor the contention).
+ * This is not a new law - it is video_flip_asm's own comment ("a spin here
+ * hammers DRAM for a WHOLE FIELD every frame and starves Tom; measured:
+ * that cost HALF the rendered frames") and jaguar-shared's first
+ * non-negotiable ("never busy-poll DRAM while a coprocessor runs"), which
+ * the FMV path simply never had applied to it.
+ * ★ It also explains why this looked intermittent: at PADTEXT=136 the same
+ * SPIN build measured 0.00% and at PADTEXT=0 it measured 54.65%. A lucky
+ * code layout hides it; sleeping removes the dependency. */
+extern int cpu_stop_unless(volatile uint32_t *addr, uint32_t val);
+extern int cpu_stop_unless_ge(volatile uint32_t *addr, uint32_t val);
+
+#if defined(JVTESTCARD) || defined(JVTCONLY)
+/* ☠️ THE DISCRIMINATOR MASK (runs 4-6). Every gated path below is compiled in
+ * UNCONDITIONALLY and selected by a bit of this value, so choosing an arm
+ * changes ONE IMMEDIATE and the code layout is byte-for-byte identical.
+ * That is not tidiness: this is the A10 boot lottery's home ground, a layout
+ * change re-rolls it, and run 4 spent FOUR rig turns finding a pad that boots.
+ * Verified: the four run-5 builds differ by exactly one byte at file offset
+ * 73343, and one pad roll covered all of them.
+ *   JVTCONLY (add to a quiet bus):  1 gd_fread  2 audio ring  4 decode kick
+ *   JVTESTCARD (remove from the real player, run 6):
+ *     1 skip the audio block · 2 skip decode (kick AND the 68k walk)
+ *     4 pixel-mode blit_copy instead of blit_copy_phrase
+ *     8 cap gd_fread at 4 KB a call instead of the low-water burst */
+static volatile const uint32_t g_tcmask = JVTCMASK;
+
+#endif
+
 #define VID_ARING_OFF   35584
 #define VID_ARING_SZ    (6 * 4096)
 static const uint8_t *rsrc[6]; static const uint8_t *ratl[6];
@@ -5362,7 +5399,6 @@ bootvid_entry:
                    Read the result as: whichever bit takes 0.00% back to
                    speckle is the hog to fix. ☠️ It never returns. */
                 {
-                    static volatile const uint32_t g_tcmask = JVTCMASK;
                     extern void video_flip(void);
                     extern void jerry_sfx_queue(const void *, uint32_t);
                     uint8_t *tkc = 0; uint32_t Lc = 0;
@@ -5623,11 +5659,11 @@ bootvid_entry:
 #ifdef VIDPANEL
                           { uint32_t ta = vp_tick();
                             while (pending_fb)
-                                ;
+                                cpu_stop_unless(&pending_fb, 0);
                             vp_pace += vp_tick() - ta; }
 #else
                           while (pending_fb)
-                              ;
+                              cpu_stop_unless(&pending_fb, 0);
 #endif
                           bb = (uint8_t *)video_backbuffer();
                           /* TOM DECODE INTO THE SHADOW (2026-08-07, user:
@@ -5935,7 +5971,7 @@ bootvid_entry:
                          anchored to virtual time and burst at 33ms once
                          late (measured, cadence6) */
                       while (pending_fb)
-                          ;
+                          cpu_stop_unless(&pending_fb, 0);
                       nowr = (int)(frame_count - t0);
                       tgt = ((fi + 1) * 60) / vfps;
                       if (tgt < dprev + 60 / vfps) tgt = dprev + 60 / vfps;
@@ -5953,8 +5989,15 @@ bootvid_entry:
                          always waited on frame_count itself and always ran at
                          exactly 15.00; do that here too.  The deferred flip
                          still smooths the cadence, this only floors it. */
-                      while ((int)(frame_count - t0) < tgt)
-                          ; }
+                      { uint32_t nsl = 0;
+                        while ((int)(frame_count - t0) < tgt) {
+                            /* bounded: if the vertical interrupt has died the
+                               STOP would never be woken, and a permanent halt
+                               is worse than a late frame. 150 fields ~ 2.5 s. */
+                            if (++nsl > 150u) break;
+                            cpu_stop_unless_ge(&frame_count,
+                                               t0 + (uint32_t)tgt);
+                        } } }
                     { uint32_t vp2 = joypad_read();
                       if (vp2 & ~vpp & (PAD_A | PAD_B | PAD_C)) { VP_EXIT(5); break; }
                       vpp = vp2; }

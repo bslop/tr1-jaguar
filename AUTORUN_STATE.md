@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 6
+RUN: 7
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,68 +54,79 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ★★★★★ THE FMV GRAIN IS **CONTENTION** (54.90% -> 0.00%, run 4) BUT THE
-# ADDITIVE BISECT CAME BACK **ALL ZERO**. THE AGENT IS SOMETHING ELSE IN THE
-# REAL PLAYER. BISECT FROM THE BAD END NEXT.
+# ✅✅✅ FAULT 1 FOUND AND FIXED: THE CLIP PLAYER BUSY-SPUN THE 68000 ON DRAM
+# AND STARVED THE OBJECT PROCESSOR. 54.65% -> 0.00%, SAME BUILD, SAME PAD.
+# ☠️ AND THERE IS A **SECOND, INDEPENDENT FAULT**: WITH THE SPIN FIXED, THE
+# REAL VIDEO IS **STILL** CORRUPT. THE TEST CARD WAS HIDING IT.
 
-### THE MEASUREMENTS SO FAR (all silicon, all the same test card)
-    job 137  JVTESTCARD, real player, everything live      **54.90%**
-    job 142/144/150  quiet-bus baseline                      0.00%
-    job 151  + gd_fread    ~7 KB EVERY FIELD (5x the real
-             streaming rate)                                 0.00%
-    job 152  + audio ring  4 KB Blitter move + DSP queue      0.00%
-    job 153  + decode kick Tom, codebook -> shadow            0.00%
-    job 155  + ALL THREE TOGETHER                             0.00%
+### ✅✅✅ FAULT 1 - PROVEN, FIXED, SHIPPED IN THE TREE
+`main.c` paced the clips with
 
-⇒ **The three things I assumed were the hogs are not.** Contention is still the
-mechanism (run 4 moved it 54.9 -> 0.0 by removing everything), but whatever
-does it is something the additive arm does NOT reproduce.
+    while ((int)(frame_count - t0) < tgt)   /* and two `while (pending_fb) ;` */
+        ;
 
-### ☠️ AND ONE HONEST CAVEAT ON THOSE ZEROS
-`profiling-measurement-traps.md` trap 3 is *a null result from an experiment
-that did nothing*, and **these arms carry no proof they ran**. If a `gd_fread`
-returned non-zero, or `jerry_sfx_queue` no-op'd because the voice was never
-STARTED (my arm queues but never calls `jerry_sfx(0,...)`, so Jerry may never
-have DMA'd a sample), the arm is a no-op and reads as a clean pass.
-⬜ **Any re-run of these must paint a visible marker** - e.g. force band 4 to a
-different index once the read/queue/kick has actually succeeded - so "it did
-nothing" cannot masquerade as "it did nothing bad".
+a 68000 busy-poll of a DRAM long, held for **three fields out of four** at
+15 fps. THE MEASUREMENT (same build, same boot pad, ONE BYTE apart - the
+`volatile const` mask trick):
 
-### ⬜ RUN 6 STARTS HERE - SUBTRACT FROM THE KNOWN-BAD END
-Additive from clean has now failed; go the other way, from job 137's 54.90%,
-and keep the `volatile const` mask trick (one immediate, byte-identical
-layout - the four arms built this run differ by exactly ONE byte at offset
-73343, verified, and one pad roll covered all of them).
-Knobs that do NOT break the real player's frame loop:
-    bit 0  skip the whole `if (AL)` audio block
-    bit 1  skip the decode kick AND the 68k token walk (the card overwrites
-           the result anyway, so neither is needed for the picture)
-    bit 2  use pixel-mode `blit_copy` instead of `blit_copy_phrase`
-           (5ms -> 38ms a frame, but it tests the copy MODE)
-    bit 3  cap `gd_fread` to one small read a frame instead of the low-water
-           burst - the real one can ask for 24 KB, and ~125ms of cart traffic
-           is TWO display frames, which is the shape a fetch deadline minds
-What is in the real player and NOT in the quiet arm, in likely order:
-    * the low-water `gd_fread` BURSTS (up to 24 KB in one call)
-    * `stream_compact` - a Blitter move of up to ~31 KB a frame
-    * Jerry actually PLAYING (a started voice DMAs continuously; a queued one
-      that was never started does not)
-    * the 15 fps pacing, so a published buffer is displayed for FOUR fields
-      rather than one
+    job 182   sl0  pad 0   SPIN    **54.65%**  54.63%
+    job 202   sl16 pad 0   STOP    ** 0.00%**   0.00%
 
-### ✅ WHAT IS BANKED AND MUST NOT BE RE-DERIVED
-  * The grain is NOT: the encoder · the .JV · the codebook · the VQ indices ·
-    Tom's decode kernel · skip/delta semantics · buffer rotation · the Blitter
-    phrase copy · the OP object setup · the CLUT. Every one of those is in both
-    the 54.90% arm and the 0.00% arm.
-  * ★★★★★ **The arm is a VALUE, not a layout.** `static volatile const uint32_t
-    g_tcmask = JVTCMASK;` in main.c + `JVTCMASK ?= 0` in the Makefile. Four
-    builds, ONE differing byte, one pad roll. Run 4 spent four rig turns on the
-    lottery; this run spent none. Do not turn it back into `#ifdef`s.
-  * PADTEXT=136 boots the JVTCONLY layout (408 does not).
-  * ☠️ A `LIBUSB_ERROR_TIMEOUT` / `exit -6` hit again mid-run and is NOT our
-    ROM: `jagq exec --lease 120 -- jaguar-shared/hw/jagpower cycle` cleared it
-    in 5 seconds and the very next upload was fine.
+✅ Fixed unconditionally: `cpu_stop_unless` for the two `pending_fb` waits and
+a new `cpu_stop_unless_ge` (cpu68k.S, the >= sibling, for waiting on a COUNTER
+rather than a flag) for the pacing wait, bounded at 150 fields so a dead VI
+cannot turn a late frame into a permanent halt. The four run-6 bisect gates
+were scaffolding and are reverted; only the fix remains.
+★ This was never a new law - it is `video_flip_asm`'s own comment ("a spin here
+hammers DRAM for a WHOLE FIELD every frame and starves Tom; measured: that cost
+HALF the rendered frames") and jaguar-shared's first non-negotiable. **The FMV
+path simply never had it applied.**
+★★★★★ AND IT EXPLAINS THE "INTERMITTENT": the SAME spin build measured
+**0.00% at PADTEXT=136 and 54.65% at PADTEXT=0**. A lucky code layout hides it.
+☠️ That also means run 4's "quiet bus fixes it" comparison was CONFOUNDED - it
+compared a quiet build at pad 136 against a busy build at pad 408, two
+variables. The conclusion survived, but only because run 6 re-did it properly at
+one pad. **Never A/B across two PADTEXT values.**
+
+### ☠️☠️ FAULT 2 - THE ONE THAT IS STILL BREAKING THE USER'S VIDEO
+`WORK_ROMS/fix_p0.cof` is the REAL player (no test card) with the spin fixed.
+jagq job 204: the EIDOS logo comes back **still densely speckled, letterbox
+bars full of noise**. So:
+
+    test card + spin   54.65%   fault 1 visible
+    test card + STOP    0.00%   fault 1 gone, fault 2 MASKED (the 68k fill
+                                overwrites whatever Tom put in the shadow)
+    real decode + STOP  still corrupt        fault 2 exposed
+
+⇒ **The test card hid a second fault by overwriting the shadow.** Run 3's
+"the decode is acquitted" reasoning was sound for fault 1 and WRONG as a
+general acquittal - the card removes the decode's output from the picture.
+⬜ **RUN 7 STARTS HERE:** with the STOP fix in, run the real player but force
+the **68k fallback token walk** (skip Tom's kick, `tomok = 0`). One bit, same
+layout trick.
+    clean    -> Tom's `gpu_jvdec` kernel is wrong on silicon and right in the
+                emulator - and the 68k walk is the shipped fallback, so there is
+                a slow but correct path to compare against block by block
+    corrupt  -> the fault is in the shadow's *inputs* (the codebook or the
+                token stream as they sit in DRAM), not in who walks them
+★ Also worth one arm: the shadow is never re-zeroed between frames, so a delta
+stream accumulates any single bad write forever. That fits "static mask in the
+letterbox" exactly.
+
+### ⭐ ANSWERED THE USER MID-RUN (they asked why the clips are messed up)
+Told them: not the videos, not the encoder; a display/timing fault that no
+emulator can show; fault 1 found and fixed; it is layout-sensitive, so "what
+changed" may be nothing they did. **Asked them one question - was the FMV EVER
+clean on the TV, or has it always looked like this?** A "yes, it used to be
+clean" would date fault 2 to a commit. Not blocking on the answer.
+
+### RIG NOTES FROM THIS RUN
+☠️ `LIBUSB_ERROR_TIMEOUT` / `_PIPE` / "GameDrive not found" hit **four times**.
+`jagq exec --lease 120 -- jaguar-shared/hw/jagpower cycle` cleared it each
+time, but twice it took a second cycle. ★ Suspicion worth testing: these arms
+NEVER RETURN (they loop in the clip player streaming off the SD), so the board
+is still reading the cart when the next turn's upload starts. Give a
+never-returning arm its own power cycle before the next upload.
 
 ### ⬜ ALSO OPEN
   1. ✅ `r22_try_p408.cof` DID run - jagq job 125, 07:18 today. It is not a rig

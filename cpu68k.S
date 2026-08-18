@@ -37,6 +37,34 @@ cpu_stop_unless:			| (volatile u32 *addr, u32 val) -> 1 if
 	moveq	#1,%d0
 	rts
 
+| cpu_stop_unless_ge(volatile u32 *addr, u32 val) -> 1 if (s32)(*addr - val) >= 0
+| (no sleep), else STOP once and return 0.  The >= sibling of cpu_stop_unless,
+| for waiting on a COUNTER rather than a flag.
+|
+| ☠️ WHY IT EXISTS (run 6, 2026-08-18): the FMV player paced itself with
+|   while ((int)(frame_count - t0) < tgt) ;
+| a bare 68k spin on a DRAM long, held for THREE FIELDS OUT OF FOUR at 15 fps.
+| That is the one thing this whole codebase says never to do - video_flip_asm's
+| own comment ("a spin here hammers DRAM for a WHOLE FIELD every frame and
+| starves Tom; measured: that cost HALF the rendered frames") and
+| jaguar-shared's first non-negotiable ("never busy-poll DRAM while a
+| coprocessor runs").  Measured cost here: it starves the OBJECT PROCESSOR's
+| bitmap fetch, and the clips come out speckled on silicon (54.5% of pixels)
+| while every emulator renders them clean.  STOP releases the bus.
+	.global	cpu_stop_unless_ge
+cpu_stop_unless_ge:
+	move.w	#0x2700,%sr		| mask (Tom IRQs are level 2)
+	move.l	4(%sp),%a0
+	move.l	8(%sp),%d0
+	sub.l	(%a0),%d0		| d0 = val - *addr
+	ble.s	1f			| *addr >= val -> done, no sleep
+	stop	#0x2000			| atomic unmask+sleep
+	moveq	#0,%d0
+	rts
+1:	move.w	#0x2000,%sr		| unmask before returning
+	moveq	#1,%d0
+	rts
+
 #ifdef LEMITDIET
 | LARA EMIT DIET burst copies (LEMITDIET, PERFHUNT_CAMPAIGN.md 2026-07-22).
 | movem.l streams the face payloads: ~1 fetch word per 3 data words vs the
@@ -46,6 +74,7 @@ cpu_stop_unless:			| (volatile u32 *addr, u32 val) -> 1 if
 | gcc m68k ABI: args on stack, d0/d1/a0/a1 scratch, d2+ preserved.
 
 	.globl	lemit_qcopy
+
 lemit_qcopy:				| (dst, src, n>=1, stride): 24B payloads
 	movem.l	%d2-%d7,-(%sp)		| 24B saved -> args at 28(%sp)
 	move.l	28(%sp),%a1		| dst (record slots)

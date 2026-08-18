@@ -1593,6 +1593,12 @@ endif
 # codebook, then loops fill/copy/flip forever with no gd_fread, no audio, no
 # decode. Splits "the OP is starved" from "the copy or the object is wrong".
 # It never returns - a scope, not a build.
+ifdef JVTESTCARD
+JVTCMASK ?= 0
+CFLAGS   += -DJVTCMASK=$(JVTCMASK)
+CXXFLAGS += -DJVTCMASK=$(JVTCMASK)
+endif
+
 ifdef JVTCONLY
 CFLAGS   += -DJVTCONLY
 CXXFLAGS += -DJVTCONLY
@@ -1601,9 +1607,6 @@ CXXFLAGS += -DJVTCONLY
 # ★ It is a `volatile const` in main.c, so changing it changes ONE IMMEDIATE
 #   and NOT the code layout - one A10 pad roll covers every arm. Do not turn
 #   this back into #ifdefs; that is what cost four rig turns in run 4.
-JVTCMASK ?= 0
-CFLAGS   += -DJVTCMASK=$(JVTCMASK)
-CXXFLAGS += -DJVTCMASK=$(JVTCMASK)
 endif
 
 # VIDDIAG: FMV decode-status marker (ghost hunt 2026-08-07)
