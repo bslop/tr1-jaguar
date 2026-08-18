@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 11
+RUN: 12
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,64 +54,72 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ⬜ THE DECISIVE A/B IS BUILT AND QUEUED: THE **SAME CLIP** AT THE **BOOT**
-# POSITION vs THE **START GAME** POSITION, ONE ROM, ONE PAD, ONE BYTE APART.
+# ★★★★★ **THE CORRUPTION CLEARS WITH TIME, NOT POSITION.** SAME ROM, SAME PAD,
+# SAME CLIP: SPECKLED AT t=35s, **PERFECTLY CLEAN AT t=70s AND t=86s.**
 
-### ⬜ RUN 11 STARTS HERE - COLLECT jagq #299 AND #300
-    #299  sg1024_p272.cof  JVDECMASK=1024  CAVES.JV via the START GAME path,
-                           taken automatically right after the title-mode
-                           switch. `--delay 70` because the boot clips still
-                           play first and a 35 s grab lands on EIDOS (that is
-                           what job 294 caught - LOOK before concluding).
-    #300  sg256_p272.cof   JVDECMASK=256   CAVES.JV in the BOOT slot,
-                           `--delay 30`.
-Whatever separates those two images is the entire remaining fault. The user has
-already told us the answer exists: they see the Caves intro render correctly.
-☠️ The queue was PAUSED from the dashboard until 15:05 while these were
-submitted - `--no-wait` queues fine behind a pause, and waiting is part of the
-run, not a reason to end it.
+### ✅✅✅ THE MEASUREMENT (the user's suggestion: "go back / just check")
+    job 294   sg1024_p272.cof, default delay (~35 s)   CORRUPT (EIDOS logo)
+    job 299   the SAME ROM, `--delay 70 --interval 8`  **CLEAN, all 3 frames**
+              (the cafe scene from INTRO.JV, flawless on silicon)
 
-### ✅ WHAT RUN 10 BUILT
-`JVDECMASK` bit 10 (1024) takes the Start-Game path automatically -
-`introplay = 1; goto bootvid_entry;` immediately after
-`video_set_disp240(1); gpu_kernel_select(1)`. No pad input, because
-☠️ **`tools/drive.sh` CANNOT be used here**: it writes the control endpoint
-while the game runs, and a build streaming video off the same cart races its
-own `gd_fread`s and locks the console (drive.sh says so - FASTBOOT builds
-only).
+Only the capture moment differs. That single pair explains the user's report
+with no theory at all: **EIDOS, CORE and INTRO are the first ~2 minutes of the
+boot chain, and CAVES.JV only plays after the title** - by which time whatever
+this is has settled. Every corrupt grab I have is at the default ~35 s delay.
 
-### ✅ RUN 10 ALSO FILED THE INSTRUMENT DEFECT (required, not optional)
-`COBWEB_ISSUES_OPENLARA.md` (jaguar-shared `be79e43`): **`jagemu peek` returns
-`0x7F` filler for live DRAM in `--sd` runs**, with a repro. This is the SECOND
-session here to hit it - the first recorded "the instrument is unproven" and
-ABANDONED its measurement, and I abandoned an OP-list verification the same
-way. The ask is that an unreachable read fail loudly rather than return a
-plausible byte pattern.
+⬜ **RUN 12 STARTS HERE: jagq #303** - 12 stills, 6 s apart, t=12s..78s, on
+`fx0_p272.cof`. It gives the transition time AND says whether the corruption
+comes BACK when a new clip starts (which would make it per-clip warm-up rather
+than warm-up from power-on).
+⬜ **AND ASK THE USER** (asked, not blocking): is the TV on the same HDMI
+converter as the capture card, and does the picture settle after a minute? If
+the TV settles too, the suspect is the video chain locking on; if the TV is bad
+for the whole two minutes, it is the Jaguar.
+☠️ Do NOT re-run any A/B at the default 35 s delay. Every stimulus arm I ran
+(flat card, 256-index card, codebook, 68k walk, plain object, copy mode, early
+switch, CAVES-in-boot-slot) was captured inside the corrupt window, so **they
+are all uninformative** - they measured the window, not the arm.
 
-### ⬜ AND THE SETTLING TEST IS ANSWERED (job 292)
-`JVDECMASK=512` sleeps ~10 s before the first clip. The grab came back **75 KB,
-black with sparse white dots** - which is NOT a fix, it is the CORE logo clip
-(mostly black) shifted into the capture window by the delay, with the noise
-still on it. ★ But it teaches something: **on a black frame the corruption is
-sparse, on a detailed frame it is ~50%.** Corruption that is invisible on flat
-black is corruption that substitutes *plausible neighbouring data*, not random
-values - an addressing/fetch error, not a value error.
+### ☠️☠️☠️ AND A REGRESSION I INTRODUCED, WHICH CONTAMINATES RUNS 8-10
+`video.c:318` used `g_op_plain240` **80 lines before its definition**.
+video.c is compiled by **jcc68k, which accepted the undeclared identifier
+SILENTLY** (gcc errors on the identical code - that is how the same mistake in
+`main.c` was caught in seconds the same day). The condition evaluated **true**
+with the variable's value 0, so every build from run 8 on shipped the PLAIN
+TYPE-0 probe object **with the probe switched off**:
 
-### ✅ BANKED - DO NOT RE-DERIVE
-  * ★★★★★ **THE CLIP DATA IS IRRELEVANT** - CAVES.JV is corrupt in the boot
-    slot (job 281) and correct at Start Game (the user, on the TV).
-  * ✅ Two 68k DRAM spins found and fixed; the first measured **54.65% ->
-    0.00%** on silicon, same build, same pad, one byte apart. Both verified
-    offline too: the fixed cobweb detector reads 4216/6100 on the known-bad
-    ROMs and **5** on ours, against a hardware budget of 128.
-  * ☠️ NOT: the encoder · the .JV · the codebook · the tokens · Tom's kernel ·
-    the 68k walker · accumulation · the copy mode (phrase OR pixel) · the CLUT
-    (a 256-index card is noise too) · the object type (scaled-1.0x OR plain
-    TYPE-0) · buffer rotation · settling time.
-  * ☠️ NEVER A/B ACROSS TWO PADTEXT VALUES; never judge a capture by file size;
-    LOOK at every capture.
-  * Specific SCANLINES are corrupt and a fixed ~28-line window is not, *within
-    one flat colour band* - raster position, not content.
+    known-good (HEAD~3)   fs_ph1 = 0xC13C0101  TYPE=1   fs_ph5 = 0x2020
+    runs 8-10             fs_ph1 = 0x143C0100  TYPE=0   fs_ph5 = 4
+    after the fix         fs_ph1 = 0x153C0101  TYPE=1   fs_ph5 = 0x2020
+
+✅ Fixed by moving the definition above `build_object_list`, with a comment that
+says why it must stay there. Filed against jcc68k in jaguar-shared
+(`6c278b4`) - a compiler that silently accepts an undeclared identifier does not
+fail the build, it emits **wrong code that renders**.
+★ Caught by jaguar-shared's `1da82fd` - *rebuild the last known-good commit
+FIRST* - which I had read that morning and applied three runs late. The user
+independently said "just check out an earlier commit and see what happens".
+★★★★★ **`jagemu dump` reads live DRAM where `jagemu peek` returns 0x7F filler.**
+That is what made the comparison possible; recorded in
+`COBWEB_ISSUES_OPENLARA.md` (`ee0e4d6`) as the workaround.
+
+### ✅ REBUILT AND READY (post-fix, verified TYPE=1)
+    WORK_ROMS/fx{0,256,1024}_p{272,136,0}.cof
+      mask 0    = boot clips as shipped
+      mask 256  = CAVES.JV in the boot slot
+      mask 1024 = CAVES.JV via the Start-Game path
+
+### ✅ STILL BANKED
+  * ✅ TWO real 68k DRAM spins fixed (pacing loop; `gpu_jvdec_wait`'s 240,000-
+    read mailbox poll). The first measured **54.65% -> 0.00%** on silicon -
+    though ☠️ that A/B was ALSO taken at 35 s, so re-verify it now that the
+    window is understood. Both are right regardless: they are the documented
+    law, and the fixed cobweb detector scores our ROM 5 against a budget of 128
+    where the pre-fix ROMs score 4216 and 6100.
+  * ✅ The FMV audio-ring overrun (7,224 B past `g_arena`) - independent of all
+    of this.
+  * ☠️ Never A/B across two PADTEXT values; never judge a capture by file size;
+    LOOK at every capture; and now: **never A/B across two capture TIMES**.
 
 ### ⬜ ALSO OPEN
   1. ✅ `r22_try_p408.cof` DID run - jagq job 125, 07:18 today. It is not a rig

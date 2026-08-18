@@ -224,6 +224,20 @@ uint32_t fs_ph5 = ((uint32_t)FS_VSCALE << 8) | (uint32_t)FS_HSCALE;
  * the room renders CORRECTLY in the top 120 lines -> kernel+fb are FINE; the
  * ONLY blocker is the TYPE-1 scaled object below. Re-enable to re-confirm. */
 extern int g_disp240;               /* task #4: 1 = title plain-240 mode */
+/* ☠️☠️ THIS DECLARATION MUST STAY ABOVE build_object_list (run 11).
+ * It was below it, and video.c is compiled by **jcc68k, which accepted the
+ * undeclared identifier SILENTLY** where gcc errors out. The result was not a
+ * build failure but a WRONG OBJECT: `if (g_op_plain240 && g_disp240)` evaluated
+ * true, so every build from run 8 on shipped the PLAIN TYPE-0 probe shape
+ * (fs_ph1 TYPE=0, fs_ph5=4) instead of the scaled TYPE-1 object
+ * (fs_ph1 TYPE=1, fs_ph5=0x2020) - with the probe switched OFF.
+ * Caught by rebuilding the last known-good commit and dumping both values,
+ * which is jaguar-shared's `1da82fd` rule, read the same day and applied three
+ * runs late. Every hardware result from run 8 to run 10 is contaminated.
+ * run-8 probe: 1 = build a TYPE-0 PLAIN bitmap for the 240 display instead of
+ * the 1.0x-scaled TYPE-1 object. Set BEFORE video_set_disp240() rebuilds. */
+int g_op_plain240 = 0;
+
 static void build_object_list(uint32_t fb_addr)
 {
     /* A scaled (TYPE 1) object must be reached via BRANCH fall-through inside
@@ -393,9 +407,6 @@ static void build_object_list(uint32_t fb_addr)
 /* TITLE 240 switch (task #4): call with Tom idle + a just-flipped display.
  * Rebuilds both OP lists + every precomputed repair value for the new mode. */
 int g_disp240 = 1;   /* PROBE: boot in title-240 (scaled-1x) */
-/* run-8 probe: 1 = build a TYPE-0 PLAIN bitmap for the 240 display instead of
-   the 1.0x-scaled TYPE-1 object. Set BEFORE video_set_disp240() rebuilds. */
-int g_op_plain240 = 0;
 void video_set_disp240(int on)
 {
     g_disp240 = on;
