@@ -6307,6 +6307,20 @@ bootvid_entry:
              projection kernel. The game phase switches both back below. */
           { extern void video_set_disp240(int); extern void gpu_kernel_select(int);
             video_set_disp240(1); gpu_kernel_select(1); }
+#ifdef JVDECDIAG
+          /* ★★★★★ bit 10 (1024): TAKE THE START-GAME PATH AUTOMATICALLY (run
+             10). The user reports CAVES.JV renders correctly, and bit 256
+             proved it renders CORRUPT in the boot slot - so there is a
+             known-good configuration inside this very ROM and I have never
+             measured it on my own rig. This re-enters the clip player exactly
+             the way Start Game does, with no pad input (tools/drive.sh cannot
+             help: it writes the control endpoint while the game streams from
+             the same cart, which locks the console).
+             Paired with bit 256 this is the clean A/B - SAME clip, SAME ROM,
+             SAME boot pad, only the position in the sequence differs. Whatever
+             separates them is the whole remaining fault. */
+          if (g_jvdmask & 1024u) { introplay = 1; goto bootvid_entry; }
+#endif
           for (;;) {
               /* PHYSICAL PAD ONLY, DEBOUNCED: a bit counts only when TWO
                  consecutive reads agree (single-frame pad glitches were
