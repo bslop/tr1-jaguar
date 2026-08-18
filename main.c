@@ -5364,6 +5364,23 @@ bootvid_entry:
                 { extern void video_pin_start(void);
                   video_pin_start(); }
 #ifdef JVDECDIAG
+                /* ★ bit 9 (512): WAIT ~10 SECONDS BEFORE THE FIRST CLIP.
+                   Splits STATE from SETTLING. CAVES.JV renders correctly at
+                   Start Game and corrupt in the boot slot (run 8), so either
+                   the title path sets something up, or something simply is
+                   not ready yet this early - a PLL, the GD/SD, the DSP. If a
+                   bare delay fixes it, nothing about the title matters and
+                   the answer is a readiness wait, not a mode switch.
+                   ☠️ SLEEP, do not spin - a 10 s 68k DRAM poll is the very
+                   defect runs 6 and 8 just removed twice. */
+                if (g_jvdmask & 512u) {
+                    extern volatile uint32_t frame_count;
+                    uint32_t t9 = frame_count, n9 = 0;
+                    while ((int)(frame_count - t9) < 600 && n9 < 900u) {
+                        n9++;
+                        cpu_stop_unless_ge(&frame_count, t9 + 600u);
+                    }
+                }
                 /* ★★★★★ bit 7 (128): DO THE TITLE-MODE SWITCH BEFORE THE BOOT
                    CLIPS TOO (run 8, and it is the USER'S OBSERVATION that
                    named it: "the caves intro renders correctly").
