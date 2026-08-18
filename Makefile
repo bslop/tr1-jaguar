@@ -1593,6 +1593,16 @@ endif
 # codebook, then loops fill/copy/flip forever with no gd_fread, no audio, no
 # decode. Splits "the OP is starved" from "the copy or the object is wrong".
 # It never returns - a scope, not a build.
+# JVDECDIAG / JVDECMASK: the run-7 decode discriminator. 1 = force the 68k
+# token walk instead of Tom's kick, 2 = zero the shadow before each decode.
+# The mask is a `volatile const` in main.c, so an arm is ONE IMMEDIATE and the
+# layout never moves - one A10 pad roll covers all of them.
+ifdef JVDECDIAG
+JVDECMASK ?= 0
+CFLAGS   += -DJVDECDIAG -DJVDECMASK=$(JVDECMASK)
+CXXFLAGS += -DJVDECDIAG -DJVDECMASK=$(JVDECMASK)
+endif
+
 ifdef JVTESTCARD
 JVTCMASK ?= 0
 CFLAGS   += -DJVTCMASK=$(JVTCMASK)

@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 7
+RUN: 8
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,79 +54,78 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ✅✅✅ FAULT 1 FOUND AND FIXED: THE CLIP PLAYER BUSY-SPUN THE 68000 ON DRAM
-# AND STARVED THE OBJECT PROCESSOR. 54.65% -> 0.00%, SAME BUILD, SAME PAD.
-# ☠️ AND THERE IS A **SECOND, INDEPENDENT FAULT**: WITH THE SPIN FIXED, THE
-# REAL VIDEO IS **STILL** CORRUPT. THE TEST CARD WAS HIDING IT.
+# ★★★★★ FAULT 2 IS **CONTENT-DEPENDENT, NOT SOURCE-DEPENDENT**: A CONSTANT
+# RENDERS PERFECTLY AND *ANY* DETAILED DATA COMES BACK ~50% WRONG, WHATEVER
+# WROTE IT. THAT IS A DROPPED/DUPLICATED **FETCH**, AND THE PRIME SUSPECT IS
+# THE OP SCALER - THE USER'S OWN LEAD.
 
-### ✅✅✅ FAULT 1 - PROVEN, FIXED, SHIPPED IN THE TREE
-`main.c` paced the clips with
+### ☠️☠️ THE METHODOLOGICAL CORRECTION THAT REOPENED EVERYTHING (user, run 7)
+The user asked whether we were "being lazy and using a high video mode for the
+videos so we don't have to switch before the title screen". The literal answer
+is no - `FB8` is on the compile line and `OP_DEPTH = 3<<12` (8bpp), the same
+depth as the game. **But the question exposed a hole in my own test.**
 
-    while ((int)(frame_count - t0) < tgt)   /* and two `while (pending_fb) ;` */
-        ;
+☠️ **A FLAT TEST CARD CANNOT ACQUIT AN ADDRESSING FAULT.** Run 3-4's "the
+display path is clean, it renders a constant at 0.00%" is only true for VALUE
+corruption. A fetch that is dropped, repeated or mis-addressed lands on the same
+byte in a flat field and is INVISIBLE. Every "downstream is innocent"
+conclusion built on that card has to be re-read with this caveat.
 
-a 68000 busy-poll of a DRAM long, held for **three fields out of four** at
-15 fps. THE MEASUREMENT (same build, same boot pad, ONE BYTE apart - the
-`volatile const` mask trick):
+### THE MEASUREMENTS THAT NOW FIT ONE STORY
+All at PADTEXT=272, all with fault 1 (the 68k spin) already fixed:
 
-    job 182   sl0  pad 0   SPIN    **54.65%**  54.63%
-    job 202   sl16 pad 0   STOP    ** 0.00%**   0.00%
+    flat 4-band card              **0.00%**   constant -> perfect
+    Tom decodes the real clip     ~corrupt    detailed -> ~50% wrong
+    68k fallback token walk       ~corrupt    (job 212, WORSE - pure noise)
+    zero the shadow every frame   ~corrupt    (job 237) not accumulation
+    paint the CODEBOOK itself     ~corrupt    (job 240) not the decode at all
+    PIXEL-mode copy, not phrase   ~corrupt    (job 246) not the Blitter mode
 
-✅ Fixed unconditionally: `cpu_stop_unless` for the two `pending_fb` waits and
-a new `cpu_stop_unless_ge` (cpu68k.S, the >= sibling, for waiting on a COUNTER
-rather than a flag) for the pacing wait, bounded at 150 fields so a dead VI
-cannot turn a late frame into a permanent halt. The four run-6 bisect gates
-were scaffolding and are reverted; only the fix remains.
-★ This was never a new law - it is `video_flip_asm`'s own comment ("a spin here
-hammers DRAM for a WHOLE FIELD every frame and starves Tom; measured: that cost
-HALF the rendered frames") and jaguar-shared's first non-negotiable. **The FMV
-path simply never had it applied.**
-★★★★★ AND IT EXPLAINS THE "INTERMITTENT": the SAME spin build measured
-**0.00% at PADTEXT=136 and 54.65% at PADTEXT=0**. A lucky code layout hides it.
-☠️ That also means run 4's "quiet bus fixes it" comparison was CONFOUNDED - it
-compared a quiet build at pad 136 against a busy build at pad 408, two
-variables. The conclusion survived, but only because run 6 re-did it properly at
-one pad. **Never A/B across two PADTEXT values.**
+★★★★★ The codebook arm is the decisive one. It writes `vshadow[i] =
+cbk[i & 4095]` from the 68k - **no decoder, no token stream, no Tom** - and it
+comes back corrupt. So it is not the decode, not the walker, not the tokens,
+not accumulation and not the copy mode. **The only thing that changed between
+0.00% and 50% is whether the bytes are FLAT or DETAILED.**
+★ That fill must repeat EXACTLY every 64 source rows (lcm(4096,320)/320). The
+grab still shows the period (best self-similarity +0.27 at ~lag 66 with my
+capture-scale calibration) - so the structure survives underneath ~50%
+per-pixel damage. The picture is a degraded version of the right image, not a
+different image.
 
-### ☠️☠️ FAULT 2 - THE ONE THAT IS STILL BREAKING THE USER'S VIDEO
-`WORK_ROMS/fix_p0.cof` is the REAL player (no test card) with the spin fixed.
-jagq job 204: the EIDOS logo comes back **still densely speckled, letterbox
-bars full of noise**. So:
+### ⬜ RUN 8 STARTS HERE - THE SCALER
+`video.c:~300`: the clips do NOT get a plain object. They are displayed through
+the GAME's **scaled TYPE-1 object with the scale set to 1.0x**
+(`fs_ph5 = 0x2020`, and the comment says it outright: *"a 1:1 'scaled' object
+IS a plain display"*). That is the shortcut the user asked about, and
+`jaguar-shared` records that **the OP horizontal scaler starves the bus 15-20x
+on real Tom**. A scaler still runs its remainder accumulator at 1.0x.
+A scaler losing fetches under load predicts EXACTLY what is measured: flat
+fields perfect, detail ~50% wrong, and a contiguous band of scanlines
+(src ~24-56) clean where it keeps up.
+✅ THE ARM: build a PLAIN UNSCALED object for `g_disp240` instead of the 1.0x
+scaled one. `OPPLAIN` already exists in this file as a 4-long object shape
+(see `video_flip_force`), so the machinery is there - it has to be reached from
+`build_object_list` under `g_disp240`, and the ISR's repair path has to match
+(the scaled path restores phrase 0 AND the scale phrase's remainder).
+☠️ Keep using the `volatile const` mask so one pad roll covers both arms.
 
-    test card + spin   54.65%   fault 1 visible
-    test card + STOP    0.00%   fault 1 gone, fault 2 MASKED (the 68k fill
-                                overwrites whatever Tom put in the shadow)
-    real decode + STOP  still corrupt        fault 2 exposed
+### ✅ STILL TRUE AND BANKED
+  * FAULT 1 IS REAL AND FIXED: the 68k paced the clips by busy-polling a DRAM
+    long for three fields in four; same build, same pad, one byte apart,
+    **54.65% -> 0.00%**. `cpu_stop_unless_ge` (new, cpu68k.S) + two
+    `cpu_stop_unless`. That fix stays whatever fault 2 turns out to be.
+  * ☠️ Never A/B across two PADTEXT values - the same spin build is 0.00% at
+    136 and 54.65% at 0.
+  * PADTEXT=272 boots the current JVDECDIAG layout; 0 and 136 do not.
 
-⇒ **The test card hid a second fault by overwriting the shadow.** Run 3's
-"the decode is acquitted" reasoning was sound for fault 1 and WRONG as a
-general acquittal - the card removes the decode's output from the picture.
-⬜ **RUN 7 STARTS HERE:** with the STOP fix in, run the real player but force
-the **68k fallback token walk** (skip Tom's kick, `tomok = 0`). One bit, same
-layout trick.
-    clean    -> Tom's `gpu_jvdec` kernel is wrong on silicon and right in the
-                emulator - and the 68k walk is the shipped fallback, so there is
-                a slow but correct path to compare against block by block
-    corrupt  -> the fault is in the shadow's *inputs* (the codebook or the
-                token stream as they sit in DRAM), not in who walks them
-★ Also worth one arm: the shadow is never re-zeroed between frames, so a delta
-stream accumulates any single bad write forever. That fits "static mask in the
-letterbox" exactly.
-
-### ⭐ ANSWERED THE USER MID-RUN (they asked why the clips are messed up)
-Told them: not the videos, not the encoder; a display/timing fault that no
-emulator can show; fault 1 found and fixed; it is layout-sensitive, so "what
-changed" may be nothing they did. **Asked them one question - was the FMV EVER
-clean on the TV, or has it always looked like this?** A "yes, it used to be
-clean" would date fault 2 to a commit. Not blocking on the answer.
-
-### RIG NOTES FROM THIS RUN
-☠️ `LIBUSB_ERROR_TIMEOUT` / `_PIPE` / "GameDrive not found" hit **four times**.
-`jagq exec --lease 120 -- jaguar-shared/hw/jagpower cycle` cleared it each
-time, but twice it took a second cycle. ★ Suspicion worth testing: these arms
-NEVER RETURN (they loop in the clip player streaming off the SD), so the board
-is still reading the cart when the next turn's upload starts. Give a
-never-returning arm its own power cycle before the next upload.
+### ☠️ THE RIG IS FLAKY TODAY AND IT IS NOT US
+`LIBUSB_ERROR_TIMEOUT` / `_PIPE` / "GameDrive not found" hit **seven times**
+across this run and run 6. `jagq exec --lease 120 -- jaguar-shared/hw/jagpower
+cycle` clears it, sometimes needing two. Five sessions are queueing hard
+(jag_sonic2, jag_quake, jag_viewpoint, jag_rr all active), so a `jagq run` can
+sit 10 minutes. ★ Submit ONE job per call and check `jagq history` for it
+rather than blocking on a loop of them - a shell timeout kills the wait but the
+job still runs, and the result is there under its job id.
 
 ### ⬜ ALSO OPEN
   1. ✅ `r22_try_p408.cof` DID run - jagq job 125, 07:18 today. It is not a rig

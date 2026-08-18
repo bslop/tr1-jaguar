@@ -2626,6 +2626,27 @@ static union {
 extern int cpu_stop_unless(volatile uint32_t *addr, uint32_t val);
 extern int cpu_stop_unless_ge(volatile uint32_t *addr, uint32_t val);
 
+#ifdef JVDECDIAG
+/* ☠️ DISCRIMINATOR, NOT A SHIPPING OPTION (run 7). Fault 1 (the 68k spin
+ * starving the OP) is fixed and the clips are STILL corrupt on silicon, so
+ * there is a second fault the JVTESTCARD arm was masking - the card
+ * overwrote the shadow, which is exactly where a decode fault would live.
+ * ★ A VALUE, NOT A LAYOUT: one immediate moves, the code layout does not, so
+ * one A10 pad roll covers every arm (see runs 5-6; do not make these #ifdefs).
+ *   bit 0 (1)  force the 68k fallback token walk - do not kick Tom.
+ *              clean -> gpu_jvdec is wrong on SILICON and right in the
+ *                       emulator, and the walk is a correct slow reference
+ *              dirty -> the fault is in the shadow's INPUTS (codebook or
+ *                       token stream in DRAM), not in who walks them
+ *   bit 1 (2)  zero the shadow before every frame's decode. A delta stream
+ *              then renders wrong ON PURPOSE - but if the LETTERBOX BARS come
+ *              back BLACK, the noise there is ACCUMULATED garbage (the shadow
+ *              is never re-zeroed between frames, so one bad write survives
+ *              forever), which is exactly the "static mask" runs 2-3 measured.
+ */
+static volatile const uint32_t g_jvdmask = JVDECMASK;
+#endif
+
 #if defined(JVTESTCARD) || defined(JVTCONLY)
 /* ☠️ THE DISCRIMINATOR MASK (runs 4-6). Every gated path below is compiled in
  * UNCONDITIONALLY and selected by a bit of this value, so choosing an arm
@@ -5683,7 +5704,37 @@ bootvid_entry:
                              can suppress a kick that would have worked; the
                              DRAM mailbox (tomok) is the honest verdict, and
                              the 68k walk is still there if it fails. */
+#ifdef JVDECDIAG
+                          if (g_jvdmask & 4u) {
+                              /* SHOW THE INPUT, NOT THE OUTPUT (run 7). The
+                                 display path is proven clean (a full-screen
+                                 constant renders 0.00%), the 68k walker and
+                                 Tom's kernel BOTH produce noise, and zeroing
+                                 the shadow first does not help - so the
+                                 suspicion is the DATA: the 4096-byte VQ
+                                 codebook, read once per clip off the SD.
+                                 A corrupt codebook gives wrong pixels inside
+                                 every block for the WHOLE clip, which is
+                                 exactly the fixed corrupt-pixel mask runs 2-3
+                                 measured (Jaccard 0.991 between frames).
+                                 So paint the codebook itself, tiled, and
+                                 compare the grab against the same rendering
+                                 made offline from the .JV. Pixels match =
+                                 the data is intact in DRAM and the fault is
+                                 in the decode after all; noise = the read or
+                                 DRAM is losing it. */
+                              int ci;
+                              for (ci = 0; ci < 320*240; ci++)
+                                  vshadow[ci] = cbk[ci & 4095];
+                          }
+                          if (g_jvdmask & 2u) {
+                              uint32_t *zf = (uint32_t *)vshadow, zk;
+                              for (zk = 0; zk < (320u*240u)/4u; zk++) zf[zk] = 0;
+                          }
+                          if (gpu_ok && !(g_jvdmask & 5u)) {
+#else
                           if (gpu_ok) {
+#endif
                               /* KICK STRAIGHT OFF THE STREAM BUFFER (vidrom,
                                  2026-08-08): the stash copy was for the ASYNC
                                  player, where the 68k refilled while Tom
@@ -5701,7 +5752,7 @@ bootvid_entry:
                               tomok = gpu_jvdec_wait();
 #endif
                           }
-                          if (!tomok)
+                          if (!tomok && !(g_jvdmask & 4u))
                           { const uint8_t *s = tk, *e = tk + L;
                             uint8_t *dA = vshadow;
                             int bx = 0, left = 4800;
@@ -5762,8 +5813,23 @@ bootvid_entry:
                                 blit_copy(vshadow, bb, 240);
                             vp_copy += vp_tick() - ta; }
 #else
+#ifdef JVDECDIAG
+                          /* bit 3 (8): PIXEL-mode copy instead of PHRASE mode.
+                             Re-tested now that the 68k spin is fixed - the
+                             run-6 attempt was made while fault 1 still
+                             dominated, so it could not have shown anything.
+                             ★ The flat test card CANNOT acquit this: a copy
+                             that drops or repeats a phrase is invisible on a
+                             constant and catastrophic on detail, which is
+                             exactly the split measured (constants 0.00%,
+                             detailed data ~50% wrong). */
+                          if ((g_jvdmask & 8u) ||
+                              !blit_copy_phrase(vshadow, bb, 240))
+                              blit_copy(vshadow, bb, 240);
+#else
                           if (!blit_copy_phrase(vshadow, bb, 240))
                               blit_copy(vshadow, bb, 240);
+#endif
 #endif
                           gok = tomok; kicked = tomok;
                           (void)pprev;
