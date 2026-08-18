@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 2
+RUN: 3
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,91 +54,111 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ⬜ THE FMV GRAIN: SILICON-ONLY ACROSS **TWO** EMULATOR REVISIONS, AND THE
-# FIRST MEASUREMENT THAT LOOKED LIKE THE CAUSE IS **NOT TRUSTWORTHY YET**.
+# ⬜ THE FMV GRAIN: THE BUFFER-ROTATION HYPOTHESIS IS **DEAD BY CONSTRUCTION**,
+# THE CAPTURE CHAIN IS **EXONERATED**, AND THE CORRUPTION IS **DETERMINISTIC**.
 
-### WHAT IS SOLID
-  * The `.JV` file is right: `tools/jv_decode.py` decodes the shipped CORE.JV
-    to clean frames and scores 30.26 dB PSNR against the disc source.
-  * The player is right in the emulator: the boot clips render CLEAN in jagemu
-    at **beb2c15 AND at 1d47eeb** - the latter includes four new commits that
-    model *the OP self-consuming its object list*, which was the most likely
-    emulator blind spot. It did not reproduce the grain.
-  * The hardware capture has **~14% of pixels far from their local median**;
-    the emulator has none. `/home/jvilla/.jagq/jobs/82/frame_00.png` is the
-    reference capture (PADTEXT=408 arm, the pyramid shot).
-  * ⇒ **NOT the encoder.** Do not re-encode; `JV_VQCOLS=256` bought +0.27 dB.
+### ✅ CLOSED THIS RUN - DO NOT RE-OPEN
+  * **fb0/fb1/fb2 incoherence CANNOT be the grain.** Read the clip player:
+    Tom decodes into a persistent 320x240 SHADOW (`vshadow = g_vidscratch`)
+    and the 68k then does `blit_copy_phrase(vshadow, bb, 240)` - a WHOLE-FRAME
+    copy into the buffer it is about to publish (main.c, the `if (!tomok)`
+    block and the two `blit_copy_phrase` calls under it). Every published
+    buffer therefore carries a complete picture, and 2-vs-3-buffer rotation
+    cannot leave a stale pixel anywhere. ⇒ **Do not validate the fb peek for
+    this purpose; the measurement it was going to make is meaningless.**
+  * ★ The pin is inert anyway, and that is worth knowing separately:
+    **`FLIPASM=1` is in the shipping flag set, and `video_flip_asm`
+    (cpu68k.S) rotates over THREE buffers and never reads `video_two_buf`** -
+    the symbol appears ZERO times in cpu68k.S. Only the C `video_flip` honours
+    the pin, and the C `video_flip` is compiled out. `video_pin_start`'s
+    deterministic first target still works; the pinning does not. Harmless
+    today (the shadow makes it moot) but it is an UNWIRED FIX - if anything
+    ever needs 2-buffer mode again, it must go in the asm.
 
-### ☠️ AND THE INSTRUMENT THAT SEEMED TO CRACK IT IS SUSPECT
-`tools/../scratch fb_coherence` peeked fb0/fb1/fb2 during playback and reported
-them disagreeing by up to 57%, which would explain everything: the decoder
-patches the back buffer plus the PREVIOUS frame (2-deep), and a THREE-buffer
-rotation leaves the third stale, so the display walks a rotation of different
-pictures = speckle on a CRT, clean in a one-buffer screenshot.
-**But the two control reads in the same call came back `0x7f7f7f7f` /
-`two_buf=127`** - filler, not data - so `video_two_buf` and `front_fb` were not
-actually being read, and the fb peeks are then equally unproven.
-☠️ Also: the buffers are **320x120 16bpp** under LOWRES (spacing 0x12C00 =
-76,800 B), not the 320x240 8bpp I assumed when picking sample offsets.
-⬜ **NEXT RUN STARTS HERE: validate the peek first.** Read back a value the ROM
-demonstrably wrote (or a known constant) at each address before believing a
-single one of those percentages. THEN re-run the comparison with offsets that
-match the real buffer geometry.
+### ✅ THE CAPTURE CHAIN IS NOT THE CAUSE - MEASURED ACROSS ALL 39 CAPTURES
+Scored every `~/.jagq/jobs/*/frame_00.png` for "fraction of pixels far from
+their 3x3 median":
 
-### ★ THE GOOD NEWS THE CODE ALREADY CARRIES
-`video.c` has a **2-BUFFER PIN** written for exactly this failure
-(`video_two_buf`, 2026-08-07: *"delta video patches the back buffer with the
-PREVIOUS frame's tokens, which covers exactly 2-deep staleness. The demo's
-TRIPLE rotation leaves a third buffer un-patched -> the title screen GHOSTED
-through the clip"*), and `main.c:5274` calls `video_pin_start()` once per clip.
-So either the pin is working and the cause is elsewhere, or something clears it.
-That is one peek away once the instrument is trusted.
+    job  70  22:23  OPENLARA.COF (title screen)      0.2%   <- OUR ROM, PRISTINE
+    job  82  00:00  ship_ai_p408.cof (FMV)          18.9%   <- grain
+    job 117  07:03  jag_quake testcard.cof           0.2%
+    job 125  07:18  r22_try_p408.cof (FMV)          16.4%   <- grain
+    job 126  07:31  jag_viewpoint boot.cof           0.0%
 
-### ⬜ THE OTHER LIVE HYPOTHESIS - and it fits "silicon only" better
-`video.c`'s **FAST OP-LIST REPAIR**: *"the OP destroys ONLY phrase 0 of the
-bitmap object as it draws; the probe showed the full 8-long rebuild chronically
-finishing at VC 33-35 - PAST the object fetch at 32 - under render-time bus
-starvation"*. If the repair loses that race on some fields, the OP fetches a
-half-repaired object and sources pixels from the wrong place - scattered
-corruption, on hardware only, invisible to an emulator that does not model bus
-starvation. jaguar-shared's new video notes are all in this family.
-Test: build the FMV arm with the repair forced early/disabled and capture.
+Every other project's capture in the same window is 0.0-1.8%. **Only our two
+FMV grabs are noisy**, hours apart, with clean third-party captures between
+them. ⇒ the Cam Link / HDMI chain carries a clean 720x480 picture; the grain
+is in what the Jaguar is putting on the screen. (Job 70 is our own ROM at the
+TITLE - gorgeous, no noise - so it is not "openlara vs everyone else" either.)
 
-### ⬜ ALSO QUEUED FOR THE USER
-`/tmp/r22_try_p408.cof` - boots straight into the bridge room with the enemy AI
-and the view cull, for him to feel both changes. Two attempts failed on rig
-faults ("GameDrive not found", and jag_viewpoint's reboot failed in the same
-minute), not on the ROM. Re-queue it.
+### ★★★★★ THE GRAIN IS DETERMINISTIC, NOT A RACE
+Comparing job 82 frame_00 vs frame_01 - **different clip content, same
+letterbox bar** - inside the top black bar (rows 5-40, cols 110-625):
 
-### ⚠️ BUILD STATE
-`/tmp/cofout11/` = the shipping payload with the SLIDE fixes, `QUALITY=playable`
-/VRESN=80, PADTEXT=136, md5 `eb73701d8800e6455c064f3b6d4135bc` - **this is the
-one that boots and that the user played.**
-Arms built on top of it (enemy AI + `ENTVIEWCULL=1`):
-    /tmp/ship_ai_p408.cof   shipping path (title ring) - **BOOTS on silicon**
-    /tmp/r22_try_p408.cof   AUTOSTART + SPAWNAT room 22 - queued, untested
-    /tmp/r22_{base,ai,ai2,cull,nobr}_dv.cof   the measured A/B set (DREWVIS=1)
-☠️☠️ **ANY CODE CHANGE RE-ROLLS THE A10 PAD.** PADTEXT=136 booted the slide-fix
-ROM and is BLACK with the enemy AI in it. Rolled: 136 black · 0 black · 544
-black · **408 BOOTS**. Build all six pads first (`make PADTEXT=$pt ...`), then
-flash them one at a time; the emulator cannot tell you which.
-☠️ jagq reports `signal content` on a frame that is 1501 bytes of nearly-black.
-**Look at the frame**; its blank/content threshold is not a boot verdict.
-★ Only `main.c` changed, so a ROM rebuild + `cp` into a copy of the payload dir
-is enough - the disc extraction does not have to be re-run.
-☠️ `tools/build_conf.sh` takes **caves|gym|both** - not `mrt`.
-☠️ SPAWNAT does NOT land where you ask when the point is inside two rooms'
-boxes: room 10's (56832, 57856, y 3328) put her in room **11** at y 6656.
-Walk her to the spot instead, or pick a cell no other room's box contains.
-☠️ `release_play.py` WIPES its output dir first: a drive that dies while booting
-otherwise leaves the PREVIOUS run's complete frame set sitting there (54 stale
-PNGs read as this run's output; only the mtimes gave it away).
+    frac of "black" pixels that are NOT black:  0.528 and 0.528
+    Jaccard of the two corrupt-pixel masks:     **0.991**
+
+The same pixels are wrong in both grabs. A bus race, a write-posting hazard or
+a lost field would move. ⇒ **the corruption is a deterministic function of the
+content**, so it is reproducible offline the moment we can decode the same
+frame. Structure: blobs ~1 source pixel, autocorrelation dead by lag 3, and NO
+period at 2/4/8/16/32 - so it is **not** byte-, long- or phrase-aligned, which
+rules out the whole "wrong stride / half-repaired object" family.
+⬜ **RUN 3 STARTS HERE:** decode the shipped clip frame offline
+(`tools/jv_decode.py`) or grab jagemu's framebuffer at the same frame index,
+and diff it against `~/.jagq/jobs/82/frame_00.png` pixel by pixel. Then
+classify the wrong values: equal to the PREVIOUS frame (staleness) / equal to a
+NEIGHBOURING codebook entry (index off-by-n) / correct index but wrong colour
+(CLUT). That single diff picks one of three families.
+☠️ BLOCKER: the .JV payload lives in `/tmp/cofout11` and **/tmp was wiped**.
+Rebuild it with `tools/build_cof.sh <disc> <out>` before run 3 can do this.
+
+### ✅✅ FIXED THIS RUN - A REAL OUT-OF-BOUNDS WRITE IN THE CLIP PLAYER
+The FMV audio ring wrote **7,224 bytes past the end of `g_arena`**, every clip.
+
+    aring = (int8_t *)mbuf          6 slots x 4096 = 24,576 B needed
+    mbuf  = int8_t[2][5120]                       = 10,240 B declared
+                                    -> 14,336 B past mbuf,
+                                       7,224 B past g_arena itself
+
+`mbuf` was `[2][12288]` (= 24,576 B) when this ring was written and was later
+trimmed to `[2][5120]` to shrink the arena; the ring's `6*4096` was never
+re-derived from it. Read off the link map: g_arena +66,120 ends at $152050,
+the ring ended at $153A48 - straddling `ent_pk_blob`, `ent_br_blob`,
+`ent_sw_blob`, `ent_door_blob`. Slots 4 and 5 are past the end, and a
+multi-second clip cycles all six, so **every clip reached it**.
+✅ Fixed: the ring now sits on the DEAD `ptkA`/`ptkB` token stashes
+(`rblob + VID_ARING_OFF`, 30,536 B free to the end of g_arena - the stashes
+have not been written since the kick started reading straight off the stream
+buffer), with `VID_ARING_OFF/SZ` defined **beside the union they index** and a
+`typedef char vid_aring_fits[...]` that fails the BUILD, not the picture.
+Verified: builds clean, ROM 1,540,308 B, jagemu 240 frames `illegal:0`, live
+picture; new map shows the ring 5,960 B inside g_arena.
+☠️ **This is NOT proven to be the grain** - it lands in the entity blobs, not
+in `g_vidscratch` or the framebuffers. It is a separate real bug that was
+found on the way. Do not report it as the FMV fix.
+★ The transferable lesson: **a buffer named in a COMMENT is not a buffer the
+compiler checks.** The size that mattered lived 2,800 lines away and moved
+without this code hearing about it.
+
+### ☠️ /tmp WAS WIPED (reboot before run 2)
+Everything the last run left in /tmp is gone: `/tmp/cofout11`, all six pad
+ROMs, `/tmp/conf.cof`, `/tmp/gym.cof`, `/tmp/r22_try_p408.cof`, and the
+**pinned toolchain**. Restored the toolchain in ~1 min:
+
+    git -C <cobweb> worktree prune
+    git -C <cobweb> worktree add /tmp/cobweb-old 59e5896
+    (cd /tmp/cobweb-old/sim && cargo build --release)
+
+⬜ The PAYLOAD is still gone and has to be rebuilt from the user's disc before
+any FMV work or any rig roll. ★ Worth moving the pin out of /tmp permanently.
 
 ### ⬜ ALSO OPEN
-  1. `jagq run /tmp/r22_try_p408.cof` - queued and FAILED for rig reasons twice
-     ("Jaguar GameDrive not found / Insufficient permission"); jag_viewpoint's
-     reboot failed in the same minute, so it is the shared board re-enumerating,
-     not our ROM. Re-queue it.
+  1. ✅ `r22_try_p408.cof` DID run - jagq job 125, 07:18 today. It is not a rig
+     fault any more. But the grab landed 35 s in, which is still **inside the
+     boot FMV**, so the bridge room was never photographed. ☠️ THE ROM IS GONE
+     WITH /tmp - rebuild it, and this time either build it `FASTBOOT=1` or ask
+     jagq for a longer settle, because 35 s does not clear the clips.
   2. The 8 untestable door seats; `HW_TESTCARD`.
 
 ### ⭐ jaguar-shared MOVED - re-read on the user's instruction (2026-08-18)

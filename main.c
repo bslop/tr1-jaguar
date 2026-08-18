@@ -2592,6 +2592,22 @@ static union {
  * ☠️ That is the whole reason this is a function - not tidiness. */
 /* storage is g_arena's TITLE side - shared with the in-game enemy blobs */
 #define rblob g_arena.t.rblob
+
+/* ---- FMV SCRATCH INSIDE g_arena ----------------------------------------
+ * The boot/Start-Game clips run with the whole arena to themselves (no title
+ * ring staged yet, no entity blobs live), so they carve it up by hand:
+ *
+ *      rblob + 0       31,488   stream buffer (vb)
+ *      rblob + 31488    4,096   VQ codebook   (cbk)
+ *      rblob + 35584   24,576   audio ring    (aring, 6 x 4096)
+ *
+ * ☠️ THE OFFSET IS DEFINED HERE, BESIDE THE ARENA IT INDEXES, because the
+ * previous arrangement pointed the ring at `mbuf` and outlived mbuf being
+ * halved - a 14,336 B overrun that ran 7,224 B past g_arena itself. Anything
+ * that indexes this union belongs next to the union, and must be bounded by
+ * sizeof(g_arena) at COMPILE time (see vid_aring_fits in the clip player). */
+#define VID_ARING_OFF   35584
+#define VID_ARING_SZ    (6 * 4096)
 static const uint8_t *rsrc[6]; static const uint8_t *ratl[6];
 static int rvcnt[6], rblen[6];
 static int rnv0[6], rnq0[6], rnt0[6];
@@ -5201,8 +5217,8 @@ bootvid_entry:
                previous stash must survive the current copy (delta streams;
                kf-only passes prevlen 0 and never reads it). 7552B each is
                ~1.5x the measured worst frame; the encoder asserts the cap. */
-            uint8_t *ptkA = (uint8_t *)rblob + 35584;
-            uint8_t *ptkB = (uint8_t *)rblob + 43136;
+            uint8_t *ptkA = (uint8_t *)rblob + VID_ARING_OFF;
+            uint8_t *ptkB = (uint8_t *)rblob + VID_ARING_OFF + 7552;
             /* SHADOW frame: the ONE place delta semantics live. Painted by
                the 68k from the token stream, then block-copied whole into
                the display buffer every frame. */
@@ -5336,11 +5352,32 @@ bootvid_entry:
                      the old two-buffer scheme BLOCKED on the DSP queue
                      slot (up to ~350ms) every ~4KB batch - a rhythmic
                      stall in EVERY clip that the read de-judder could
-                     not touch. Six 4KB slots in mbuf (24KB = 2.2s of
-                     audio) filled ahead, queued NON-blocking whenever
-                     the slot frees; the only blocking wait left is the
-                     end-of-clip flush. */
-                  int8_t *aring = (int8_t *)mbuf;
+                     not touch. Six 4KB slots (24KB = 2.2s of audio)
+                     filled ahead, queued NON-blocking whenever the slot
+                     frees; the only blocking wait left is the
+                     end-of-clip flush.
+                     ☠️☠️ THE RING USED TO POINT AT `mbuf` AND OVERRAN IT BY
+                     14,336 B (run 2, 2026-08-18). mbuf was 2*12288 = 24,576 B
+                     when this ring was written and is 2*5120 = 10,240 B now
+                     (trimmed to shrink the arena) - the ring's 6*4096 was
+                     never re-derived from it, so slots 4 and 5 wrote 7,224 B
+                     PAST THE END of g_arena entirely. Read off the link map:
+                     g_arena 0x141D48 +66,120 ends at 0x152050, the ring ended
+                     at 0x153A48, straddling ent_pk_blob / ent_br_blob /
+                     ent_sw_blob / ent_door_blob. Every clip reached it.
+                     ★ The lesson is the shape, not the number: a buffer named
+                     in a COMMENT is not a buffer the compiler checks. The size
+                     that mattered lived 2,800 lines away and moved without
+                     this code hearing about it.
+                     Park the ring on the dead token stashes instead (ptkA/ptkB
+                     have not been written since the kick started reading
+                     straight off the stream buffer) - 30,536 B of g_arena run
+                     from there to its end, and the assert below now fails the
+                     BUILD rather than the picture if that stops being true. */
+                  typedef char vid_aring_fits[
+                      (VID_ARING_OFF + VID_ARING_SZ <= (int)sizeof(g_arena))
+                      ? 1 : -1];
+                  int8_t *aring = (int8_t *)((uint8_t *)rblob + VID_ARING_OFF);
                   int acc = 0, wslot = 0, rslot = 0, pend = 0, astarted = 0;
                   int alen[6];
                 { int kfonly = (vnf >> 16) & 1; vnf &= 0xFFFF;
