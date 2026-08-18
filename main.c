@@ -5336,6 +5336,51 @@ bootvid_entry:
                     gd_fclose((unsigned)vh); continue;
                 }
                 remain -= 4096;
+#ifdef JVTCONLY
+                /* ☠️ DISCRIMINATOR, NOT A SHIPPING OPTION (run 4). JVTESTCARD
+                   proved the speckle is added DOWNSTREAM of the shadow (a flat
+                   palette index came back as many colours) and that ~32
+                   scanlines survive clean - a raster-timed shape. Two suspects
+                   remain, cured differently:
+                     (a) the OP starved off the bus - the GD sector reads, the
+                         audio ring copy and Jerry's I2S are all live while it
+                         fetches an 8bpp object, and RESOURCES.md has a
+                         bus-hogging kernel starving the OP on this very rig;
+                     (b) the copy or the object itself - `blit_copy_phrase`
+                         returns on the FIRST `B_CMD & BLIT_IDLE` it polls,
+                         immediately after writing B_CMD, and cobweb b8dd333
+                         added a blitter BUSY SETTLE WINDOW to jagemu for
+                         exactly that shape.
+                   So: keep the palette and the codebook (already loaded, one
+                   read each) and then run a QUIET BUS - fill, copy, flip,
+                   forever. No gd_fread, no audio, no decode kick, no token
+                   walk, nothing else touching DRAM.
+                     clean    -> (a) CONTENTION. The FMV is a bandwidth problem
+                                 like everything else on this machine.
+                     speckled -> (b) the copy or the OP object; next cut is the
+                                 pixel-mode blit_copy (5ms -> 38ms, but it
+                                 answers it).
+                   ☠️ It never returns - it is a scope, not a build. */
+                {
+                    extern void video_flip(void);
+                    for (;;) {
+                        uint8_t *bb9;
+                        uint32_t *fw9; uint32_t k9b;
+                        while (pending_fb)
+                            ;
+                        bb9 = (uint8_t *)video_backbuffer();
+                        fw9 = (uint32_t *)vshadow;
+                        for (k9b = 0; k9b < (320u*240u)/4u; k9b++)
+                            fw9[k9b] = (k9b < (320u* 60u)/4u) ? 0x00000000u
+                                     : (k9b < (320u*120u)/4u) ? 0x40404040u
+                                     : (k9b < (320u*180u)/4u) ? 0x80808080u
+                                                              : 0xC0C0C0C0u;
+                        if (!blit_copy_phrase(vshadow, bb9, 240))
+                            blit_copy(vshadow, bb9, 240);
+                        video_flip();
+                    }
+                }
+#endif
                 have = 0; pos = 0;
 #ifdef VIDPANEL
                 { int z9; for (z9 = 0; z9 < 9; z9++) VPC[z9] = 0; }

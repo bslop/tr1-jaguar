@@ -1589,6 +1589,15 @@ CFLAGS   += -DJVTESTCARD
 CXXFLAGS += -DJVTESTCARD
 endif
 
+# JVTCONLY: the QUIET-BUS arm of the same hunt (run 4). Loads the palette and
+# codebook, then loops fill/copy/flip forever with no gd_fread, no audio, no
+# decode. Splits "the OP is starved" from "the copy or the object is wrong".
+# It never returns - a scope, not a build.
+ifdef JVTCONLY
+CFLAGS   += -DJVTCONLY
+CXXFLAGS += -DJVTCONLY
+endif
+
 # VIDDIAG: FMV decode-status marker (ghost hunt 2026-08-07)
 ifdef VIDDIAG
 CFLAGS   += -DVIDDIAG

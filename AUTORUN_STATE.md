@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 4
+RUN: 5
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,80 +54,59 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ★★★★★ THE FMV GRAIN IS **NOT THE DECODER**. A FLAT TEST CARD WRITTEN INTO
-# THE SHADOW COMES BACK SPECKLED OFF THE GAMEDRIVE. IT IS THE COPY OR THE
-# DISPLAY - EVERYTHING UPSTREAM IS ACQUITTED.
+# ★★★★★ THE FMV GRAIN IS **BUS CONTENTION STARVING THE OBJECT PROCESSOR**.
+# MEASURED ON SILICON, BOTH DIRECTIONS, 54.9% -> **0.00%**.
 
-### ✅✅✅ THE DISCRIMINATOR THAT SETTLED IT (run 3) - `JVTESTCARD=1`
-`main.c`, immediately before `blit_copy_phrase(vshadow, bb, 240)`: throw the
-decoded frame away and write FOUR FLAT BANDS into the shadow instead
-(`0x00 / 0x40 / 0x80 / 0xC0`, 60 lines each). Then the copy, the flip, the OP
-object and the CLUT are the ONLY things between a constant and the screen.
+### ✅✅✅ THE TWO GRABS THAT PROVED IT (runs 3-4)
+Identical copy, identical flip, identical OP object, identical CLUT. The ONLY
+difference between these two is what else was touching DRAM:
 
-    jagemu     -> three clean bands, exactly as written
-    silicon    -> **jagq job 137, all three frames SPECKLED**, 566 KB PNGs
-                  (a clean frame of this ROM is ~30-100 KB)
+    JVTESTCARD  flat palette bands, everything else LIVE   job 137  **54.90%** speckle
+    JVTCONLY    same bands, QUIET BUS (no gd_fread, no
+                audio ring, no decode kick, no token walk)  job 142  **0.00%**
+                                                            job 144  **0.00%**
 
-**A flat band is ONE palette index. It came back as many colours.** That single
-sentence closes the whole upstream half of the hunt:
+(0.00% on two different boot pads, two frames each; jagemu renders both arms
+clean, so it can see neither the fault nor the fix.)
 
-  ☠️ NOT the encoder (already knew - 30.26 dB PSNR, `tools/jv_decode.py`)
-  ☠️ NOT the .JV file, NOT the codebook, NOT the VQ indices
-  ☠️ NOT Tom's decode kernel, NOT the token stream, NOT skip/delta semantics
-  ☠️ NOT buffer rotation (run 2 killed that by construction)
-  ⇒ the bytes reaching the Object Processor are NOT the bytes we wrote.
+**A flat band is ONE palette index and it came back as many colours** - so the
+bytes reaching the OP were not the bytes we wrote, and quietening the bus fixes
+it with no change to the data path at all. That acquits, permanently:
+  ☠️ the encoder · the .JV file · the codebook · the VQ indices · Tom's decode
+  kernel · the skip/delta semantics · buffer rotation (run 2) · and now the
+  Blitter phrase copy and the OP object setup as well.
+★ The shape that named it: a CONTIGUOUS band of ~32 scanlines (src ~24-56)
+comes through clean in every grab across three different ROMs. Data faults do
+not respect scanline bands; a fetch deadline does.
+✅ Written up and pushed to `jaguar-shared` (`JAGUAR_PORTING_NOTES.md` ff74328):
+symptom row + the two-grab discriminator, reconciled with `jag_resident`'s
+bus-hogging-kernel finding (same root cause - starve the OP a little and pixels
+speckle, starve it a lot and the picture bounces).
 
-### ★★★★★ AND THE CORRUPTION HAS A FIXED SHAPE: A CLEAN BAND
-Per-row speckle on job 137 (capture rows, and the test card's own band edges
-give the scale: src 60 lands at capture ~110, so ~1.83 capture rows per source
-row):
+### ⬜ RUN 5 STARTS HERE - WHICH HOG? AND BEAT THE PAD LOTTERY WHILE DOING IT
+Three consumers were removed together, so the bisect is still open:
+    (1) `gd_fread` sector reads    ~7 KB every frame off the cart
+    (2) the audio ring copy        `blit_bytes` + the 68k tail, 4 KB batches
+    (3) Tom's decode kick          codebook reads + shadow writes
+☠️ Doing that as three builds costs three PAD ROLLS (this arm took FOUR turns
+to find a booting pad: 408 blank, then 136 and 0 both good).
+★★★★★ **THE TRICK: make the selection a VALUE, not a layout.** Compile all
+three paths in unconditionally and gate each on a bit of
+`static volatile const uint32_t g_tcmask = JVTCMASK;`. Changing the mask
+changes ONE immediate - not the layout - so **one pad roll covers all eight
+combinations**. The codebase already uses this shape (`SRGUARD`, main.c). Pads
+136 and 0 boot the current JVTCONLY layout; keep the layout and only the
+constant moves.
+⬜ Then the fix follows the answer: if (1), the GD reads want spreading or
+moving off the display window; if (2), hand the audio copy to the Blitter
+wholly or batch it outside the active display; if (3), pace the kick.
 
-    capture   0- 46   SPECKLED
-    capture  47-102   **CLEAN**      = source rows ~24-56, about 32 lines
-    capture 103-472   SPECKLED
-
-The same band is clean in the two *content* captures too (job 82 shows it as a
-solid grey block, job 125 the same) - **same rows, three different ROMs**. So
-roughly 32 consecutive scanlines survive intact and everything else is hit.
-A whole-frame effect with a contiguous exempt band is a RASTER-TIMED
-phenomenon, not a data one.
-
-### ⬜ RUN 4 STARTS HERE - ONE MORE ARM SPLITS THE LAST TWO
-Two candidates remain and they are cured differently:
-  1. **The copy**: `blit_copy_phrase` returns 1 on the FIRST `B_CMD & BLIT_IDLE`
-     it sees, polled IMMEDIATELY after writing `B_CMD` - and cobweb b8dd333
-     added a *blitter BUSY settle window* to jagemu for exactly this shape
-     (`bcmd_poll_in_settle`). If silicon reads IDLE during the settle, the copy
-     "succeeds" before it starts. ⚠ On its own this predicts a CONTIGUOUS
-     unwritten region, not speckle, so it is the weaker of the two - but the
-     same settle read is in `video_flip_asm`'s completion barrier.
-  2. **The display**: the OP starved off the bus while it fetches an 8bpp
-     scaled object, with the GD sector reads, the audio ring copy and Jerry's
-     I2S all live. `jaguar-shared/hw/RESOURCES.md`: "a bus-hogging RISC kernel
-     starves the Object Processor"; the OP scaler is documented at 15-20x bus
-     cost. A raster-timed exempt band fits this and NOT (1).
-  ✅ THE ARM: `JVTCONLY` - test card + **no GD read, no audio, no decode kick,
-     no 68k token walk**; just fill, copy, flip, forever. Quiet bus.
-        clean  -> it is CONTENTION; the fix is pacing/priority, and the FMV is
-                  a bandwidth problem like everything else on this machine
-        speckled -> it is the copy or the OP object itself, and the next cut is
-                  swapping `blit_copy_phrase` for the pixel-mode `blit_copy`
-                  (5ms -> 38ms a frame, but it answers the question)
-☠️ Any code change re-rolls the A10 pad. **PADTEXT=408 booted the test card**
-(job 137) - roll 408 FIRST. All six pads of the current card build are already
-on disk at `WORK_ROMS/tc_p*.cof`.
-
-### ✅ THE OFFLINE RIG IS REBUILT AND IS NOW OUTSIDE /tmp
-    WORK_ASSETS/FMV/           CORELOGO.FMV CAFE.FMV SNOW.FMV INTRO.STR
-                               (tools/extract_disc.py, WANT_FMV=...)
-    WORK_ASSETS/CORE.JV        193 frames
-    WORK_ASSETS/INTRO.JV       1568 frames  <- the clip the rig captures at 35 s
-    WORK_ROMS/tc_p*.cof        the six JVTESTCARD pads
-★ `jagemu screenshot build/openlara.cof --sd <dir> --frames 700` plays INTRO.JV
-in ~19 s and is the offline twin of the rig grab. With only INTRO.JV on the SD
-the player skips EIDOS/CORE instantly, so frame 700 lands mid-clip.
-★ The capture at 35 s is **INTRO.JV frame ~137** (matched by cross-correlation
-against `tools/jv_decode.py` output; the "pyramid" is the sun over the mesas).
+### ⭐ AND THE SAME QUESTION IS NOW OPEN FOR THE GAME ITSELF
+The game renders 320x120 through the OP's vertical scaler with the Blitter, the
+GPU and Jerry all live - which is the same starvation recipe at higher load.
+Nobody has ever run the quiet-bus test card in the GAME display mode. If the
+world render is also losing OP fetches, some of what reads as "low frame rate"
+may be visible corruption we have never separated from it.
 
 ### ⬜ ALSO OPEN
   1. ✅ `r22_try_p408.cof` DID run - jagq job 125, 07:18 today. It is not a rig
