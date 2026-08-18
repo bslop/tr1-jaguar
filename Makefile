@@ -1579,6 +1579,16 @@ ifdef LARA_FOOT2
 CFLAGS   += -DLARA_FOOT2=$(LARA_FOOT2)
 endif
 
+# JVTESTCARD: FMV grain DISCRIMINATOR (run 3, 2026-08-18). Replaces the
+# decoded clip frame with four flat bands in the shadow, immediately before
+# the phrase copy - so anything speckled on screen was added by the COPY or
+# the DISPLAY, and anything clean acquits them and indicts the decode. Never
+# ship it; it makes the clips into a colour chart.
+ifdef JVTESTCARD
+CFLAGS   += -DJVTESTCARD
+CXXFLAGS += -DJVTESTCARD
+endif
+
 # VIDDIAG: FMV decode-status marker (ghost hunt 2026-08-07)
 ifdef VIDDIAG
 CFLAGS   += -DVIDDIAG

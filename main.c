@@ -5598,6 +5598,32 @@ bootvid_entry:
                                     if (++bx == 80) { bx = 0; dA += 960; }
                                 }
                             } }
+#ifdef JVTESTCARD
+                          /* ☠️ DISCRIMINATOR, NOT A SHIPPING OPTION (run 3).
+                             The FMV grain is silicon-only: the SAME ROM and
+                             the SAME INTRO.JV render CLEAN in jagemu and come
+                             back with ~19% of pixels wrong off the GameDrive.
+                             Everything upstream of here - the file, the
+                             codebook, Tom's decode - is shared by both, so it
+                             cannot be told apart from the outside.
+                             So: throw the decoded frame away and put FOUR FLAT
+                             BANDS in the shadow instead. Downstream (the
+                             phrase copy, the flip, the OP object, the CLUT) is
+                             then the ONLY thing between this constant and the
+                             screen.
+                                clean bands  -> the corruption is UPSTREAM
+                                               (decode / codebook / stream)
+                                speckled     -> it is the COPY or the DISPLAY,
+                                               and the decoder is innocent
+                             A band boundary that lands off 60/120/180 also
+                             names a geometry fault for free. */
+                          { uint32_t *fw = (uint32_t *)vshadow, k8;
+                            for (k8 = 0; k8 < (320u*240u)/4u; k8++)
+                                fw[k8] = (k8 < (320u* 60u)/4u) ? 0x00000000u
+                                       : (k8 < (320u*120u)/4u) ? 0x40404040u
+                                       : (k8 < (320u*180u)/4u) ? 0x80808080u
+                                                               : 0xC0C0C0C0u; }
+#endif
                           /* THE BLITTER MOVES THE FRAME, IN PHRASE MODE.
                              This 19200-long software copy measured 95ms a
                              frame on silicon - three times Tom's whole

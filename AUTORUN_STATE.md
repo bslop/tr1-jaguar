@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 3
+RUN: 4
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,104 +54,80 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ⬜ THE FMV GRAIN: THE BUFFER-ROTATION HYPOTHESIS IS **DEAD BY CONSTRUCTION**,
-# THE CAPTURE CHAIN IS **EXONERATED**, AND THE CORRUPTION IS **DETERMINISTIC**.
+# ★★★★★ THE FMV GRAIN IS **NOT THE DECODER**. A FLAT TEST CARD WRITTEN INTO
+# THE SHADOW COMES BACK SPECKLED OFF THE GAMEDRIVE. IT IS THE COPY OR THE
+# DISPLAY - EVERYTHING UPSTREAM IS ACQUITTED.
 
-### ✅ CLOSED THIS RUN - DO NOT RE-OPEN
-  * **fb0/fb1/fb2 incoherence CANNOT be the grain.** Read the clip player:
-    Tom decodes into a persistent 320x240 SHADOW (`vshadow = g_vidscratch`)
-    and the 68k then does `blit_copy_phrase(vshadow, bb, 240)` - a WHOLE-FRAME
-    copy into the buffer it is about to publish (main.c, the `if (!tomok)`
-    block and the two `blit_copy_phrase` calls under it). Every published
-    buffer therefore carries a complete picture, and 2-vs-3-buffer rotation
-    cannot leave a stale pixel anywhere. ⇒ **Do not validate the fb peek for
-    this purpose; the measurement it was going to make is meaningless.**
-  * ★ The pin is inert anyway, and that is worth knowing separately:
-    **`FLIPASM=1` is in the shipping flag set, and `video_flip_asm`
-    (cpu68k.S) rotates over THREE buffers and never reads `video_two_buf`** -
-    the symbol appears ZERO times in cpu68k.S. Only the C `video_flip` honours
-    the pin, and the C `video_flip` is compiled out. `video_pin_start`'s
-    deterministic first target still works; the pinning does not. Harmless
-    today (the shadow makes it moot) but it is an UNWIRED FIX - if anything
-    ever needs 2-buffer mode again, it must go in the asm.
+### ✅✅✅ THE DISCRIMINATOR THAT SETTLED IT (run 3) - `JVTESTCARD=1`
+`main.c`, immediately before `blit_copy_phrase(vshadow, bb, 240)`: throw the
+decoded frame away and write FOUR FLAT BANDS into the shadow instead
+(`0x00 / 0x40 / 0x80 / 0xC0`, 60 lines each). Then the copy, the flip, the OP
+object and the CLUT are the ONLY things between a constant and the screen.
 
-### ✅ THE CAPTURE CHAIN IS NOT THE CAUSE - MEASURED ACROSS ALL 39 CAPTURES
-Scored every `~/.jagq/jobs/*/frame_00.png` for "fraction of pixels far from
-their 3x3 median":
+    jagemu     -> three clean bands, exactly as written
+    silicon    -> **jagq job 137, all three frames SPECKLED**, 566 KB PNGs
+                  (a clean frame of this ROM is ~30-100 KB)
 
-    job  70  22:23  OPENLARA.COF (title screen)      0.2%   <- OUR ROM, PRISTINE
-    job  82  00:00  ship_ai_p408.cof (FMV)          18.9%   <- grain
-    job 117  07:03  jag_quake testcard.cof           0.2%
-    job 125  07:18  r22_try_p408.cof (FMV)          16.4%   <- grain
-    job 126  07:31  jag_viewpoint boot.cof           0.0%
+**A flat band is ONE palette index. It came back as many colours.** That single
+sentence closes the whole upstream half of the hunt:
 
-Every other project's capture in the same window is 0.0-1.8%. **Only our two
-FMV grabs are noisy**, hours apart, with clean third-party captures between
-them. ⇒ the Cam Link / HDMI chain carries a clean 720x480 picture; the grain
-is in what the Jaguar is putting on the screen. (Job 70 is our own ROM at the
-TITLE - gorgeous, no noise - so it is not "openlara vs everyone else" either.)
+  ☠️ NOT the encoder (already knew - 30.26 dB PSNR, `tools/jv_decode.py`)
+  ☠️ NOT the .JV file, NOT the codebook, NOT the VQ indices
+  ☠️ NOT Tom's decode kernel, NOT the token stream, NOT skip/delta semantics
+  ☠️ NOT buffer rotation (run 2 killed that by construction)
+  ⇒ the bytes reaching the Object Processor are NOT the bytes we wrote.
 
-### ★★★★★ THE GRAIN IS DETERMINISTIC, NOT A RACE
-Comparing job 82 frame_00 vs frame_01 - **different clip content, same
-letterbox bar** - inside the top black bar (rows 5-40, cols 110-625):
+### ★★★★★ AND THE CORRUPTION HAS A FIXED SHAPE: A CLEAN BAND
+Per-row speckle on job 137 (capture rows, and the test card's own band edges
+give the scale: src 60 lands at capture ~110, so ~1.83 capture rows per source
+row):
 
-    frac of "black" pixels that are NOT black:  0.528 and 0.528
-    Jaccard of the two corrupt-pixel masks:     **0.991**
+    capture   0- 46   SPECKLED
+    capture  47-102   **CLEAN**      = source rows ~24-56, about 32 lines
+    capture 103-472   SPECKLED
 
-The same pixels are wrong in both grabs. A bus race, a write-posting hazard or
-a lost field would move. ⇒ **the corruption is a deterministic function of the
-content**, so it is reproducible offline the moment we can decode the same
-frame. Structure: blobs ~1 source pixel, autocorrelation dead by lag 3, and NO
-period at 2/4/8/16/32 - so it is **not** byte-, long- or phrase-aligned, which
-rules out the whole "wrong stride / half-repaired object" family.
-⬜ **RUN 3 STARTS HERE:** decode the shipped clip frame offline
-(`tools/jv_decode.py`) or grab jagemu's framebuffer at the same frame index,
-and diff it against `~/.jagq/jobs/82/frame_00.png` pixel by pixel. Then
-classify the wrong values: equal to the PREVIOUS frame (staleness) / equal to a
-NEIGHBOURING codebook entry (index off-by-n) / correct index but wrong colour
-(CLUT). That single diff picks one of three families.
-☠️ BLOCKER: the .JV payload lives in `/tmp/cofout11` and **/tmp was wiped**.
-Rebuild it with `tools/build_cof.sh <disc> <out>` before run 3 can do this.
+The same band is clean in the two *content* captures too (job 82 shows it as a
+solid grey block, job 125 the same) - **same rows, three different ROMs**. So
+roughly 32 consecutive scanlines survive intact and everything else is hit.
+A whole-frame effect with a contiguous exempt band is a RASTER-TIMED
+phenomenon, not a data one.
 
-### ✅✅ FIXED THIS RUN - A REAL OUT-OF-BOUNDS WRITE IN THE CLIP PLAYER
-The FMV audio ring wrote **7,224 bytes past the end of `g_arena`**, every clip.
+### ⬜ RUN 4 STARTS HERE - ONE MORE ARM SPLITS THE LAST TWO
+Two candidates remain and they are cured differently:
+  1. **The copy**: `blit_copy_phrase` returns 1 on the FIRST `B_CMD & BLIT_IDLE`
+     it sees, polled IMMEDIATELY after writing `B_CMD` - and cobweb b8dd333
+     added a *blitter BUSY settle window* to jagemu for exactly this shape
+     (`bcmd_poll_in_settle`). If silicon reads IDLE during the settle, the copy
+     "succeeds" before it starts. ⚠ On its own this predicts a CONTIGUOUS
+     unwritten region, not speckle, so it is the weaker of the two - but the
+     same settle read is in `video_flip_asm`'s completion barrier.
+  2. **The display**: the OP starved off the bus while it fetches an 8bpp
+     scaled object, with the GD sector reads, the audio ring copy and Jerry's
+     I2S all live. `jaguar-shared/hw/RESOURCES.md`: "a bus-hogging RISC kernel
+     starves the Object Processor"; the OP scaler is documented at 15-20x bus
+     cost. A raster-timed exempt band fits this and NOT (1).
+  ✅ THE ARM: `JVTCONLY` - test card + **no GD read, no audio, no decode kick,
+     no 68k token walk**; just fill, copy, flip, forever. Quiet bus.
+        clean  -> it is CONTENTION; the fix is pacing/priority, and the FMV is
+                  a bandwidth problem like everything else on this machine
+        speckled -> it is the copy or the OP object itself, and the next cut is
+                  swapping `blit_copy_phrase` for the pixel-mode `blit_copy`
+                  (5ms -> 38ms a frame, but it answers the question)
+☠️ Any code change re-rolls the A10 pad. **PADTEXT=408 booted the test card**
+(job 137) - roll 408 FIRST. All six pads of the current card build are already
+on disk at `WORK_ROMS/tc_p*.cof`.
 
-    aring = (int8_t *)mbuf          6 slots x 4096 = 24,576 B needed
-    mbuf  = int8_t[2][5120]                       = 10,240 B declared
-                                    -> 14,336 B past mbuf,
-                                       7,224 B past g_arena itself
-
-`mbuf` was `[2][12288]` (= 24,576 B) when this ring was written and was later
-trimmed to `[2][5120]` to shrink the arena; the ring's `6*4096` was never
-re-derived from it. Read off the link map: g_arena +66,120 ends at $152050,
-the ring ended at $153A48 - straddling `ent_pk_blob`, `ent_br_blob`,
-`ent_sw_blob`, `ent_door_blob`. Slots 4 and 5 are past the end, and a
-multi-second clip cycles all six, so **every clip reached it**.
-✅ Fixed: the ring now sits on the DEAD `ptkA`/`ptkB` token stashes
-(`rblob + VID_ARING_OFF`, 30,536 B free to the end of g_arena - the stashes
-have not been written since the kick started reading straight off the stream
-buffer), with `VID_ARING_OFF/SZ` defined **beside the union they index** and a
-`typedef char vid_aring_fits[...]` that fails the BUILD, not the picture.
-Verified: builds clean, ROM 1,540,308 B, jagemu 240 frames `illegal:0`, live
-picture; new map shows the ring 5,960 B inside g_arena.
-☠️ **This is NOT proven to be the grain** - it lands in the entity blobs, not
-in `g_vidscratch` or the framebuffers. It is a separate real bug that was
-found on the way. Do not report it as the FMV fix.
-★ The transferable lesson: **a buffer named in a COMMENT is not a buffer the
-compiler checks.** The size that mattered lived 2,800 lines away and moved
-without this code hearing about it.
-
-### ☠️ /tmp WAS WIPED (reboot before run 2)
-Everything the last run left in /tmp is gone: `/tmp/cofout11`, all six pad
-ROMs, `/tmp/conf.cof`, `/tmp/gym.cof`, `/tmp/r22_try_p408.cof`, and the
-**pinned toolchain**. Restored the toolchain in ~1 min:
-
-    git -C <cobweb> worktree prune
-    git -C <cobweb> worktree add /tmp/cobweb-old 59e5896
-    (cd /tmp/cobweb-old/sim && cargo build --release)
-
-⬜ The PAYLOAD is still gone and has to be rebuilt from the user's disc before
-any FMV work or any rig roll. ★ Worth moving the pin out of /tmp permanently.
+### ✅ THE OFFLINE RIG IS REBUILT AND IS NOW OUTSIDE /tmp
+    WORK_ASSETS/FMV/           CORELOGO.FMV CAFE.FMV SNOW.FMV INTRO.STR
+                               (tools/extract_disc.py, WANT_FMV=...)
+    WORK_ASSETS/CORE.JV        193 frames
+    WORK_ASSETS/INTRO.JV       1568 frames  <- the clip the rig captures at 35 s
+    WORK_ROMS/tc_p*.cof        the six JVTESTCARD pads
+★ `jagemu screenshot build/openlara.cof --sd <dir> --frames 700` plays INTRO.JV
+in ~19 s and is the offline twin of the rig grab. With only INTRO.JV on the SD
+the player skips EIDOS/CORE instantly, so frame 700 lands mid-clip.
+★ The capture at 35 s is **INTRO.JV frame ~137** (matched by cross-correlation
+against `tools/jv_decode.py` output; the "pyramid" is the sun over the mesas).
 
 ### ⬜ ALSO OPEN
   1. ✅ `r22_try_p408.cof` DID run - jagq job 125, 07:18 today. It is not a rig
