@@ -81,6 +81,7 @@ def shot(path, size=None):
 
 
 def main():
+    gym = "--gym" in sys.argv          # Lara's Home (ring page 4), not the Caves
     sd = sys.argv[sys.argv.index("--sd") + 1] if "--sd" in sys.argv else "/tmp/cofout8"
     out = sys.argv[sys.argv.index("--out") + 1] if "--out" in sys.argv else "/tmp/relcheck"
     rom = os.path.join(sd, "OPENLARA.COF")
@@ -117,9 +118,22 @@ def main():
         ok, det = shot(os.path.join(out, "1_ring.png"))
         record("boots to the ring", ok, det)
 
-        for n in (1, 2):                            # ☠️ the ring needs TWO presses
-            ctl("input", "a"); ctl("run", 30)
-            ctl("release"); ctl("run", 240)
+        if gym:
+            # ☠️ LARA'S HOME IS RING PAGE 4, AND THE RING SWALLOWS INPUT
+            # WHILE IT SPINS. At 60 fields per press only 2 of 4 registered once
+            # and the ring sat on "Sound" while the script believed it was on
+            # page 4. So give the spin 200 fields and PHOTOGRAPH every step -
+            # the page is read, never assumed. One A press selects from here;
+            # the passport two-press dance belongs to the New Game path only.
+            for _k in range(4):
+                ctl("input", "right"); ctl("run", 30)
+                ctl("release"); ctl("run", 200)
+                shot(os.path.join(out, "1b_page%d.png" % _k))
+            ctl("input", "a"); ctl("run", 30); ctl("release"); ctl("run", 240)
+        else:
+            for n in (1, 2):                            # ☠️ the ring needs TWO presses
+                ctl("input", "a"); ctl("run", 30)
+                ctl("release"); ctl("run", 240)
         ok, det = shot(os.path.join(out, "2_selected.png"))
         record("ring selects", ok, det)
 
@@ -137,26 +151,39 @@ def main():
         # and look for movement, bounded; the frame is captured only once she has
         # demonstrably moved, which also guarantees it is gameplay and not a
         # cutscene. ★ This retries the PRESS, never the verdict.
+        # ☠️ MEASURE BOTH AXES. The Caves start walks her along Z, so a z-only
+        # delta looked fine there - and in LARA'S HOME she walks along **X**
+        # (run 103's tour: x 37376 -> 30796, z unchanged). The z-only check
+        # reported "moved 0 units after 13000 fields" for a level that is
+        # perfectly controllable, and the silent audio that came with it was
+        # just the absence of footsteps she never took.
+        # ★ This is run 84's lesson again: MVDIAG watched only X and called a
+        # +Z walk "nothing refused". An instrument that reads one axis will
+        # eventually be pointed at the other one.
+        def where():
+            return ((peek32(syms["g_lax"]) if "g_lax" in syms else 0) or 0,
+                    (peek32(syms["g_laz"]) if "g_laz" in syms else 0) or 0)
+
         ctl("run", 4000)
-        z0 = zc = peek32(syms["g_laz"]) if "g_laz" in syms else None
+        p0 = where()
         moved, waited = 0, 4000
         for _try in range(10):
             ctl("audio", os.path.join(out, "idle.wav"))
             ctl("input", "up"); ctl("run", 300)
             ctl("audio", os.path.join(out, "walk.wav"))
             ctl("release")
-            zc = peek32(syms["g_laz"]) if "g_laz" in syms else None
-            moved = abs((zc or 0) - (z0 or 0))
+            p1 = where()
+            moved = abs(p1[0] - p0[0]) + abs(p1[1] - p0[1])
             if moved > 2000:
                 break
             ctl("run", 600); waited += 900
-            z0 = peek32(syms["g_laz"]) if "g_laz" in syms else None
+            p0 = where()
         ok, det = shot(os.path.join(out, "3_gameplay.png"))
         health = peek32(syms["g_health"]) if "g_health" in syms else None
         record("gameplay renders", ok, "%s  [%d fields]" % (det, waited))
         record("health is full", health == 1000, "g_health=%s" % health)
         record("she moves under the pad", moved > 2000,
-               "z moved %d units after %d fields" % (moved, waited))
+               "moved %d units (|dx|+|dz|) after %d fields" % (moved, waited))
 
         ai = audiocheck(os.path.join(out, "idle.wav"))
         aw = audiocheck(os.path.join(out, "walk.wav"))

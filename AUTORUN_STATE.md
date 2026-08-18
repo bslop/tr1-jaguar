@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 114
+RUN: 115
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,38 +54,48 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ✅✅ BOTH QUALITY ARMS PASS THE GATE. THE PICTURE/SPEED CHOICE IS NOW FREE.
+# ⬜☠️ LARA'S HOME IS SILENT IN-GAME. THE CAVES IS NOT. SAME ROM, SAME GATE.
 
-`tools/release_check.py` gives **7/7 on both** shipping payloads, so whichever
-the user picks is already verified end to end:
+`release_check.py` now covers BOTH levels (`--gym` drives ring page 4). The
+mansion passes 6 of 7 - and the one failure is real, measured, and specific:
 
-    QUALITY=playable  /tmp/cofout8   320x**80**   67 colours   z moved **17,484**
-    QUALITY=pretty    /tmp/cofout9   320x**120**  76 colours   z moved **14,476**
+    CAVES    walking rms **-35.5 dBFS**, peak -15.5   (moved 17,484 units)
+    MANSION  walking rms **-120.0 dBFS**, 100% silent (moved  8,548 units)
 
-Same ROM recipe, same 300 fields of held UP, same seat. ★ The gate measured the
-frame-rate cost INDEPENDENTLY without meaning to: distance is per-FRAME, so
-covering 14,476 units where the other covers 17,484 means the 120-line build
-rendered **~17% fewer frames** - arriving at run 106's +14.7% from the opposite
-direction, by a completely different mechanism. Two independent measurements
-agreeing is worth more than either alone.
+Same binary, same session structure, movement CONFIRMED in both, so "she never
+walked so there were no footsteps" is ruled out - that was the z-only artefact
+below, and it is fixed. Idle is silent in the mansion too, so there is no music
+either.
 
-### ☠️ REMEMBER WHICH ONE SHIPS - I GOT IT BACKWARDS ONCE
-`tools/build_cof.sh:75`: `QUALITY=playable` **is** `VRESN=80`, and
-`PLAY_BUILD.md`'s recipe passes `playable`. **80 lines is the status quo and the
-+14.7% is already banked.** The open choice is whether to PAY ~15% to go
-`pretty` at 120 lines for the sharper picture (76 colours vs 67, visibly finer
-vertical detail). `/tmp/quality_ab.png` shows both, correctly labelled this time,
-each scaled to the 240-line window the TV fills - sent to the user.
+☠️ **This may be unimplemented rather than broken.** The mansion is a different
+level SET (`g_useset=1`) and nothing has ever verified its audio; TR1's Lara's
+Home does have footsteps. Do NOT file it as a regression without checking
+whether mansion SFX were ever wired.
+⬜ CHEAPEST NEXT TEST: read `g_sfx_ok` after the mansion loads. It is set once at
+init from `g_jerry_ok`, so if it still reads 1 the gate is open and the samples
+are missing; if it reads 0 something in the level-set switch turned sound off.
+
+### ☠️☠️ MY CHECK READ ONE AXIS - AGAIN. THIS IS RUN 84'S LESSON REPEATING.
+The gym gate first reported **"z moved 0 units after 13000 fields"** for a level
+that is perfectly controllable. The Caves start walks along Z, so a z-only delta
+looked correct there; **Lara's Home walks along X** (run 103's tour: x 37376 ->
+30796, z UNCHANGED). Measuring `|dx|+|dz|` turned 0 into 8,548 on the FIRST
+attempt. ★ Run 84 hit exactly this: MVDIAG watched only X and called a +Z walk
+"nothing refused". An instrument that reads one axis will eventually be pointed
+at the other one - and the false silence came bundled with it, which is how one
+bad measurement manufactures two defects.
+
+### ✅ ALSO THIS RUN: THE RING PAGE IS READ, NOT ASSUMED
+`--gym` photographs each of the four rotations; `1b_page3.png` shows the ring on
+**"Lara's Home"** with "A Select". The old failure mode (only 2 of 4 presses
+registering, ring left on "Sound") cannot pass silently.
 
 ### ⬜ NEXT
-  1. **The user's call on `pretty` vs `playable`** - both verified, no risk
-     either way. This is the whole of the run-100 checkpoint's "frame rate"
-     option, now with pictures and two independent measurements.
-  2. **The rig rules still contradict the autorun prompt** (run 111): his docs
-     say the capture card is back and `jagq` QUEUES rather than refuses; the
-     prompt says unplugged and leave it batched. Untouched pending his word.
-     `/tmp/TESTCARD.COF` is staged for the first console session.
-  3. No known gameplay defect. Run `release_check.py` before any push.
+  1. **Mansion audio** - the `g_sfx_ok` test above. It is the only open defect
+     candidate on either level.
+  2. The user's `pretty` vs `playable` call - both arms pass 7/7 (run 113).
+  3. Rig rules still contradict the autorun prompt (run 111); `/tmp/TESTCARD.COF`
+     staged. Untouched.
 
 ### ⚠️ BUILD STATE
 `/tmp/cofout8/` = the SHIPPING payload with ALL THREE gameplay fixes (COF +
