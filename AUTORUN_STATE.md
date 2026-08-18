@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 13
+RUN: 14
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,69 +54,54 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ⏸ **THE USER IS SWAPPING IN ANOTHER JAGUAR** (2026-08-18, mid-run 12).
-# EVERY HARDWARE RESULT IN THIS FILE WAS TAKEN ON THE OLD CONSOLE. RE-BASELINE
-# BEFORE COMPARING ANYTHING ACROSS THE SWAP.
+# ★★★★★ **THE CONSOLE IS EXONERATED** - the user swapped in a DIFFERENT JAGUAR
+# and reported "same issue", and the sweep agrees. ⏸ A different GAMEDRIVE is
+# now in, but it does NOT enumerate on USB yet.
 
-### ★★★★★ WHY THE SWAP IS THE RIGHT TEST - AND WHAT IT WOULD MEAN
-A **marginal console that misbehaves cold and settles as it warms** fits every
-observation at once, which no software hypothesis has managed:
-  * silicon-only, and no emulator reproduces it (they model no analogue margin)
-  * **clears with time** - the same ROM at the same pad is speckled at t=35 s
-    and perfectly clean at t=70 s and t=86 s (jobs 294 vs 299)
-  * exquisitely sensitive to code LAYOUT (`PADTEXT`) and to bus load, which is
-    what a marginal timing margin looks like from software
-  * hits exactly the content that plays FIRST - EIDOS, CORE, the start of INTRO
-  * leaves the title, the game and CAVES.JV (all later) looking right, which is
-    the user's own objection and is EXPLAINED rather than contradicted by it
-⬜ **If the new console renders the boot clips clean, the fault was never in
-this code.** That is a two-turn test and it outranks everything else queued.
-⬜ If it is still corrupt, the console is exonerated and the campaign resumes -
-with the time axis now known to matter.
+### ✅ THE NEW-CONSOLE SWEEP (job 315, full shipping build with video, pad 136)
+    t=12s 54.8% · 18s 57.4% · 24s 55.2% · 30s 43.0% · 36s 43.3% · 42s 38.4%
+    t=48s 37.4% · 54s 36.2% · 60s 43.4% · 66s+ NO VIDEO SIGNAL
+Corrupt across the whole first minute, same appearance as the old console.
+⇒ **not the console.** (User, verbatim: *"Same issue, different Jaguar."*)
+☠️ It also drops the video signal entirely at ~66 s - worth chasing separately;
+1 KB grabs are NO SIGNAL, not a black picture.
 
-### ⬜ RUN 13 STARTS HERE - THE RE-BASELINE, IN THIS ORDER
-1. ⬜ **Roll a booting pad first.** The regression fix (run 11) changed the code
-   layout, so the A10 lottery is re-rolled and **pad 272 no longer boots** -
-   jobs 303/305 came back 12 and 4 blank frames respectively. Build set is on
-   disk: `WORK_ROMS/fx{0,256,1024}_p{272,136,0}.cof` and
-   `WORK_ROMS/nbc_p{272,136,0,408}.cof`.
-2. ⬜ **The time sweep**: `fx0_p<good>.cof --frames 12 --interval 6 --delay 12`.
-   Gives the transition time and says whether corruption RETURNS at each clip
-   boundary (per-clip warm-up) or only clears once (power-on warm-up).
-3. ⬜ **The user's objection, answered directly**: `nbc_p<good>.cof`
-   (`NOBOOTCLIPS=1`) puts the TITLE on screen at t~5 s. Capture at t=10-25 s,
-   inside the bad window.
-      title CLEAN early  -> the display is fine cold and the FMV path is not
-      title DIRTY early  -> it is the machine/warm-up, not the FMV
-   ☠️ This is the one test that separates "time" from "the FMV", because every
-   other measurement has them confounded - the title and the game only ever
-   happen late.
+### ☠️☠️ AND I MUST WITHDRAW THE "IT CLEARS AT 70 s" RESULT
+Job 299's clean frames came from `sg1024_p272.cof`, which carried the run-8
+**object-shape regression** (plain TYPE-0 instead of scaled TYPE-1). So "clean
+at t=70 s" cannot be attributed to time - it may have been the regressed object
+shape rendering *correctly*, which would be a finding of the opposite kind.
+⬜ **THAT IS NOW A LEAD, NOT A RETRACTION:** if a TYPE-0 plain object renders
+CLEAN where the shipping TYPE-1 scaled object renders corrupt, the fix is to
+stop displaying the clips through the game's scaled object - which is exactly
+what the user suspected on their first question ("a high video mode so you
+don't need to switch"). Re-test it DELIBERATELY, at one pad, with the mask.
 
-### ☠️ THE RIG WAS BADLY FLAKY BEFORE THE SWAP
-`LIBUSB_ERROR_TIMEOUT` / `_NO_DEVICE` / exit -6 / exit -15 on most uploads for
-the last hour, needing a `jagpower cycle` between nearly every turn. Some of
-that was the console coming out. **Do not read any pre-swap "blank" as an A10
-miss without checking the job log for a USB error first** - blank-because-it-
-did-not-upload and blank-because-the-pad-lost look identical in the summary.
+### ⬜ RUN 14 STARTS HERE
+1. ⏸ **The new GameDrive is not enumerating** - `jagq` says
+   `GameDrive OFFLINE (03eb:800e)`, `lsusb` shows zero matches, and a
+   `jagpower cycle` did not bring it back. Reported to the user; do not hammer
+   the link. `jagq status` will show it when it returns.
+2. ⬜ **The TYPE-0 vs TYPE-1 A/B, done properly.** `g_op_plain240` is now
+   correctly declared and gated on `JVDECMASK` bit 16. Build masks 0 and 16 at
+   ONE pad (they differ by one byte) and capture both at the SAME delay.
+   This is the single most promising open lead and it is one turn.
+3. ⬜ Then the NOBOOTCLIPS "title early" test (`WORK_ROMS/nbc_p*.cof`) to
+   separate the display from the FMV path.
 
-### ✅ WHAT IS SOLID AND SURVIVES THE SWAP (all software, all verified offline)
-  * ✅ **Two 68k DRAM spins fixed** - the clip pacing loop and
-    `gpu_jvdec_wait`'s 240,000-read mailbox poll. The fixed cobweb detector
-    scores the pre-fix ROMs 4216 and 6100 and ours **5**, against jag_viewpoint's
-    measured hardware budget of 128. Right regardless of what the console does.
-  * ✅ **The FMV audio ring overran `g_arena` by 7,224 bytes** every clip
-    (`mbuf` was halved 2,800 lines away and the ring never re-derived its size).
-    Fixed with a compile-time `sizeof(g_arena)` assert.
-  * ✅ **A jcc68k regression of my own**, run 8-10: `g_op_plain240` used 80 lines
-    before its definition, accepted SILENTLY, so those builds shipped the wrong
-    Object Processor object shape. Fixed; filed against jcc68k.
-  * ✅ Pushed upstream: the cobweb 68k-poll detector fix (`f377c95`), the
-    porting-notes writeups (`ff74328`, `674b403`), the `jagemu peek` filler
-    defect + `dump` workaround (`be79e43`, `ee0e4d6`), the jcc68k report
-    (`6c278b4`).
-  * ☠️ Method rules earned the hard way: never A/B across two PADTEXT values ·
-    never across two capture TIMES · never judge a capture by file size · LOOK
-    at every capture · rebuild the last known-good commit FIRST.
+### ✅ SOLID, CONSOLE-INDEPENDENT, ALREADY SHIPPED IN THE TREE
+  * Two 68k DRAM spins fixed (pacing loop; `gpu_jvdec_wait`'s 240,000-read
+    mailbox poll). Offline gate: our ROM scores **5** where the pre-fix ROMs
+    score 4216/6100, against a hardware budget of 128.
+  * The FMV audio ring overran `g_arena` by 7,224 B every clip - fixed with a
+    compile-time `sizeof(g_arena)` assert.
+  * The jcc68k use-before-definition regression - fixed and filed upstream.
+  * Pushed: cobweb `f377c95`; jaguar-shared `ff74328`, `674b403`, `be79e43`,
+    `ee0e4d6`, `6c278b4`.
+  * ☠️ Method: never A/B across two PADTEXT values · never across two capture
+    times · never judge a capture by file size · LOOK at every capture ·
+    rebuild the last known-good commit FIRST · and **check the job log before
+    reading a blank as an A10 miss** (a USB failure looks identical).
 
 ### ⬜ ALSO OPEN
   1. ✅ `r22_try_p408.cof` DID run - jagq job 125, 07:18 today. It is not a rig
