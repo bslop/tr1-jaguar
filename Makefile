@@ -1596,6 +1596,14 @@ endif
 ifdef JVTCONLY
 CFLAGS   += -DJVTCONLY
 CXXFLAGS += -DJVTCONLY
+# JVTCMASK: which consumer to add back to the quiet-bus baseline.
+#   1 = gd_fread   2 = audio ring   4 = decode kick   (combine freely)
+# ★ It is a `volatile const` in main.c, so changing it changes ONE IMMEDIATE
+#   and NOT the code layout - one A10 pad roll covers every arm. Do not turn
+#   this back into #ifdefs; that is what cost four rig turns in run 4.
+JVTCMASK ?= 0
+CFLAGS   += -DJVTCMASK=$(JVTCMASK)
+CXXFLAGS += -DJVTCMASK=$(JVTCMASK)
 endif
 
 # VIDDIAG: FMV decode-status marker (ghost hunt 2026-08-07)

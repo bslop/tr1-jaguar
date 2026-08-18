@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 5
+RUN: 6
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,59 +54,68 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ★★★★★ THE FMV GRAIN IS **BUS CONTENTION STARVING THE OBJECT PROCESSOR**.
-# MEASURED ON SILICON, BOTH DIRECTIONS, 54.9% -> **0.00%**.
+# ★★★★★ THE FMV GRAIN IS **CONTENTION** (54.90% -> 0.00%, run 4) BUT THE
+# ADDITIVE BISECT CAME BACK **ALL ZERO**. THE AGENT IS SOMETHING ELSE IN THE
+# REAL PLAYER. BISECT FROM THE BAD END NEXT.
 
-### ✅✅✅ THE TWO GRABS THAT PROVED IT (runs 3-4)
-Identical copy, identical flip, identical OP object, identical CLUT. The ONLY
-difference between these two is what else was touching DRAM:
+### THE MEASUREMENTS SO FAR (all silicon, all the same test card)
+    job 137  JVTESTCARD, real player, everything live      **54.90%**
+    job 142/144/150  quiet-bus baseline                      0.00%
+    job 151  + gd_fread    ~7 KB EVERY FIELD (5x the real
+             streaming rate)                                 0.00%
+    job 152  + audio ring  4 KB Blitter move + DSP queue      0.00%
+    job 153  + decode kick Tom, codebook -> shadow            0.00%
+    job 155  + ALL THREE TOGETHER                             0.00%
 
-    JVTESTCARD  flat palette bands, everything else LIVE   job 137  **54.90%** speckle
-    JVTCONLY    same bands, QUIET BUS (no gd_fread, no
-                audio ring, no decode kick, no token walk)  job 142  **0.00%**
-                                                            job 144  **0.00%**
+⇒ **The three things I assumed were the hogs are not.** Contention is still the
+mechanism (run 4 moved it 54.9 -> 0.0 by removing everything), but whatever
+does it is something the additive arm does NOT reproduce.
 
-(0.00% on two different boot pads, two frames each; jagemu renders both arms
-clean, so it can see neither the fault nor the fix.)
+### ☠️ AND ONE HONEST CAVEAT ON THOSE ZEROS
+`profiling-measurement-traps.md` trap 3 is *a null result from an experiment
+that did nothing*, and **these arms carry no proof they ran**. If a `gd_fread`
+returned non-zero, or `jerry_sfx_queue` no-op'd because the voice was never
+STARTED (my arm queues but never calls `jerry_sfx(0,...)`, so Jerry may never
+have DMA'd a sample), the arm is a no-op and reads as a clean pass.
+⬜ **Any re-run of these must paint a visible marker** - e.g. force band 4 to a
+different index once the read/queue/kick has actually succeeded - so "it did
+nothing" cannot masquerade as "it did nothing bad".
 
-**A flat band is ONE palette index and it came back as many colours** - so the
-bytes reaching the OP were not the bytes we wrote, and quietening the bus fixes
-it with no change to the data path at all. That acquits, permanently:
-  ☠️ the encoder · the .JV file · the codebook · the VQ indices · Tom's decode
-  kernel · the skip/delta semantics · buffer rotation (run 2) · and now the
-  Blitter phrase copy and the OP object setup as well.
-★ The shape that named it: a CONTIGUOUS band of ~32 scanlines (src ~24-56)
-comes through clean in every grab across three different ROMs. Data faults do
-not respect scanline bands; a fetch deadline does.
-✅ Written up and pushed to `jaguar-shared` (`JAGUAR_PORTING_NOTES.md` ff74328):
-symptom row + the two-grab discriminator, reconciled with `jag_resident`'s
-bus-hogging-kernel finding (same root cause - starve the OP a little and pixels
-speckle, starve it a lot and the picture bounces).
+### ⬜ RUN 6 STARTS HERE - SUBTRACT FROM THE KNOWN-BAD END
+Additive from clean has now failed; go the other way, from job 137's 54.90%,
+and keep the `volatile const` mask trick (one immediate, byte-identical
+layout - the four arms built this run differ by exactly ONE byte at offset
+73343, verified, and one pad roll covered all of them).
+Knobs that do NOT break the real player's frame loop:
+    bit 0  skip the whole `if (AL)` audio block
+    bit 1  skip the decode kick AND the 68k token walk (the card overwrites
+           the result anyway, so neither is needed for the picture)
+    bit 2  use pixel-mode `blit_copy` instead of `blit_copy_phrase`
+           (5ms -> 38ms a frame, but it tests the copy MODE)
+    bit 3  cap `gd_fread` to one small read a frame instead of the low-water
+           burst - the real one can ask for 24 KB, and ~125ms of cart traffic
+           is TWO display frames, which is the shape a fetch deadline minds
+What is in the real player and NOT in the quiet arm, in likely order:
+    * the low-water `gd_fread` BURSTS (up to 24 KB in one call)
+    * `stream_compact` - a Blitter move of up to ~31 KB a frame
+    * Jerry actually PLAYING (a started voice DMAs continuously; a queued one
+      that was never started does not)
+    * the 15 fps pacing, so a published buffer is displayed for FOUR fields
+      rather than one
 
-### ⬜ RUN 5 STARTS HERE - WHICH HOG? AND BEAT THE PAD LOTTERY WHILE DOING IT
-Three consumers were removed together, so the bisect is still open:
-    (1) `gd_fread` sector reads    ~7 KB every frame off the cart
-    (2) the audio ring copy        `blit_bytes` + the 68k tail, 4 KB batches
-    (3) Tom's decode kick          codebook reads + shadow writes
-☠️ Doing that as three builds costs three PAD ROLLS (this arm took FOUR turns
-to find a booting pad: 408 blank, then 136 and 0 both good).
-★★★★★ **THE TRICK: make the selection a VALUE, not a layout.** Compile all
-three paths in unconditionally and gate each on a bit of
-`static volatile const uint32_t g_tcmask = JVTCMASK;`. Changing the mask
-changes ONE immediate - not the layout - so **one pad roll covers all eight
-combinations**. The codebase already uses this shape (`SRGUARD`, main.c). Pads
-136 and 0 boot the current JVTCONLY layout; keep the layout and only the
-constant moves.
-⬜ Then the fix follows the answer: if (1), the GD reads want spreading or
-moving off the display window; if (2), hand the audio copy to the Blitter
-wholly or batch it outside the active display; if (3), pace the kick.
-
-### ⭐ AND THE SAME QUESTION IS NOW OPEN FOR THE GAME ITSELF
-The game renders 320x120 through the OP's vertical scaler with the Blitter, the
-GPU and Jerry all live - which is the same starvation recipe at higher load.
-Nobody has ever run the quiet-bus test card in the GAME display mode. If the
-world render is also losing OP fetches, some of what reads as "low frame rate"
-may be visible corruption we have never separated from it.
+### ✅ WHAT IS BANKED AND MUST NOT BE RE-DERIVED
+  * The grain is NOT: the encoder · the .JV · the codebook · the VQ indices ·
+    Tom's decode kernel · skip/delta semantics · buffer rotation · the Blitter
+    phrase copy · the OP object setup · the CLUT. Every one of those is in both
+    the 54.90% arm and the 0.00% arm.
+  * ★★★★★ **The arm is a VALUE, not a layout.** `static volatile const uint32_t
+    g_tcmask = JVTCMASK;` in main.c + `JVTCMASK ?= 0` in the Makefile. Four
+    builds, ONE differing byte, one pad roll. Run 4 spent four rig turns on the
+    lottery; this run spent none. Do not turn it back into `#ifdef`s.
+  * PADTEXT=136 boots the JVTCONLY layout (408 does not).
+  * ☠️ A `LIBUSB_ERROR_TIMEOUT` / `exit -6` hit again mid-run and is NOT our
+    ROM: `jagq exec --lease 120 -- jaguar-shared/hw/jagpower cycle` cleared it
+    in 5 seconds and the very next upload was fine.
 
 ### ⬜ ALSO OPEN
   1. ✅ `r22_try_p408.cof` DID run - jagq job 125, 07:18 today. It is not a rig

@@ -5337,44 +5337,88 @@ bootvid_entry:
                 }
                 remain -= 4096;
 #ifdef JVTCONLY
-                /* ☠️ DISCRIMINATOR, NOT A SHIPPING OPTION (run 4). JVTESTCARD
-                   proved the speckle is added DOWNSTREAM of the shadow (a flat
-                   palette index came back as many colours) and that ~32
-                   scanlines survive clean - a raster-timed shape. Two suspects
-                   remain, cured differently:
-                     (a) the OP starved off the bus - the GD sector reads, the
-                         audio ring copy and Jerry's I2S are all live while it
-                         fetches an 8bpp object, and RESOURCES.md has a
-                         bus-hogging kernel starving the OP on this very rig;
-                     (b) the copy or the object itself - `blit_copy_phrase`
-                         returns on the FIRST `B_CMD & BLIT_IDLE` it polls,
-                         immediately after writing B_CMD, and cobweb b8dd333
-                         added a blitter BUSY SETTLE WINDOW to jagemu for
-                         exactly that shape.
-                   So: keep the palette and the codebook (already loaded, one
-                   read each) and then run a QUIET BUS - fill, copy, flip,
-                   forever. No gd_fread, no audio, no decode kick, no token
-                   walk, nothing else touching DRAM.
-                     clean    -> (a) CONTENTION. The FMV is a bandwidth problem
-                                 like everything else on this machine.
-                     speckled -> (b) the copy or the OP object; next cut is the
-                                 pixel-mode blit_copy (5ms -> 38ms, but it
-                                 answers it).
-                   ☠️ It never returns - it is a scope, not a build. */
+                /* ☠️ DISCRIMINATOR, NOT A SHIPPING OPTION (runs 4-5).
+                   Run 4 measured the FMV speckle at 54.90% with every
+                   consumer live and **0.00%** with a quiet bus, same copy,
+                   same flip, same object, same CLUT - so it is DRAM contention
+                   starving the Object Processor's fetch. This arm keeps that
+                   0.00% baseline and adds the consumers back ONE AT A TIME.
+
+                   ★★★★★ THE ARM IS A VALUE, NOT A LAYOUT. Every path below is
+                   compiled in unconditionally and gated on a bit of a
+                   `volatile const` mask, so selecting an arm changes ONE
+                   IMMEDIATE and the code layout is byte-for-byte identical.
+                   That matters because this is the A10 boot lottery's home
+                   ground: run 4 spent FOUR rig turns finding a pad that boots
+                   (408 blank, 136 and 0 good), and a layout change re-rolls
+                   it. One roll now covers all eight combinations.
+                   (Same shape as SRGUARD elsewhere in this file.)
+
+                     bit 0 (1)  gd_fread    ~7 KB a frame off the cart
+                     bit 1 (2)  audio ring  4 KB Blitter move + a DSP queue
+                     bit 2 (4)  decode kick Tom reading the codebook and
+                                            writing the shadow
+
+                   Read the result as: whichever bit takes 0.00% back to
+                   speckle is the hog to fix. ☠️ It never returns. */
                 {
+                    static volatile const uint32_t g_tcmask = JVTCMASK;
                     extern void video_flip(void);
+                    extern void jerry_sfx_queue(const void *, uint32_t);
+                    uint8_t *tkc = 0; uint32_t Lc = 0;
+                    /* one real frame's tokens, for the kick to chew on - a
+                       kick fed garbage is a kick that can run away, and the
+                       point is the BUS LOAD, not the picture */
+                    if (gd_fread((unsigned)vh, vb, 16384, GD_FREAD_CPU) == 0) {
+                        uint32_t Lr = ((uint32_t)vb[0] << 24) | ((uint32_t)vb[1] << 16)
+                                    | ((uint32_t)vb[2] << 8)  | vb[3];
+                        uint32_t ALr = ((uint32_t)vb[4] << 24) | ((uint32_t)vb[5] << 16)
+                                     | ((uint32_t)vb[6] << 8)  | vb[7];
+                        if (Lr && Lr <= 8192u && ALr <= 4096u
+                            && 8u + ALr + Lr <= 16384u) {
+                            tkc = vb + 8 + ALr; Lc = Lr;
+                        }
+                        remain -= 16384;
+                    }
                     for (;;) {
                         uint8_t *bb9;
                         uint32_t *fw9; uint32_t k9b;
                         while (pending_fb)
                             ;
                         bb9 = (uint8_t *)video_backbuffer();
+                        if ((g_tcmask & 4u) && gpu_ok && tkc) {
+                            gpu_jvdec_kick(tkc, 0, tkc, Lc, cbk, vshadow);
+                            (void)gpu_jvdec_wait();
+                        }
+                        /* the card goes down AFTER the kick, so the decode's
+                           bus load is real but the picture under test is not */
                         fw9 = (uint32_t *)vshadow;
                         for (k9b = 0; k9b < (320u*240u)/4u; k9b++)
                             fw9[k9b] = (k9b < (320u* 60u)/4u) ? 0x00000000u
                                      : (k9b < (320u*120u)/4u) ? 0x40404040u
                                      : (k9b < (320u*180u)/4u) ? 0x80808080u
                                                               : 0xC0C0C0C0u;
+                        if (g_tcmask & 1u) {
+                            if (remain < 7168) {          /* rewind: no fseek */
+                                gd_fclose((unsigned)vh);
+                                vh = gd_fopen("INTRO.JV",
+                                              GD_FOPEN_READ | GD_FOPEN_OPEN_EXISTING);
+                                if (vh < 0) break;
+                                remain = gd_fsize((unsigned)vh);
+                            }
+                            if (gd_fread((unsigned)vh, vb, 7168, GD_FREAD_CPU) == 0)
+                                remain -= 7168;
+                        }
+                        if (g_tcmask & 2u) {
+                            int8_t *ar9 = (int8_t *)((uint8_t *)rblob + VID_ARING_OFF);
+                            if (blit_bytes(cbk, ar9, 4096u) != 4096u) {
+                                uint32_t *ad9 = (uint32_t *)ar9;
+                                const uint32_t *as9 = (const uint32_t *)cbk;
+                                for (k9b = 0; k9b < 1024u; k9b++) ad9[k9b] = as9[k9b];
+                            }
+                            if (g_sfx_ok)
+                                jerry_sfx_queue(ar9, 4096u);
+                        }
                         if (!blit_copy_phrase(vshadow, bb9, 240))
                             blit_copy(vshadow, bb9, 240);
                         video_flip();
