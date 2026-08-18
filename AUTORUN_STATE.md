@@ -1,6 +1,6 @@
 # jag_openlara — autorun state
 
-RUN: 113
+RUN: 114
 
 **This file is how work survives a context ending.** A context can end without
 warning; anything the next run needs must be here, not in the conversation.
@@ -54,56 +54,38 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
-# ✅✅ `tools/release_check.py` IS A REAL GATE NOW - 7/7 ON THE SHIPPING ROM.
+# ✅✅ BOTH QUALITY ARMS PASS THE GATE. THE PICTURE/SPEED CHOICE IS NOW FREE.
 
-    boots to the ring        PASS  101 colours
-    ring selects             PASS   60 colours
-    gameplay renders         PASS   67 colours, 0.1% black   [5800 fields]
-    health is full           PASS  g_health=1000
-    she moves under the pad  PASS  z moved 17,484 units
-    audio is being produced  PASS  idle rms -120.0, walking rms -35.5 dBFS
-    walking is not quieter   PASS  peaks -120.0 -> -15.5 dBFS
+`tools/release_check.py` gives **7/7 on both** shipping payloads, so whichever
+the user picks is already verified end to end:
 
-    ✅ RELEASE GOOD - all 7 checks passed
+    QUALITY=playable  /tmp/cofout8   320x**80**   67 colours   z moved **17,484**
+    QUALITY=pretty    /tmp/cofout9   320x**120**  76 colours   z moved **14,476**
 
-One command, `tools/release_check.py --sd /tmp/cofout8`, ~25 minutes. Run it
-before any push.
+Same ROM recipe, same 300 fields of held UP, same seat. ★ The gate measured the
+frame-rate cost INDEPENDENTLY without meaning to: distance is per-FRAME, so
+covering 14,476 units where the other covers 17,484 means the 120-line build
+rendered **~17% fewer frames** - arriving at run 106's +14.7% from the opposite
+direction, by a completely different mechanism. Two independent measurements
+agreeing is worth more than either alone.
 
-### ☠️ THE BUG WAS "IS IT A SCENE" - A CUTSCENE IS ALSO A SCENE
-Run 111's gate waited for a valid frame and exited the moment the SNOW CUTSCENE
-rendered (59 colours, perfectly good), so the pad press landed during the
-cutscene and she moved **0 units** - on the same ROM that had moved her 17,484.
-☠️ And it was NOT an idle timeout: measured on the conformance ROM, **300 vs
-8000 idle fields before the press both move her 7048 units**. Long waits are
-harmless; the cutscene swallows input.
-FIX: gate on **CONTROL**, not on pixels - press and look for movement, bounded,
-and capture the frame only once she has demonstrably moved. That guarantees the
-frame is gameplay, and it retries the PRESS, never the verdict.
-
-### ☠️ AND "IDLE IS SILENT" WAS A FALSE LAW I WROTE FROM ONE SAMPLE
-In-game MUSIC plays, so idle is legitimately loud and no "40 dB above idle" test
-can survive it. Replaced with two claims that do not invent an invariant: audio
-EXISTS, and walking is not QUIETER than idle - with both rms and peak printed so
-a later run can tighten from data. (In this run idle happened to be silent again
-and the numbers are stark, which is exactly why one sample is not a law.)
-
-### ☠️☠️ CORRECTION TO RUN 106: **80 LINES IS WHAT SHIPS**, NOT 120
-`tools/build_cof.sh:75` - `QUALITY=playable` **is** `VRESN=80`, and
-`PLAY_BUILD.md`'s release recipe passes `QUALITY=playable`. So the shipping ROM
-already renders 80 lines and the **+14.7% is already banked**. Run 106 labelled
-120 as "shipping" and 80 as the option; that is backwards, and it was sent to the
-user that way. The real choice is the opposite one: **switch to `QUALITY=pretty`
-(120 lines) and PAY ~14.7% for a sharper picture.** The measurement itself
-stands - 10.41 vs 11.94 fps, and `/tmp/vres_ab.png` still shows the two - only
-the labels were wrong. ★ Caught because the gate's in-game frame came back
-**320x80** when I expected 320x120: a number that contradicts your model is worth
-more than one that confirms it.
+### ☠️ REMEMBER WHICH ONE SHIPS - I GOT IT BACKWARDS ONCE
+`tools/build_cof.sh:75`: `QUALITY=playable` **is** `VRESN=80`, and
+`PLAY_BUILD.md`'s recipe passes `playable`. **80 lines is the status quo and the
++14.7% is already banked.** The open choice is whether to PAY ~15% to go
+`pretty` at 120 lines for the sharper picture (76 colours vs 67, visibly finer
+vertical detail). `/tmp/quality_ab.png` shows both, correctly labelled this time,
+each scaled to the 240-line window the TV fills - sent to the user.
 
 ### ⬜ NEXT
-  1. Tell the user the corrected frame-rate choice (done in this run's reply).
-  2. The rig rules still contradict the autorun prompt - untouched, see run 111.
-     `/tmp/TESTCARD.COF` is staged for whenever that is reconciled.
-  3. No known gameplay defect. `release_check.py` is the pre-push gate.
+  1. **The user's call on `pretty` vs `playable`** - both verified, no risk
+     either way. This is the whole of the run-100 checkpoint's "frame rate"
+     option, now with pictures and two independent measurements.
+  2. **The rig rules still contradict the autorun prompt** (run 111): his docs
+     say the capture card is back and `jagq` QUEUES rather than refuses; the
+     prompt says unplugged and leave it batched. Untouched pending his word.
+     `/tmp/TESTCARD.COF` is staged for the first console session.
+  3. No known gameplay defect. Run `release_check.py` before any push.
 
 ### ⚠️ BUILD STATE
 `/tmp/cofout8/` = the SHIPPING payload with ALL THREE gameplay fixes (COF +
