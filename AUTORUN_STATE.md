@@ -54,6 +54,35 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
+# ✅ PIPELINE VERIFIED TO THE END OF CAVES.JV — ⬜ THE LEVEL DOES NOT COME UP
+# (user, 2026-08-19, on the fixed build from the CARD)
+
+Startup → EIDOS → CORE → INTRO → title ring → Start Game → **CAVES.JV plays to
+the end** → **no Caves level**. Everything up to and including the pre-level
+cinematic is good; the hand-off into the level is where it stops.
+
+### ★ FIRST SUSPECT, AND IT IS MINE: `CAVSLOAD.DAT` IS NOT ON THE CARD
+The Caves loading screen STREAMS from SD, and the order is
+CAVES.JV → loading screen → level. I restored the card after it was wiped and
+wrote OPENLARA.COF + EIDOS/CORE/INTRO/CAVES.JV + MUSIC.PCM + GYMLOAD.DAT, but
+**not CAVSLOAD.DAT** — `build_cof.sh` only ever emits GYMLOAD.DAT, so the gap
+was inherited. It is now generated from the disc's AZTECLOA.RAW (76,800 B, in
+`SD_RESTORE/CAVSLOAD.DAT`) and the push was cancelled mid-queue at the rig
+handover. **One push, do it first.**
+☠️ Caveat, so nobody over-reads this: main.c:7444 says a failed loading-art
+read "falls through to the text panel", so a missing file SHOULD degrade, not
+hang. If the level still does not come up with the file present, the lead is
+dead and the level-load path itself is next.
+
+### ✅ WHAT THE SAME RUN PROVED
+  * the FMV fix holds on the shipping build, from the CARD, all four clips
+  * title ring renders and takes input
+  * ⬜ the title MUSIC CUTS OUT when stepping between ring options (user) —
+    MUSDIAG is built for exactly this: `musdiag_p{136,0,272,408}.cof`,
+    panel rows[5] = musgap<<24 | musloop<<16 | musfill
+
+
+
 # ☠️☠️☠️ **THE FMV CORRUPTION IS A jcc68k MISCOMPILE — NOT THE CONSOLE, NOT THE
 # CODE, NOT THE ASSETS.** Found 2026-08-18 by the USER'S hypothesis ("it worked
 # before the automation"), which three sessions of bus-contention theory had
