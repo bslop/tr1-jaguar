@@ -6401,6 +6401,7 @@ bootvid_entry:
                   }
               }
               else if (mh >= 0 && g_sfx_ok && g_musvol) {
+#ifdef VIDPANEL
                   /* MUSDIAG: worst gap between consecutive title-loop
                      iterations. The refill runs at most once per iteration,
                      so a stall HERE is what starves the voice. */
@@ -6410,6 +6411,7 @@ bootvid_entry:
                         if (d9 > vp_musloop) vp_musloop = d9;
                     }
                     vp_musprev = frame_count; }
+#endif
                   /* gapless service: the pump promoted the queued buffer
                      (NCNT==0) -> refill the dead one and re-queue it.
                      CHUNKED (2026-08-06): the fill used to be one 8KB
@@ -6443,8 +6445,10 @@ bootvid_entry:
                               GD_FOPEN_READ | GD_FOPEN_OPEN_EXISTING);
                           mleft = mh >= 0 ? msz : 0;
                       }
+#ifdef VIDPANEL
                       { extern volatile uint32_t frame_count;
                         vp_musarm = frame_count; }        /* MUSDIAG: armed */
+#endif
                       mfdead = mplay ^ 1;
                       mfgoal = mleft < (int)sizeof(mbuf[0]) ? mleft
                                                             : (int)sizeof(mbuf[0]);
@@ -6473,10 +6477,12 @@ bootvid_entry:
                                    and we re-queue the slot we just armed. The
                                    sfx path does this; the music path never did. */
                                 jerry_audio_stale();
+#ifdef VIDPANEL
                               { extern volatile uint32_t frame_count;
                                 uint32_t g9 = frame_count - vp_musarm;
                                 if (g9 > vp_musgap) vp_musgap = g9;
                                 vp_musfill++; }           /* MUSDIAG */
+#endif
                               mplay = mfdead; mfo = -1;
                           }
                       } else mfo = -1;               /* read fault: retry swap */
