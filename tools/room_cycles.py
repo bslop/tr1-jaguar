@@ -17,6 +17,13 @@ Needs:  build/gpu_geotex.bin (make the ship flag set first) and the level set
 """
 import os, struct, subprocess, sys, tempfile
 
+def _disc(p):
+    """Resolve a level-set file: disc/ first (2026-08-19 layout), then the old
+    tree root, so a tool works either side of the move."""
+    import os as _o
+    d = _o.path.join(_o.path.dirname(p), "disc", _o.path.basename(p))
+    return d if _o.path.exists(d) else p
+
 D = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # ☠️ THE COBWEB CHECKOUT MOVED and this path was never updated, so the tool had
 # been dead with a FileNotFoundError - which is why no one noticed it was also
@@ -42,7 +49,7 @@ FB = 0x1A0000
 PREFIX = "mrt"
 
 def _p(name):
-    return os.path.join(D, PREFIX + name)
+    return _disc(os.path.join(D, PREFIX + name))
 
 def sintab(a):
     import math

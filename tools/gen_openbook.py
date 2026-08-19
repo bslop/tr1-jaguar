@@ -20,14 +20,21 @@
 # and REWRITES pass2_geom.bin only.
 import os, struct
 
+def _disc(p):
+    """Level-set files moved to disc/ (gitignored) on 2026-08-19. Prefer that,
+    fall back to the old tree root so the tool works either side of the move."""
+    import os as _o
+    d = _o.path.join(_o.path.dirname(p), "disc", _o.path.basename(p))
+    return d if _o.path.exists(d) else p
+
 D = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-gb = open(os.path.join(D, "pass2_geom.bin"), "rb").read()
+gb = open(_disc(os.path.join(D, "pass2_geom.bin")), "rb").read()
 aw, ah = struct.unpack(">HH", gb[6:10])
 
 # paint a solid dark-grey spine strip into a spare atlas corner (the
 # cover art's dark texels are mottled red-black and read as BACKGROUND
 # showing through the gutter on silicon)
-atl = bytearray(open(os.path.join(D, "pass2_atlas.bin"), "rb").read())
+atl = bytearray(open(_disc(os.path.join(D, "pass2_atlas.bin")), "rb").read())
 for y in range(288, 294):
     for x in range(240, 252):
         atl[y*aw + x] = 246              # grey ramp (49,49,49)

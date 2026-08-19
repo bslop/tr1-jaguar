@@ -29,10 +29,17 @@ D = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # forward is (SIN(yaw), COS(yaw)) with yaw in 16-bit units, 65536 = full turn
 import math
 
+def _disc(p):
+    """Level-set files moved to disc/ (gitignored) on 2026-08-19. Prefer that,
+    fall back to the old tree root so the tool works either side of the move."""
+    import os as _o
+    d = _o.path.join(_o.path.dirname(p), "disc", _o.path.basename(p))
+    return d if _o.path.exists(d) else p
+
 
 def rooms(prefix):
-    idx = open(os.path.join(D, prefix + ".bin"), "rb").read()
-    geom = open(os.path.join(D, prefix + "_geom.bin"), "rb").read()
+    idx = open(_disc(os.path.join(D, prefix + ".bin")), "rb").read()
+    geom = open(_disc(os.path.join(D, prefix + "_geom.bin")), "rb").read()
     n = struct.unpack_from(">H", idx, 0)[0]
     out = []
     for r in range(n):
@@ -73,8 +80,8 @@ def main():
     # checked. ★ HOLEVIS proves nothing was DRAWN there; it does not prove
     # something SHOULD have been. Uncovered is not the same as broken.
     try:
-        _idx = open(os.path.join(D, pfx + ".bin"), "rb").read()
-        _sect = open(os.path.join(D, pfx + "_sect.bin"), "rb").read()
+        _idx = open(_disc(os.path.join(D, pfx + ".bin")), "rb").read()
+        _sect = open(_disc(os.path.join(D, pfx + "_sect.bin")), "rb").read()
         _, _soff = struct.unpack_from(">II", _idx, 8 + room * 8)
         _soff &= 0x7FFFFFFF
         _xS, _zS = struct.unpack_from(">HH", _sect, _soff)

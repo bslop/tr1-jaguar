@@ -15,6 +15,13 @@ prefix straight from the sector data.
 """
 import json, os, struct, subprocess, sys, time
 
+def _disc(p):
+    """Level-set files moved to disc/ (gitignored) on 2026-08-19. Prefer that,
+    fall back to the old tree root so the tool works either side of the move."""
+    import os as _o
+    d = _o.path.join(_o.path.dirname(p), "disc", _o.path.basename(p))
+    return d if _o.path.exists(d) else p
+
 D = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 JE = "/home/jvilla/Documents/Git/jag_openlara/cobweb/sim/target/release/jagemu"
 INST = "rblack"
@@ -47,8 +54,8 @@ def poke(addr, val, width=4):
 
 def centres(prefix):
     """Middle-ish walkable cell of each room, in world coords."""
-    idx = open(os.path.join(D, prefix + ".bin"), "rb").read()
-    sect = open(os.path.join(D, prefix + "_sect.bin"), "rb").read()
+    idx = open(_disc(os.path.join(D, prefix + ".bin")), "rb").read()
+    sect = open(_disc(os.path.join(D, prefix + "_sect.bin")), "rb").read()
     out = []
     for r in range(struct.unpack_from(">H", idx, 0)[0]):
         _, soff = struct.unpack_from(">II", idx, 8 + r * 8)

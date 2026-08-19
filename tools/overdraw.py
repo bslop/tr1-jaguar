@@ -15,6 +15,13 @@ Needs:  build/gpu_geotex.bin (make the ship flag set first), mrt.bin,
 """
 import os, struct, subprocess, sys, tempfile
 
+def _disc(p):
+    """Level-set files moved to disc/ (gitignored) on 2026-08-19. Prefer that,
+    fall back to the old tree root so the tool works either side of the move."""
+    import os as _o
+    d = _o.path.join(_o.path.dirname(p), "disc", _o.path.basename(p))
+    return d if _o.path.exists(d) else p
+
 D = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 JTEST = os.path.expanduser("~/Documents/Git/cobweb/sim/target/release/jtest")
 KERN = os.path.join(D, "build/gpu_geotex.bin")
@@ -30,8 +37,8 @@ def sintab(a):
     return int(round(math.sin((a & 255) * 2 * math.pi / 256) * 65536))
 
 def build_room_inputs(idx_room):
-    mrt = open(os.path.join(D, "mrt.bin"), "rb").read()
-    geom = open(os.path.join(D, "mrt_geom.bin"), "rb").read()
+    mrt = open(_disc(os.path.join(D, "mrt.bin")), "rb").read()
+    geom = open(_disc(os.path.join(D, "mrt_geom.bin")), "rb").read()
     n = struct.unpack(">H", mrt[0:2])[0]
     offs = []
     for i in range(n):
@@ -176,7 +183,7 @@ def main():
         if a.startswith("--rooms"): rooms = [int(x) for x in a.split("=",1)[1].split(",")]
         if a.startswith("--yaw"):   yaw = int(a.split("=",1)[1])
         if a.startswith("--budget"): budget = int(a.split("=",1)[1])
-    mrt = open(os.path.join(D, "mrt.bin"), "rb").read()
+    mrt = open(_disc(os.path.join(D, "mrt.bin")), "rb").read()
     n = struct.unpack(">H", mrt[0:2])[0]
     if rooms is None: rooms = list(range(n))
     SCREEN = 320 * 120        # LOWRES render target

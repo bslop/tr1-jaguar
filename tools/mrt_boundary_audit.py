@@ -18,6 +18,13 @@ Never writes anything. The fix lives elsewhere (surgical mrt_sect patch).
 """
 import os, struct, sys
 
+def _disc(p):
+    """Level-set files moved to disc/ (gitignored) on 2026-08-19. Prefer that,
+    fall back to the old tree root so the tool works either side of the move."""
+    import os as _o
+    d = _o.path.join(_o.path.dirname(p), "disc", _o.path.basename(p))
+    return d if _o.path.exists(d) else p
+
 D = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # ☠️ PREFIX: this tool was Caves-only - every path said "mrt". Lara's Home has
 # the SAME collision classes and had never been audited, purely because the
@@ -124,8 +131,8 @@ def make_fd_walkers(floors, nfloor):
     return sector_portal, sector_slant
 
 def parse_baked():
-    mrt = open(os.path.join(D, PREFIX + ".bin"), "rb").read()
-    sect = open(os.path.join(D, PREFIX + "_sect.bin"), "rb").read()
+    mrt = open(_disc(os.path.join(D, PREFIX + ".bin")), "rb").read()
+    sect = open(_disc(os.path.join(D, PREFIX + "_sect.bin")), "rb").read()
     n = struct.unpack(">H", mrt[0:2])[0]
     baked = []
     for i in range(n):
@@ -175,7 +182,7 @@ def load_entity_cells():
     bridges, others = set(), set()
     path = os.path.join(D, PREFIX + "_spawn.h")
     for m in re.finditer(r"\{\s*(\d+),\s*\d+,\s*\d+,\s*(-?\d+),\s*-?\d+,"
-                         r"\s*(-?\d+),", open(path).read()):
+                         r"\s*(-?\d+),", open(_disc(path)).read()):
         t, x, z = int(m.group(1)), int(m.group(2)), int(m.group(3))
         cell = (x >> 10, z >> 10)
         if 68 <= t <= 70: bridges.add(cell)

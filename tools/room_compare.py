@@ -20,6 +20,13 @@ usage: room_compare.py [--level PATH] [--top N]
 """
 import os, struct, sys
 
+def _disc(p):
+    """Level-set files moved to disc/ (gitignored) on 2026-08-19. Prefer that,
+    fall back to the old tree root so the tool works either side of the move."""
+    import os as _o
+    d = _o.path.join(_o.path.dirname(p), "disc", _o.path.basename(p))
+    return d if _o.path.exists(d) else p
+
 D = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LEVEL = os.path.join(D, "assets/extracted/PSXDATA/LEVEL1.PSX")
 
@@ -145,7 +152,7 @@ def main():
         if a.startswith("--level"): level = a.split("=", 1)[1]
     fp = 1
     try:
-        h = open(os.path.join(D, "mrt.h")).read()
+        h = open(_disc(os.path.join(D, "mrt.h"))).read()
         fp = 1 if "MRT_FACE_PLANES 1" in h else 0
     except OSError:
         pass

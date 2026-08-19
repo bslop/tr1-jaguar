@@ -134,6 +134,14 @@ end)
     fi
 
     if [ $((NEXT % REPORT_EVERY)) -eq 0 ]; then
+    # ⭐ The 25-run STOP is the user's rule, and hw/loopmode is the user's
+    # switch for suspending it (jaguar-shared DEVELOPMENT.md §1). Ask it
+    # rather than hardcoding the answer: it expires by itself and fails
+    # safe to STOP, so a missing or stale flag prints the banner below.
+    LOOPMODE_BIN="${JAGUAR_SHARED:-$HOME/Documents/Git/jaguar-shared}/hw/loopmode"
+        if [ -x "$LOOPMODE_BIN" ]; then
+            "$LOOPMODE_BIN" banner "$NEXT"
+        else
         echo
         echo "════════════════════════════════════════════════════════════"
         echo "  RUN $NEXT — PROGRESS REPORT IS DUE TO THE USER."
@@ -141,6 +149,7 @@ end)
         echo "  point of the checkpoint, so do not summarise it away."
         echo "  Show: what shipped, what is blocked, what the next 25 buys."
         echo "════════════════════════════════════════════════════════════"
+        fi
     fi
     ;;
 

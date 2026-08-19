@@ -30,6 +30,13 @@ run from build_cof.sh after every regen or it evaporates - which is how the
 """
 import os, re, struct, sys
 
+def _disc(p):
+    """Level-set files moved to disc/ (gitignored) on 2026-08-19. Prefer that,
+    fall back to the old tree root so the tool works either side of the move."""
+    import os as _o
+    d = _o.path.join(_o.path.dirname(p), "disc", _o.path.basename(p))
+    return d if _o.path.exists(d) else p
+
 D = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CELL = 1024
 WALL, OPEN = 0x7FFF, 0x7FFE
@@ -37,7 +44,7 @@ WALL, OPEN = 0x7FFF, 0x7FFE
 
 def portals(prefix):
     """(room, dst, xs, ys, zs) per portal, from <prefix>_spawn.h."""
-    src = open(os.path.join(D, prefix + "_spawn.h")).read()
+    src = open(_disc(os.path.join(D, prefix + "_spawn.h"))).read()
     mo = re.search(prefix + r'_portal_ofs\s*\[[^\]]*\]\s*=\s*\{(.*?)\};', src, re.S)
     mp = re.search(prefix + r'_portalv\s*\[[^\]]*\]\s*\[[^\]]*\]\s*=\s*\{(.*?)\n\};', src, re.S)
     if not mo or not mp:

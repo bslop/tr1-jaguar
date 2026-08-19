@@ -22,6 +22,13 @@ her rather than inside her.
 """
 import json, os, re, struct, subprocess, sys, time
 
+def _disc(p):
+    """Level-set files moved to disc/ (gitignored) on 2026-08-19. Prefer that,
+    fall back to the old tree root so the tool works either side of the move."""
+    import os as _o
+    d = _o.path.join(_o.path.dirname(p), "disc", _o.path.basename(p))
+    return d if _o.path.exists(d) else p
+
 D = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 JE = "/home/jvilla/Documents/Git/jag_openlara/cobweb/sim/target/release/jagemu"
 INST = "ent"
@@ -36,7 +43,7 @@ STANDOFF = 1536          # how far in front of the entity to stand
 
 
 def entities(prefix):
-    src = open(os.path.join(D, prefix + "_spawn.h")).read()
+    src = open(_disc(os.path.join(D, prefix + "_spawn.h"))).read()
     out = {}
     for m in re.finditer(r'\{\s*(\d+),\s*(\d+),\s*(\d+),\s*(-?\d+),\s*(-?\d+),'
                          r'\s*(-?\d+),\s*0x[0-9A-Fa-f]+\s*\},\s*//\s*(\d+)\s+(\S+)', src):
@@ -48,8 +55,8 @@ def entities(prefix):
 
 def floor_at(prefix, wx, wz):
     """Lowest floor any room supplies at this x/z - what she will stand on."""
-    idx = open(os.path.join(D, prefix + ".bin"), "rb").read()
-    sect = open(os.path.join(D, prefix + "_sect.bin"), "rb").read()
+    idx = open(_disc(os.path.join(D, prefix + ".bin")), "rb").read()
+    sect = open(_disc(os.path.join(D, prefix + "_sect.bin")), "rb").read()
     n = struct.unpack_from(">H", idx, 0)[0]
     best = None
     for r in range(n):

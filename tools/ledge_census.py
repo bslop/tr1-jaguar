@@ -34,6 +34,13 @@ collision code never compares.
 """
 import os, struct, sys
 
+def _disc(p):
+    """Level-set files moved to disc/ (gitignored) on 2026-08-19. Prefer that,
+    fall back to the old tree root so the tool works either side of the move."""
+    import os as _o
+    d = _o.path.join(_o.path.dirname(p), "disc", _o.path.basename(p))
+    return d if _o.path.exists(d) else p
+
 D = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WALL, OPEN = 0x7FFF, 0x7FFE
 CELL = 1024
@@ -62,8 +69,8 @@ DIRS = [(0, 1, 0, "+Z"), (1, 0, 16384, "+X"),
 
 
 def load(prefix):
-    idx = open(os.path.join(D, prefix + ".bin"), "rb").read()
-    sect = open(os.path.join(D, prefix + "_sect.bin"), "rb").read()
+    idx = open(_disc(os.path.join(D, prefix + ".bin")), "rb").read()
+    sect = open(_disc(os.path.join(D, prefix + "_sect.bin")), "rb").read()
     nroom = struct.unpack_from(">H", idx, 0)[0]
     rooms = []
     for r in range(nroom):

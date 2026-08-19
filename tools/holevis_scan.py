@@ -30,6 +30,13 @@ unless --allow-covered is passed, rather than quietly reporting zero.
 """
 import os, struct, sys
 
+def _disc(p):
+    """Level-set files moved to disc/ (gitignored) on 2026-08-19. Prefer that,
+    fall back to the old tree root so the tool works either side of the move."""
+    import os as _o
+    d = _o.path.join(_o.path.dirname(p), "disc", _o.path.basename(p))
+    return d if _o.path.exists(d) else p
+
 D = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WHITE = 250          # HOLEVIS clears to palette 255; allow for any dither
 
@@ -37,8 +44,8 @@ WHITE = 250          # HOLEVIS clears to palette 255; allow for any dither
 def open_ceiling_fraction(prefix, room):
     """What fraction of this room's cells have NO ceiling - i.e. is open sky.
     Same computation sightline.py prints; -32768 is the 'no ceiling' marker."""
-    idx = open(os.path.join(D, prefix + ".bin"), "rb").read()
-    sect = open(os.path.join(D, prefix + "_sect.bin"), "rb").read()
+    idx = open(_disc(os.path.join(D, prefix + ".bin")), "rb").read()
+    sect = open(_disc(os.path.join(D, prefix + "_sect.bin")), "rb").read()
     _, soff = struct.unpack_from(">II", idx, 8 + room * 8)
     soff &= 0x7FFFFFFF
     xS, zS = struct.unpack_from(">HH", sect, soff)
