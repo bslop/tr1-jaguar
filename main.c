@@ -1021,6 +1021,21 @@ static int g_jv_d240;                 /* load-under-disp240: 1 ok, 2 corrupt */
    timing off a capture cannot tell "played fast" from "ended early", and
    guessing between them wasted a roll. */
 #define vp_exit    VPC[9]
+/* MUSDIAG (2026-08-19, user: "I hear the music cutting out when I switch
+   between the options"). The title-music refill is armed by jerry_v0_ncnt()==0
+   and then spreads a 5120 B fill at 4096 B/frame, so a full refill costs ~2
+   frames against 0.46 s of queued audio. A dropout therefore needs the TITLE
+   LOOP ITSELF to stall for roughly half a second - it cannot be the fill rate.
+   These count what actually happens so the cause is measured, not argued:
+     vp_musgap  worst gap, in FIELDS, between the refill being armed and the
+                re-queue landing (>=28 fields = 0.46 s = the voice ran dry)
+     vp_musfill number of completed refills
+     vp_musloop worst single-iteration stall of the title loop, in fields */
+#define vp_musgap  VPC[10]
+#define vp_musfill VPC[11]
+#define vp_musloop VPC[12]
+#define vp_musarm  VPC[13]  /* field the current refill was armed on */
+#define vp_musprev VPC[14]  /* previous iteration's field, for the stall */
 #define VP_EXIT(c) do { vp_exit = (uint32_t)(c); } while (0)
 #else
 #define VP_EXIT(c) do { } while (0)
@@ -6246,12 +6261,17 @@ bootvid_entry:
                   rows[5] = vp_copy;
                   rows[6] = vp_pace;    rows[7] = vp_audio;
                   rows[9] = vp_tomfail;
+                  /* MUSDIAG: packed so the panel needs no new rows -
+                     worst refill gap | worst loop stall | fills done */
+                  rows[5] = ((vp_musgap & 0xFFu) << 24)
+                          | ((vp_musloop & 0xFFu) << 16)
+                          | (vp_musfill & 0xFFFFu);
                   /* bits 20/21: DID THE OBJECT-SHAPE PROBE ACTUALLY ENGAGE?
                      run 11 found g_op_plain240 silently switched OFF for four
                      runs (jcc68k accepted the undeclared identifier), so every
                      "no change" arm was uninformative. Report the runtime flag
                      itself rather than trusting the build flag. */
-                  { extern int g_op_plain240;
+                  { extern int g_op_plain240, g_disp240;
                     rows[10] = 0x80000000u | (uint32_t)(vnf & 0xFFFF)
                                            | ((vp_exit & 0xFu) << 16)
                                            | ((uint32_t)(g_op_plain240 & 1) << 20)
@@ -6381,6 +6401,15 @@ bootvid_entry:
                   }
               }
               else if (mh >= 0 && g_sfx_ok && g_musvol) {
+                  /* MUSDIAG: worst gap between consecutive title-loop
+                     iterations. The refill runs at most once per iteration,
+                     so a stall HERE is what starves the voice. */
+                  { extern volatile uint32_t frame_count;
+                    if (vp_musprev) {
+                        uint32_t d9 = frame_count - vp_musprev;
+                        if (d9 > vp_musloop) vp_musloop = d9;
+                    }
+                    vp_musprev = frame_count; }
                   /* gapless service: the pump promoted the queued buffer
                      (NCNT==0) -> refill the dead one and re-queue it.
                      CHUNKED (2026-08-06): the fill used to be one 8KB
@@ -6414,6 +6443,8 @@ bootvid_entry:
                               GD_FOPEN_READ | GD_FOPEN_OPEN_EXISTING);
                           mleft = mh >= 0 ? msz : 0;
                       }
+                      { extern volatile uint32_t frame_count;
+                        vp_musarm = frame_count; }        /* MUSDIAG: armed */
                       mfdead = mplay ^ 1;
                       mfgoal = mleft < (int)sizeof(mbuf[0]) ? mleft
                                                             : (int)sizeof(mbuf[0]);
@@ -6442,6 +6473,10 @@ bootvid_entry:
                                    and we re-queue the slot we just armed. The
                                    sfx path does this; the music path never did. */
                                 jerry_audio_stale();
+                              { extern volatile uint32_t frame_count;
+                                uint32_t g9 = frame_count - vp_musarm;
+                                if (g9 > vp_musgap) vp_musgap = g9;
+                                vp_musfill++; }           /* MUSDIAG */
                               mplay = mfdead; mfo = -1;
                           }
                       } else mfo = -1;               /* read fault: retry swap */
