@@ -4,39 +4,39 @@
 	.balign 8
 	.globl mrt_index
 mrt_index:
-	.incbin "mrt.bin"
+	.incbin "disc/mrt.bin"
 	.balign 8
 	.globl mrt_geom
 mrt_geom:
-	.incbin "mrt_geom.bin"
+	.incbin "disc/mrt_geom.bin"
 	.balign 8
 	.globl mrt_sect
 mrt_sect:
-	.incbin "mrt_sect.bin"
+	.incbin "disc/mrt_sect.bin"
 	.balign 8
 	.globl mrt_atlas
 mrt_atlas:
-	.incbin "mrt_atlas.bin"
+	.incbin "disc/mrt_atlas.bin"
 	.balign 8
 	.globl mrt_pal
 mrt_pal:
-	.incbin "mrt_pal.bin"
+	.incbin "disc/mrt_pal.bin"
 	.balign 8
 	.globl mrt_lara
 mrt_lara:
-	.incbin "mrt_lara.bin"
+	.incbin "disc/mrt_lara.bin"
 	.balign 8
 	.globl mrt_lskin
 mrt_lskin:
-	.incbin "mrt_lskin.bin"
+	.incbin "disc/mrt_lskin.bin"
 	.balign 8
 	.globl title_img
 title_img:
-	.incbin "title.bin"
+	.incbin "disc/title.bin"
 	.balign 8
 	.globl title_pal
 title_pal:
-	.incbin "title_pal.bin"
+	.incbin "disc/title_pal.bin"
 	.balign 8
 	.globl pass_geom
 pass_geom:
@@ -121,11 +121,11 @@ music_bank:
 	   and smashing the 68k stack, 2026-08-06). Palettes stay resident. */
 	.globl gymload_pal
 gymload_pal:
-	.incbin "gymload_pal.bin"
+	.incbin "disc/gymload_pal.bin"
 	.balign 8
 	.globl cavesload_pal
 cavesload_pal:
-	.incbin "cavesload_pal.bin"
+	.incbin "disc/cavesload_pal.bin"
 	.balign 8
 /* GYMSD=1: Lara's Home lives on the CARD, not in the image.
    ☠️ 316,336 BYTES of gym_atlas/geom/sect/index/pal were linked into every
@@ -137,23 +137,23 @@ cavesload_pal:
 #ifndef GYMSD
 	.globl gym_index
 gym_index:
-	.incbin "gym.bin"
+	.incbin "disc/gym.bin"
 	.balign 8
 	.globl gym_geom
 gym_geom:
-	.incbin "gym_geom.bin"
+	.incbin "disc/gym_geom.bin"
 	.balign 8
 	.globl gym_sect
 gym_sect:
-	.incbin "gym_sect.bin"
+	.incbin "disc/gym_sect.bin"
 	.balign 8
 	.globl gym_atlas
 gym_atlas:
-	.incbin "gym_atlas.bin"
+	.incbin "disc/gym_atlas.bin"
 	.balign 8
 	.globl gym_pal
 gym_pal:
-	.incbin "gym_pal.bin"
+	.incbin "disc/gym_pal.bin"
 	.balign 8
 #else
 	.balign 8
@@ -175,7 +175,7 @@ gym_pal:
 #endif
 	.globl gym_lara
 gym_lara:
-	.incbin "gym_lara.bin"
+	.incbin "disc/gym_lara.bin"
 	.balign 8
 /* ☠️☠️ gym_lskin USED TO .incbin ITS OWN 110,016 B COPY - AND IT SAT OUTSIDE
  * THE GYMSD #endif, so every shipping ROM carried it even though GYMSD stubs

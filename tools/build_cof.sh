@@ -381,10 +381,11 @@ if [ "${VIDEO:-1}" = "1" ]; then
             && echo "   $2 <- $1  ($(stat -c%s "$2") B)" \
             || echo "   !! $2 failed to convert - the build continues without it"
     }
-    conv INTRO.STR    EIDOS.JV
-    conv CORELOGO.FMV CORE.JV
-    conv CAFE.FMV     INTRO.JV
-    conv SNOW.FMV     CAVES.JV
+    mkdir -p disc
+    conv INTRO.STR    disc/EIDOS.JV
+    conv CORELOGO.FMV disc/CORE.JV
+    conv CAFE.FMV     disc/INTRO.JV
+    conv SNOW.FMV     disc/CAVES.JV
 else
     say "VIDEO=0 - skipping the front-end clips"
 fi
@@ -422,12 +423,17 @@ if [ -f build/openlara.elf ]; then
     cp build/openlara.elf "$OUT/OPENLARA.elf"
     echo "   kept OPENLARA.elf beside the ROM (symbols for probe_spot/entity_check)"
 fi
-[ -f MUSIC.PCM ] && cp MUSIC.PCM "$OUT/MUSIC.PCM" || true
+[ -f disc/MUSIC.PCM ] && cp disc/MUSIC.PCM "$OUT/MUSIC.PCM" || \
+    { [ -f MUSIC.PCM ] && cp MUSIC.PCM "$OUT/MUSIC.PCM"; } || true
 # the front-end clips and the Lara's-Home loading art stream from the card too
 for v in EIDOS.JV CORE.JV INTRO.JV CAVES.JV; do
-    [ -f "$v" ] && cp "$v" "$OUT/$v"
+    [ -f "disc/$v" ] && cp "disc/$v" "$OUT/$v"
 done
-[ -f gymload.bin ] && cp gymload.bin "$OUT/GYMLOAD.DAT"
+[ -f disc/gymload.bin ] && cp disc/gymload.bin "$OUT/GYMLOAD.DAT"
+# ☠️ CAVSLOAD.DAT was never emitted here - the Caves loading art (AZTECLOA)
+# streams from SD exactly like GYMLOAD, and a card without it drops to the
+# text panel. Emit both.
+[ -f disc/cavesload.bin ] && cp disc/cavesload.bin "$OUT/CAVSLOAD.DAT"
 cat > "$OUT/COPY-THESE-TO-SD-ROOT.txt" <<'NOTE'
 Copy EVERY file in this folder to the ROOT of your RetroHQ GameDrive SD card
 (the top level, NOT a subfolder), then boot OPENLARA.COF from the GameDrive menu.

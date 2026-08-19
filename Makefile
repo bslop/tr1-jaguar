@@ -26,6 +26,7 @@ RMAC    := $(HOME)/jaguar-tools/bin/rmac
 #   make JAS=/usr/local/bin/jas
 COBWEB_DIR ?= $(abspath $(CURDIR)/../../../../cobweb)
 COBWEB_BIN  = $(COBWEB_DIR)/sim/target/release
+
 JAS     ?= $(if $(wildcard $(COBWEB_BIN)/jas),$(COBWEB_BIN)/jas,$(HOME)/Documents/Git/cobweb/sim/target/release/jas)
 # rmac writes defines as -dNAME=V; jas wants -d NAME=V
 jasd     = $(subst -d,-d ,$(1))
@@ -47,6 +48,17 @@ INCPATH := -I.
 
 CFLAGS  := -m68000 -ffreestanding -fomit-frame-pointer -fno-strict-aliasing \
            -fwrapv -O2 -Wall -Wextra $(INCPATH)
+
+# ☠️ DISC-DERIVED ASSETS LIVE IN disc/ (gitignored, 2026-08-19, after 43 MB of
+# them were purged from the public repo). The extractor and tools/build_cof.sh
+# write there and nothing under it is ever committed. Three things must agree:
+#   * headers        -> -Idisc, both here and on the jcc68k command lines below
+#                       (those pass only $(filter -D%,$(CFLAGS)), so an -I in
+#                       CFLAGS alone never reaches them)
+#   * .incbin data   -> mrt_data.S / room0data.S say "disc/<name>"
+#   * the generators -> point their OUTDIR at disc/
+CFLAGS   += -Idisc
+CXXFLAGS += -Idisc
 CXXFLAGS := $(CFLAGS) -fno-exceptions -fno-rtti -fno-threadsafe-statics \
            -fno-use-cxa-atexit -fshort-enums
 ASFLAGS := -m68000 $(INCPATH)
@@ -739,7 +751,7 @@ else
 # than silently truncating). Remaining known gap: text ~1.9x gcc -O2
 # (their register-allocator follow-up).
 $(BUILD)/%.o: %.c | $(BUILD)
-	$(JCC68K) $< -o $(BUILD)/$*.jcc.s -I. $(filter -D%,$(CFLAGS))
+	$(JCC68K) $< -o $(BUILD)/$*.jcc.s -I. -Idisc $(filter -D%,$(CFLAGS))
 	$(JAS) $(BUILD)/$*.jcc.s --68000 --elf-obj -o $@
 # main.c stays on gcc for PERFORMANCE (not correctness): all-jcc renders
 # correctly but the game crawls — main.c is the per-frame 68k logic and
@@ -767,7 +779,7 @@ $(BUILD)/%.o: %.c | $(BUILD)
 # the construct main.c uses that they do not.
 ifdef JCCMAIN
 $(BUILD)/main.o: main.c | $(BUILD)
-	$(JCC68K) $< -o $(BUILD)/main.jcc.s -I. $(filter -D%,$(CFLAGS))
+	$(JCC68K) $< -o $(BUILD)/main.jcc.s -I. -Idisc $(filter -D%,$(CFLAGS))
 	$(JAS) $(BUILD)/main.jcc.s --68000 --elf-obj -o $@
 else
 $(BUILD)/main.o: main.c | $(BUILD)
@@ -1395,7 +1407,7 @@ $(BUILD)/texdata.o: texdata.S tex_test.bin texpal.bin | $(BUILD)
 $(BUILD)/room0data.o: room0data.S room0_tex.bin room0_atlas.bin room0_pal.bin room0_sect.bin | $(BUILD)
 	$(CC) $(ASFLAGS) -c $< -o $@
 
-$(BUILD)/mrt_data.o: mrt_data.S mrt.bin mrt_geom.bin mrt_sect.bin mrt_atlas.bin mrt_pal.bin mrt_lara.bin gym.bin gym_geom.bin gym_sect.bin gym_atlas.bin gym_pal.bin gym_lara.bin pass_geom.bin pass_atlas.bin pass2_geom.bin pass2_atlas.bin ctrl_geom.bin ctrl_atlas.bin photo_geom.bin photo_atlas.bin font_load.bin sfx.bin music.bin | $(BUILD)
+$(BUILD)/mrt_data.o: mrt_data.S disc/mrt.bin disc/mrt_geom.bin disc/mrt_sect.bin disc/mrt_atlas.bin disc/mrt_pal.bin disc/mrt_lara.bin disc/gym.bin disc/gym_geom.bin disc/gym_sect.bin disc/gym_atlas.bin disc/gym_pal.bin disc/gym_lara.bin pass_geom.bin pass_atlas.bin pass2_geom.bin pass2_atlas.bin ctrl_geom.bin ctrl_atlas.bin photo_geom.bin photo_atlas.bin font_load.bin sfx.bin music.bin | $(BUILD)
 	$(CC) $(ASFLAGS) -c $< -o $@
 
 # room geometry blob is an explicit prerequisite (make won't see the

@@ -31,7 +31,9 @@
 import struct, sys, os, zlib
 
 LEVEL   = __import__("os").environ.get("TRLEVEL", __import__("os").path.join(__import__("os").path.dirname(__import__("os").path.dirname(__import__("os").path.abspath(__file__))), "assets/extracted/PSXDATA/LEVEL1.PSX"))
-OUTDIR  = __import__("os").path.dirname(__import__("os").path.dirname(__import__("os").path.abspath(__file__)))
+import os as _os  # disc-derived output lives in disc/ (gitignored, 2026-08-19)
+OUTDIR  = _os.environ.get("TR_OUTDIR", _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "disc"))
+_os.makedirs(OUTDIR, exist_ok=True)
 PREVDIR = "/tmp/tr1_tex_preview"
 
 TILE_PAGE_BYTES = 256*256//2   # 32768  (Tile4)

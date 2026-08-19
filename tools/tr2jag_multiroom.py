@@ -36,7 +36,13 @@ from collections import Counter, deque
 _REPO   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LEVEL   = os.environ.get("TRLEVEL",
           os.path.join(_REPO, "assets/extracted/PSXDATA/LEVEL1.PSX"))
-OUTDIR  = _REPO
+# ☠️ DISC-DERIVED OUTPUT GOES IN disc/ (2026-08-19). Everything this script
+# writes is extracted from the user's own Tomb Raider disc, and disc/ is the
+# one gitignored place it may land - 43 MB of this output was purged from the
+# PUBLIC repo because it was being written into the tree root and committed.
+# Override with TR_OUTDIR if you really mean somewhere else.
+OUTDIR  = os.environ.get("TR_OUTDIR", os.path.join(_REPO, "disc"))
+os.makedirs(OUTDIR, exist_ok=True)
 PREFIX  = os.environ.get("TRPREFIX", "mrt")   # output file prefix (mrt / gym)
 
 TILE_PAGE_BYTES = 256*256//2

@@ -11,7 +11,7 @@ room0_atlas:
 	.balign 8
 	.globl room0_pal
 room0_pal:
-	.incbin "room0_pal.bin"
+	.incbin "disc/room0_pal.bin"
 	.balign 8
 	.globl room0_sect
 room0_sect:

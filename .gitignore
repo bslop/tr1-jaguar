@@ -72,26 +72,13 @@ gym_bear.h
 gym_lplanes.h
 *.prepatch
 
-# ☠️ DISC-DERIVED — NEVER COMMIT (purged from history 2026-08-19, user's call)
-# Everything below is transcoded or extracted from the user's own Tomb Raider
-# disc: the four FMV clips are Eidos/Core footage, the loading screens are PS1
-# art, and the mrt_* headers are the game's models and textures. The whole
-# point of tools/build_cof.sh (and the Docker image) is that a user supplies
-# their own disc and the payload is generated locally. None of it belongs in a
-# public repo - 43 MB across 60 blobs was on github.com/bslop/tr1-jaguar until
-# it was removed.
-*.JV
-*.RAW
-*.PCM
-CAVSLOAD.BIN
-CAVSLOAD.DAT
-GYMLOAD.BIN
-GYMLOAD.DAT
-mrt_bat.h
-mrt_bear.h
-mrt_door.h
-mrt_entex.h
-mrt_gun.h
-mrt_lplanes.h
-mrt_pick.h
-mrt_wolf.h
+# ☠️ DISC-DERIVED CONTENT LIVES IN disc/ AND IS NEVER COMMITTED
+# (user's call, 2026-08-19, after 43 MB of it was purged from the public repo)
+# Everything under disc/ is transcoded or extracted from the user's own Tomb
+# Raider disc: the four FMV clips (Eidos/Core footage), the PS1 loading art,
+# and the extractor's level/model/texture output. tools/build_cof.sh and the
+# Docker image regenerate all of it from a disc the user supplies - that is the
+# whole design, and it is why none of it belongs in the repo.
+# Referenced as disc/<name> by mrt_data.S / room0data.S (.incbin) and found by
+# #include via -Idisc (Makefile).
+/disc/
