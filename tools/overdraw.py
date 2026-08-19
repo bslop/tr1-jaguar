@@ -23,7 +23,16 @@ def _disc(p):
     return d if _o.path.exists(d) else p
 
 D = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-JTEST = os.path.expanduser("~/Documents/Git/cobweb/sim/target/release/jtest")
+# ☠️ THIS POINTED AT ~/Documents/Git/cobweb - the USER's checkout, not this
+# project's own clone, which jaguar-shared DEVELOPMENT.md requires ("every
+# project pulls its OWN instance"). It had been dead with a FileNotFoundError.
+# Same resolution order as room_cycles.py; JTEST= overrides.
+JTEST = os.environ.get("JTEST") or next(
+    (q for q in (
+        os.path.expanduser("~/Documents/Git/jag_openlara/cobweb/sim/target/release/jtest"),
+        os.path.expanduser("~/Documents/Git/cobweb/sim/target/release/jtest"),
+    ) if os.path.exists(q)),
+    os.path.expanduser("~/Documents/Git/jag_openlara/cobweb/sim/target/release/jtest"))
 KERN = os.path.join(D, "build/gpu_geotex.bin")
 MAGIC = 0x0A3DD05E
 
@@ -100,6 +109,14 @@ kcopy:
 \tmoveq\t#0,r0
 \tstore\tr0,(r14)
 \tstore\tr0,(r14+1)
+; zero the ODRAWS accumulators - they live in GPU SRAM, nothing else
+; clears them, and a capture without this reads stale data (room 5
+; came back 0xFFFFFDF8 = -1032).
+\tmovei\t#$F03EF4,r0
+\tmoveq\t#0,r1
+\tstore\tr1,(r0)
+\tmovei\t#$F03EF8,r0
+\tstore\tr1,(r0)
 \tmovei\t#$F03000,r0
 \tjump\tT,(r0)
 \tnop
@@ -127,7 +144,7 @@ def cycles_for(idx, yaw, workdir, quiet=True):
     open(wg, "w").write(WRAP.format(
         klongs=(ksz + 3)//4, mailbox=MAILBOX, vtxcache=VTXCACHE, fb=FB,
         kern=KERN, camb=cb, roomb=rb,
-        atlas=os.path.join(D, "mrt_atlas.bin")))
+        atlas=_disc(os.path.join(D, "mrt_atlas.bin"))))
     gf = os.path.join(workdir, "cap.bin")
     def done(budget):
         if os.path.exists(gf): os.remove(gf)
@@ -149,7 +166,14 @@ def cycles_for(idx, yaw, workdir, quiet=True):
     return hi, counts
 
 
-ODRAW_ADDR = 0x001C0020
+# ☠️ THIS CAPTURED 0x001C0020 - a DRAM address NOTHING WRITES - so every room
+# reported 0 blitted pixels, "0.00x screen", a clean false null. The kernel
+# accumulates into GPU SRAM: ODP_PX $F03EF4 (span pixels), ODP_N $F03EF8 (span
+# count), gpu_geotex.gas:361. The kernel's own ODRAWS comment records someone
+# concluding "both probes are on a dead rasteriser path" from this same shape
+# of zero, and being wrong. Read where the kernel writes.
+ODRAW_ADDR = 0xF03EF4
+ODRAW_N_ADDR = 0xF03EF8
 
 def overdraw_for(idx, yaw, workdir, budget):
     """run the room ONCE at a budget known to complete, capture the npix total"""
@@ -162,7 +186,7 @@ def overdraw_for(idx, yaw, workdir, budget):
     open(wg, "w").write(WRAP.format(
         klongs=(ksz + 3)//4, mailbox=MAILBOX, vtxcache=VTXCACHE, fb=FB,
         kern=KERN, camb=cb, roomb=rb,
-        atlas=os.path.join(D, "mrt_atlas.bin")))
+        atlas=_disc(os.path.join(D, "mrt_atlas.bin"))))
     gf = os.path.join(workdir, "od.bin")
     if os.path.exists(gf): os.remove(gf)
     subprocess.run([JTEST, "golden", wg, "--assemble", "--org", "0x4000",

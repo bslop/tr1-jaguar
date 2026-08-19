@@ -118,3 +118,33 @@ above is a HYPOTHESIS until a driven fps capture on silicon agrees.
 2. **A1** — three spawn-and-walk tests against three of the 64 doorcells.
 3. **B3** — overdraw on r12 vs the level average.
 Each is one question per turn, which is the rule the rig enforces anyway.
+
+---
+
+## D. ☠ tools/overdraw.py IS NOT TRUSTWORTHY — do not quote its numbers
+
+Tried to answer B3 (is r12's overdraw above the 2.07x level average?) and could
+not. Three real defects found and fixed, one still open:
+
+  ✅ it pointed JTEST at `~/Documents/Git/cobweb` - the USER's checkout, not
+     this project's own clone - so it had been dead with FileNotFoundError.
+     (jaguar-shared DEVELOPMENT.md: every project uses its OWN clone.)
+  ✅ it passed `mrt_atlas.bin` into the assembler template by a path my disc/
+     migration had not covered, so every room came back DNF.
+  ✅ it captured **0x001C0020**, a DRAM address NOTHING WRITES, and therefore
+     reported `0 blitted px = 0.00x screen` for every room - a clean false
+     null. The kernel accumulates into GPU SRAM: ODP_PX $F03EF4 / ODP_N
+     $F03EF8 (gpu_geotex.gas:361). ⭐ The kernel's own ODRAWS comment records
+     someone reading ~0 from this same shape of mistake and concluding "both
+     probes sit on a dead rasteriser path" - and being WRONG.
+  ⬜ STILL BROKEN: with the capture pointed at ODP_PX the values are not
+     credible - r5 returns 0xFFFFFDF8 (-1032 read unsigned) and the rest read
+     0.13-0.15x screen, far too low for a full room render. I added code to
+     zero the accumulators before the kick and **the output did not change by a
+     single digit**, which says my zeroing never executed or the capture is not
+     reading the counter the kernel writes. Next: dump $F03EF4/$F03EF8 straight
+     out of jtest after a known-good run and compare against the printed value
+     before touching the harness again.
+
+⚠ So B3 is UNANSWERED. The 2.07x overdraw figure in the project's memory came
+from a different measurement and still stands; nothing here contradicts it.
