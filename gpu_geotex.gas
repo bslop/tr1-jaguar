@@ -4235,7 +4235,24 @@ alldone:
 	; 68k can sleep in STOP during the whole GPU run instead of bus-polling
 	; (68k polling steals DRAM cycles from GPU+Blitter — measured bottleneck).
 	movei	#$F02114,r1		; G_CTRL
-	moveq	#3,r0			; GPUGO | CPUINT
+.if GPUHALT=1
+	; ⭐ GPUHALT=1: CPUINT **and** GO-clear in one store, so Tom actually stops.
+	; The shipped value below is #3 (CPUINT|GPUGO): it raises the interrupt but
+	; LEAVES GPUGO SET, so the core falls into `halt: jr T,halt` and spins there
+	; holding bus arbitration until the next kick rewrites G_PC. Measured
+	; 2026-08-19, same ROM one immediate apart, 500 frames in the Caves:
+	;     #3  GPU instret 11,666,506      #2  GPU instret 1,969,011
+	; i.e. 83% of Tom's executed instructions are the park. 68k op-tax and DSP
+	; instret were byte-identical between the arms.
+	; ☠️ NOT YET VERIFIED ON SILICON - the rig went down before the A/B ran.
+	; jsim counts the wasted instructions but does not model what they do to
+	; DRAM arbitration, which is the whole point. Atari's own N3D ends with
+	; `moveq #2` and Black Ice \ White Noise waits for GPUGO to FALL, so two
+	; shipped titles depend on this self-halt (jaguar-shared §gpuspin).
+	moveq	#2,r0			; CPUINT + GO-clear
+.else
+	moveq	#3,r0			; GPUGO | CPUINT  (shipped default)
+.endif
 	store	r0,(r1)
 	nop
 	nop
