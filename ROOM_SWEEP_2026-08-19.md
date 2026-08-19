@@ -40,7 +40,7 @@ reports 0 phantom seam floors). This is a negative result worth keeping.
 
 ## B. FRAME-RATE OPPORTUNITIES
 
-### B1. ★ A ~91,000-cycle FIXED cost per frame, before any geometry
+### B1. ★ A ~98,000-cycle FIXED cost per KERNEL INVOCATION — ⚠ SEE THE CORRECTION
 Fitting all 38 rooms (`tools/room_cycles.py`, jtest at silicon fidelity):
 
     cycles ≈ 91,000 + 712 × faces
@@ -53,9 +53,28 @@ that every room pays whether it draws 19 faces or 624.
 has attacked per-face cost (flat-merge, face culling, LOD) and found face count
 is NOT the lever (r34 −36% faces = same fps). A fixed per-frame cost explains
 that: cutting faces cannot touch the 91k floor.
-⬜ NEXT: profile what the kernel does before its first face — param block
-setup, atlas/CLUT staging, room-list init. `jtest` can time a 0-face room.
-⚠ CONFIDENCE: HIGH for the fit, UNKNOWN for what the 91k is spent on.
+Least squares over all 38 rooms: **cycles = 98,284 + 701 x faces, R^2 = 0.993**.
+In the lightest rooms the fixed part is 82-94% of the whole kernel cost.
+
+☠ **CORRECTION (same day, before anyone acts on it).** I first wrote this up as
+a per-FRAME cost and called it the most interesting number in the sweep. That
+overstates it. `room_cycles.py` times ONE standalone kernel invocation for ONE
+room, so the intercept is per INVOCATION — and the shipping build does not kick
+per room. `NODISPATCH` (per-room kicks) is absent from build_cof.sh and
+gbuild.sh; the shipping path is SINGLE-DISPATCH, which queues up to 39 rooms
+and dispatches them together (main.c:10635). So the shipping frame pays this
+once, ~98k cycles ~= 3.7 ms at 26.6 MHz, not once per visible room.
+
+That is still worth having - it is a floor no face-count lever can touch, which
+is a candidate explanation for why flat-merge and LOD both measured flat - but
+it is a few percent of a 150 ms frame, not the lever I implied.
+
+⬜ WHAT WOULD SETTLE IT: does the batched path re-pay any of that per queued
+room (room-list init, per-room clip setup) or only once? Instrument the real
+build - count cycles between the dispatch and the first face of room 2 - rather
+than inferring it from a single-room harness.
+⚠ CONFIDENCE: HIGH for the fit itself. The per-frame IMPACT is unproven and my
+first reading of it was wrong.
 
 ### B2. Heaviest rooms, by kernel cycles (yaw 0, room-centre camera)
 
