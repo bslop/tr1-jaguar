@@ -71,3 +71,27 @@ mrt_gunanim.h
 gym_bear.h
 gym_lplanes.h
 *.prepatch
+
+# ☠️ DISC-DERIVED — NEVER COMMIT (purged from history 2026-08-19, user's call)
+# Everything below is transcoded or extracted from the user's own Tomb Raider
+# disc: the four FMV clips are Eidos/Core footage, the loading screens are PS1
+# art, and the mrt_* headers are the game's models and textures. The whole
+# point of tools/build_cof.sh (and the Docker image) is that a user supplies
+# their own disc and the payload is generated locally. None of it belongs in a
+# public repo - 43 MB across 60 blobs was on github.com/bslop/tr1-jaguar until
+# it was removed.
+*.JV
+*.RAW
+*.PCM
+CAVSLOAD.BIN
+CAVSLOAD.DAT
+GYMLOAD.BIN
+GYMLOAD.DAT
+mrt_bat.h
+mrt_bear.h
+mrt_door.h
+mrt_entex.h
+mrt_gun.h
+mrt_lplanes.h
+mrt_pick.h
+mrt_wolf.h
