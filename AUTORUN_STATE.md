@@ -54,6 +54,52 @@ See the migration section at the top of `jaguar-shared/hw/PROTOCOL.md`.
 
 ## NEXT STEP
 
+# ☠️☠️☠️ **THE FMV CORRUPTION IS A jcc68k MISCOMPILE — NOT THE CONSOLE, NOT THE
+# CODE, NOT THE ASSETS.** Found 2026-08-18 by the USER'S hypothesis ("it worked
+# before the automation"), which three sessions of bus-contention theory had
+# talked past. The user nearly discarded a working $600 Jaguar over run 12's
+# "marginal console" write-up. That write-up was WRONG.
+
+### THE BRACKET (all measured the same night, same console, same card, same clip)
+    demo30_p0.cof (2026-08-12)                                   0.00%   job 436
+    same C code @ 3aded3d, today's toolchain                    19-21%   job 485
+    same C code + demo30's OWN assets, today's toolchain        19-21%   job 498
+    same C code + today's assets + jcc68k @ 84d9fc2 (07-27)      0.00%   job 506
+  => code, assets, flags, kernels and the assembler are ALL innocent.
+  => the ONLY variable that moves it is the jcc68k revision.
+
+### THE FIX
+    JCC68K=/home/jvilla/Documents/Git/jag_openlara/jcc68k-0727   (cobweb 84d9fc2)
+  good = 84d9fc2 (2026-07-27)   bad = 59e5896 (2026-08-16)
+  jcc68k compiles EVERY C TU except main.c - including video.c (OP list, flip
+  protocol, ISR repair values), gpu.c and blit.c. Prime suspects in the window:
+  b21f1e1 "thirteen wrong-code fixes" and beb2c15 "an odd-sized global sent
+  every runtime helper to an odd address" (odd alignment = hardware-only fault).
+  ⬜ Bisect 84d9fc2..59e5896 to name it, then file in COBWEB_ISSUES_OPENLARA.md.
+  ⬜ Pin JCC68K in the Makefile AND COBWEB_REV in the Dockerfile.
+
+### ☠️ WHY EVERY OFFLINE GATE PASSED FOR 13 RUNS
+  jsim EXECUTES THE MISCOMPILED BINARY. An emulator cannot disagree with the
+  compiler that fed it. Every check agreed with itself while the TV showed
+  static. ⭐ The transferable rule: when hardware and emulator disagree and the
+  SOURCE is identical, suspect the TOOLCHAIN before the code.
+
+### ☠️ FALSE INSTRUMENT THAT COST THREE SESSIONS
+  A flat field scores 0.00% on a local-median metric whether or not the fault
+  is present (run 7 proved it). Run 6's "STOP fixed it 54.65% -> 0.00%" was
+  measured on a flat test card and is therefore UNPROVEN. Tonight the same trap
+  scored a flat YELLOW HANG SCREEN as "perfectly clean" - caught only because
+  the user looked at the TV and said "I just see a yellow screen".
+
+### ☠️ THREE HYPOTHESES KILLED ON SILICON (do not re-run them)
+  OP scaler TYPE-1 vs TYPE-0     11.59% vs 11.15%   no effect
+  OP fetch 240 vs 120 lines      ~20%   vs ~20%     no effect (120 = what the
+                                                    GAME asks, and the game is
+                                                    clean - so fetch is not it)
+  cartridge streaming off        19.7%  vs 20.2%    no effect
+
+
+
 # ★★★★★ **THE CONSOLE IS EXONERATED** - the user swapped in a DIFFERENT JAGUAR
 # and reported "same issue", and the sweep agrees. ⏸ A different GAMEDRIVE is
 # now in, but it does NOT enumerate on USB yet.

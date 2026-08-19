@@ -13,6 +13,24 @@
 
 #define SPAN_CPU_LIMIT 12
 
+/* ☠️ FALSE-IDLE SETTLE ARM (user, 2026-08-18: "is there a flush needed before
+ * the video starts?").  The Blitter does not assert BUSY the instant B_CMD is
+ * written, so the FIRST B_CMD read after the write can return IDLE while the
+ * copy has not started.  blit_copy_phrase believes that read and returns 1;
+ * the caller then flips a buffer the Blitter is still filling and the Object
+ * Processor displays it mid-copy.  cobweb b8dd333 added a BUSY settle window
+ * to jagemu for exactly this hazard, and run 3 named it as one of the two
+ * surviving candidates for the FMV grain.
+ *   BLITSET = 0   ship behaviour: believe the first IDLE
+ *   BLITSET = N   require N CONSECUTIVE IDLE reads before believing it
+ * A `volatile const` so an arm is ONE IMMEDIATE and the layout never moves -
+ * the same trick JVDECMASK uses, so one A10 pad roll covers both arms. */
+#ifndef BLITSET
+#define BLITSET 0
+#endif
+volatile const uint32_t g_blitset = BLITSET;
+
+
 /* HANGDIAG: every wait in the 68k boot path is unbounded, so a hang anywhere
    looks identical from the outside - a black screen.  Under HANGDIAG each one
    gets a budget and, on timeout, paints a DISTINCT border colour and halts, so
@@ -194,6 +212,18 @@ int blit_copy_phrase(const void *src, void *dst, int h)
     A2_STEP  = (1u << 16) | xreset;
     B_COUNT  = ((uint32_t)h << 16) | RENDER_W;
     B_CMD    = BLIT_CMD_COPY | BLIT_UPDA1 | BLIT_UPDA2;
+    if (g_blitset) {
+        uint32_t run = 0;
+        for (g = 0; g < 4000000u; g++) {
+            if (B_CMD & BLIT_IDLE) {
+                if (++run >= g_blitset)
+                    return 1;
+            } else {
+                run = 0;                 /* a BUSY read resets the window */
+            }
+        }
+        return 0;
+    }
     for (g = 0; g < 4000000u; g++)
         if (B_CMD & BLIT_IDLE)
             return 1;

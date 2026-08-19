@@ -1597,6 +1597,14 @@ endif
 # token walk instead of Tom's kick, 2 = zero the shadow before each decode.
 # The mask is a `volatile const` in main.c, so an arm is ONE IMMEDIATE and the
 # layout never moves - one A10 pad roll covers all of them.
+# BLITSET: the false-idle settle window in blit_copy_phrase (blit.c). 0 ships
+# the historic "believe the first IDLE" behaviour; N requires N consecutive
+# IDLE reads. It is a `volatile const`, so an arm is ONE IMMEDIATE and one A10
+# pad roll covers every value.
+BLITSET  ?= 0
+CFLAGS   += -DBLITSET=$(BLITSET)
+CXXFLAGS += -DBLITSET=$(BLITSET)
+
 ifdef JVDECDIAG
 JVDECMASK ?= 0
 CFLAGS   += -DJVDECDIAG -DJVDECMASK=$(JVDECMASK)

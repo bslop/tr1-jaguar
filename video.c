@@ -237,6 +237,9 @@ extern int g_disp240;               /* task #4: 1 = title plain-240 mode */
  * run-8 probe: 1 = build a TYPE-0 PLAIN bitmap for the 240 display instead of
  * the 1.0x-scaled TYPE-1 object. Set BEFORE video_set_disp240() rebuilds. */
 int g_op_plain240 = 0;
+/* run-14 bandwidth probe: 1 = ask the OP for 120 lines instead of 240. Same
+   placement rule as g_op_plain240 above - ABOVE build_object_list. */
+int g_op_half240 = 0;
 
 static void build_object_list(uint32_t fb_addr)
 {
@@ -315,6 +318,16 @@ static void build_object_list(uint32_t fb_addr)
        shows in the loading screen and in the game (both scaled 120->240) but
        never on the title or the FMVs (plain 240, 1.0x). */
     { uint32_t t_srcl  = g_disp240 ? 240u : (uint32_t)RENDER_H;
+      /* ☠️ BANDWIDTH PROBE (run 14). The FMV object asks the Object Processor
+         for 320x240 of 8bpp every field; the GAME's object asks for 320x120
+         and lets the OP scale it 2x. **The clips make the OP fetch TWICE what
+         the game does**, through the same scaler, which is the cleanest
+         account yet of why the game and the title look right and the clips do
+         not. Halving the object's HEIGHT halves that fetch and shows only the
+         top half of the picture - if that half comes back CLEAN, the fault is
+         OP fetch bandwidth and the fix is to stop asking for 240 lines.
+         Set from main.c's JVDECMASK bit 11 (2048). */
+      if (g_op_half240 && g_disp240) t_srcl = 120u;
       /* ☠️ PLAIN-OBJECT PROBE (run 8, 2026-08-18, the user's lead). The clips
          are displayed through this SCALED TYPE-1 object with the scale set to
          1.0x - the comment above says so outright - purely so nothing has to

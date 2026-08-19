@@ -5398,10 +5398,11 @@ bootvid_entry:
                                           gpu_kernel_select(1); } }
                 /* bit 4 (16): display the clips through a PLAIN TYPE-0 object
                    instead of the game's 1.0x-scaled one (run 8). */
-                { extern int g_op_plain240;
+                { extern int g_op_plain240, g_op_half240;
                   extern void video_set_disp240(int);
-                  if (g_jvdmask & 16u) { g_op_plain240 = 1;
-                                         video_set_disp240(1); } }
+                  if (g_jvdmask & 16u)   g_op_plain240 = 1;
+                  if (g_jvdmask & 2048u) g_op_half240  = 1;
+                  if (g_jvdmask & (16u | 2048u)) video_set_disp240(1); }
 #endif /* 2-buffer pin (less rotation churn;
                                           the shadow copy makes correctness
                                           independent of it) */
@@ -5991,6 +5992,26 @@ bootvid_entry:
                              when the buffer is actually running low (so the
                              compaction moves <=8KB, not 26KB), move LONGS,
                              and TIME the read. */
+                          /* ☠️ NOSTREAM ARM (JVDECMASK bit 12, 2026-08-18,
+                             the user's question: "the game runs properly but
+                             the video doesn't"). The half-fetch arm set the
+                             OP's per-field fetch to 120 lines - EXACTLY what
+                             gameplay asks - and the clip was still ~20%
+                             corrupt while gameplay at that fetch is clean. So
+                             OP workload is not the difference. The one thing
+                             the clip path does that the game NEVER does while
+                             rendering is read the cartridge continuously.
+                             This arm stops every gd_fread after the buffer is
+                             first filled and replays the frames already in it:
+                             decode, copy, flip and OP fetch all unchanged,
+                             cart traffic zero. Clean here = streaming is the
+                             starver. Still corrupt = it is decode/copy. */
+#ifdef JVDECDIAG
+                          if ((g_jvdmask & 4096u) && remain > 0
+                              && have - pos < 8192) {
+                              pos = 0;            /* replay the buffered frames */
+                          } else
+#endif
                           if (remain > 0 && have - pos < 8192) {
                               int want = (have - pos < 4096) ? 24576 : 4096;
                               if (pos) have = stream_compact(vb, have, &pos);
@@ -6225,8 +6246,16 @@ bootvid_entry:
                   rows[5] = vp_copy;
                   rows[6] = vp_pace;    rows[7] = vp_audio;
                   rows[9] = vp_tomfail;
-                  rows[10] = 0x80000000u | (uint32_t)(vnf & 0xFFFF)
-                                         | ((vp_exit & 0xFu) << 16);
+                  /* bits 20/21: DID THE OBJECT-SHAPE PROBE ACTUALLY ENGAGE?
+                     run 11 found g_op_plain240 silently switched OFF for four
+                     runs (jcc68k accepted the undeclared identifier), so every
+                     "no change" arm was uninformative. Report the runtime flag
+                     itself rather than trusting the build flag. */
+                  { extern int g_op_plain240;
+                    rows[10] = 0x80000000u | (uint32_t)(vnf & 0xFFFF)
+                                           | ((vp_exit & 0xFu) << 16)
+                                           | ((uint32_t)(g_op_plain240 & 1) << 20)
+                                           | ((uint32_t)(g_disp240 & 1) << 21); }
                   rows[11] = (uint32_t)fi;
                   vp_clut();
                   vp_paint(hb2, lamps, rows);
