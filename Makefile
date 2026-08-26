@@ -1893,6 +1893,13 @@ endif
 # GDPAD=1: drive the game remotely - gd_input reads INPUT.BIN off the SD as a
 # pad mask, written by the host with `jaggd -wf`.  TEST BUILDS ONLY (an SD
 # open/read/close every 4th frame).
+# JXWAIT=1: A1 experiment - 68k waits for every Jerry room transform before
+# Tom's first dispatch (see main.c). Measured with the static-camera racing-
+# pixel metric; if it holds it becomes the default.
+ifdef JXWAIT
+CFLAGS   += -DJXWAIT
+CXXFLAGS += -DJXWAIT
+endif
 ifdef GDPAD
 CFLAGS   += -DGDPAD
 CXXFLAGS += -DGDPAD

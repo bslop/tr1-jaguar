@@ -44,6 +44,21 @@ CONTENTION while Tom renders under PIPELINE. Order-identical (pixel diff 0 /
 12 px). Added to `build_cof.sh` BUILD_FLAGS. ☠️ `fps_measure.py` locked onto an
 edge pixel at VRESN=80 and read 6.48 for a true 7.00; use `tools/beacon_box.py`.
 
+**A1 (the still-camera flicker) — one hypothesis REFUTED, one arm on the rig**
+* ☠️ **Refuted: "Tom's 3 ms per-room guard times out and self-transforms with
+  different arithmetic than Jerry."** `JXWAIT=1` makes the 68k wait (polite
+  150 µs backoff) for every Jerry room flag before Tom's first dispatch. The
+  wait executed (jagemu: 336 backoffs / 600 frames) and changed NOTHING on
+  silicon: racing world px **469 vs 463** (M68A2 control), fps 8.00 vs 7.98
+  (jagq #1993). Jerry is already done by dispatch; the race is elsewhere.
+* Metric = `race_px.py` (world pixels toggling ≥8 times in 40 s, Lara + beacon
+  masked): base 536 → M68A2 463 (−14%: less 68k bus traffic helps a little).
+* ⬜ On the rig: `COLLECTEARLY=1` on M68A2 (jagq #1995) — the collect after the
+  light head of the frame, so Lara's collision + the portal walk no longer run
+  on top of Tom's render. Written 08-19 with the 549 → 43 PIPESTAGE=0 number,
+  never measured. With the sort gone the head is light, so the fps cost may
+  finally be affordable.
+
 **✅✅ 38-ROOM TOUR CONFIRMS IT, LARGER: jagq #1991 base vs #1992 M68A2** —
 32 valid rooms each, median **5.30 → 6.83 fps (+29%)**, mean 5.04 → 6.46;
 rooms 0–17 pair cleanly and are ALL faster (+17.6% … +52.2%, median ≈ +33%).

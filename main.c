@@ -11128,6 +11128,26 @@ bootvid_entry:
                       if (cam == g_stagecam && ck != g_stageck) g_stagechg++;
                       g_stageck = ck; g_stagecam = cam; }
 #endif
+#if defined(JXWAIT) && defined(JERRYPOSE)
+                    /* A1 EXPERIMENT (2026-08-26): wait for EVERY Jerry room
+                       transform before Tom's FIRST dispatch. Without this,
+                       Tom's ~3 ms per-room guard (gpu_geotex.gas vc_jwait)
+                       decides PER FRAME whose arithmetic transforms a room -
+                       Jerry's or Tom's own self-transform - and the sub-pixel
+                       difference between the two is a wedge toggling between
+                       two shades with the camera perfectly still (the A1
+                       signature). Poll politely: ONE DRAM read per ~150 us,
+                       the gap burned in registers, so Jerry keeps the bus;
+                       bounded (200 polls/room ~ 30 ms) so it can never hang. */
+                    if (g_jerry_ok && njx) {
+                        int ai, w;
+                        for (ai = 0; ai < njx; ai++)
+                            for (w = 0; w < 200; w++) {
+                                if (*(volatile uint32_t *)&jcache[ai][3] >= 2u) break;
+                                __asm__ volatile("move.w #199,%%d0\n0:\tdbra %%d0,0b" ::: "d0", "cc");
+                            }
+                    }
+#endif
                     { uint32_t total = displist[0], base = 0;
                       static uint32_t batch[1+8*4];
                       while (base < total) {
