@@ -98,7 +98,18 @@ SPANSHADE=1 SHADEEXCL=1 TIMESTEP=1 ANIMRATE=1 OPDBL=1 LPLANES=1 \
 VCBIG=1 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 ENEMYTEX=1 BLOBCACHE=1 \
 JCENT=1 JOVL=1 SECTLONG=1 INLINEMUL=1 OFFHOIST=1 VPACK=1 NOPCLIP=1 \
 TRAPFLOOR=1 GUNS=1 BOOTVID=1 JVFASTKICK=1 PROBE_AHEAD=256 RCLIPFIX=1 \
-FITSTEP=1 M68A2=1}"
+FITSTEP=1 M68A2=1 VCDRAIN=1}"
+
+# VCDRAIN=1 (2026-08-26): A1 - the still-camera flicker - was TWO mechanisms,
+# and this kills the first: Tom's face loop read back vertex-cache words the
+# pre-pass had just STORED (jsim store->load detector: 118-cycle minimum gap)
+# and silicon returned the STALE word under bus traffic, so one vertex was
+# wrong and a whole face toggled frame to frame - only in rooms that dispatch
+# more rooms than Jerry's 8-entry cache, where Tom transforms the rest itself.
+# An ~8k-cycle drain after the self-transform pre-pass: 38-room tour, rooms
+# paired by content, racing px 9797 -> 6219 (-37%), the worst whole-face room
+# 2698 -> 12, fps median 6.83 -> 6.75. The floor SPECKLE in PSX room 32 is the
+# second mechanism and is untouched (4278 -> 4311) - still open.
 
 # M68A2=1 (2026-08-26): the 68k's room painter sort was an O(n^2) SELECTION
 # SORT over all 38 rooms recomputing TWO Manhattan distances (4 abs) per inner

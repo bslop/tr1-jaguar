@@ -44,7 +44,22 @@ CONTENTION while Tom renders under PIPELINE. Order-identical (pixel diff 0 /
 12 px). Added to `build_cof.sh` BUILD_FLAGS. ☠️ `fps_measure.py` locked onto an
 edge pixel at VRESN=80 and read 6.48 for a true 7.00; use `tools/beacon_box.py`.
 
-**A1 (the still-camera flicker) — one hypothesis REFUTED, one arm on the rig**
+**✅✅✅ A1 HALF-FIXED — `VCDRAIN=1` (jagq #1998, 38-room tour, rooms paired
+by CONTENT, `tools/tour_pair.py`):** racing px **9797 → 6219 (−37%)**; the
+whole-wall face in PSX room 20: **2698 → 12**; rooms 3/10: 832 → 93, 484 → 35;
+fps 6.83 → 6.75. **Mechanism:** Tom's face loop read back vertex-cache words
+the self-transform pre-pass had JUST stored (jsim: 118-cycle min gap) and
+silicon returned the stale word — one wrong vertex = a face toggling. Only
+rooms dispatching >8 rooms (Jerry's cache cap) self-transform, which is why it
+was room-specific. Fix = ~8k-cycle drain after the pre-pass, self-transform
+path only. **Now in `build_cof.sh`.**
+⬜ **Second mechanism, OPEN: floor SPECKLE in PSX room 32 (tour seg 19)** —
+4278 → 4311, untouched by the drain, ~45% of remaining racing px, per-pixel
+(texel/span level), thinned by less 68k traffic (base 5227 → M68A2 4278).
+☠️ Index-paired segments lied (the drain "fixed 94%" of a room that was a
+different room) — pair by content, always.
+
+**A1 — the earlier hypotheses, for the record**
 * ☠️ **Refuted: "Tom's 3 ms per-room guard times out and self-transforms with
   different arithmetic than Jerry."** `JXWAIT=1` makes the 68k wait (polite
   150 µs backoff) for every Jerry room flag before Tom's first dispatch. The

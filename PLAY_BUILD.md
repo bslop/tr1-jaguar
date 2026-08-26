@@ -12,6 +12,9 @@
   at full quality, order-identical. jagemu read it as ZERO - the gain is bus
   contention, which only a silicon A/B can price. Measure fps at VRESN=80
   with `tools/beacon_box.py` (the two older beacon tools mis-locate the block).
+* **`VCDRAIN=1` is in `BUILD_FLAGS`: the A1 whole-face flicker is FIXED** (a
+  stale same-core store→load on Tom's vertex cache; −37% racing px level-wide,
+  the worst room 2698 → 12, ~1% fps). Floor speckle in PSX room 32 remains.
 * The "CURRENT RECIPE" below **no longer builds** (`g_gunst` undeclared —
   needs `GUNS=1`, and the tree now hard-requires `BLOBCACHE=1 JCENT=1 JOVL=1
   SECTLONG=1`). The recipe of record is **`tools/build_cof.sh`'s
