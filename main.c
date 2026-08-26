@@ -9924,10 +9924,16 @@ bootvid_entry:
             { uint32_t _m = vp_tick(); if (bp_m) bp_p1 += _m - bp_m; bp_m = _m; }
             bp_active += vp_tick() - bp_t0;      /* loop top -> here: ACTIVE */
 #endif
-#if defined(PIPELINE) && PIPESTAGE >= 1 && !defined(COLLECTEARLY)
+#if defined(PIPELINE) && PIPESTAGE >= 1
             /* PIPELINE collect point: the logic above ran while Tom finished
                the previous frame. Present it before any blitter (clear) or
-               pose (lara_blob) work — both would collide with a live render. */
+               pose (lara_blob) work — both would collide with a live render.
+               ☠️ This #if used to carry `&& !defined(COLLECTEARLY)`, which
+               compiled out EVERYTHING to its #endif - the HUD paints AND the
+               deferred video_flip - not just the collect. COLLECTEARLY then
+               ran the game and never presented a frame: black on silicon and
+               in jagemu (2026-08-26). Under COLLECTEARLY the collect below is
+               a no-op (g_tominflight is already 0); the flip must still run. */
 #ifdef PACEPROBE
             { uint32_t _n = PPNOW();
               if (pp_prev0) { uint32_t _d = _n - pp_prev0;

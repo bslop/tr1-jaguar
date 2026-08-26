@@ -53,11 +53,18 @@ edge pixel at VRESN=80 and read 6.48 for a true 7.00; use `tools/beacon_box.py`.
   (jagq #1993). Jerry is already done by dispatch; the race is elsewhere.
 * Metric = `race_px.py` (world pixels toggling ≥8 times in 40 s, Lara + beacon
   masked): base 536 → M68A2 463 (−14%: less 68k bus traffic helps a little).
-* ⬜ On the rig: `COLLECTEARLY=1` on M68A2 (jagq #1995) — the collect after the
-  light head of the frame, so Lara's collision + the portal walk no longer run
-  on top of Tom's render. Written 08-19 with the 549 → 43 PIPESTAGE=0 number,
-  never measured. With the sort gone the head is light, so the fps cost may
-  finally be affordable.
+* ☠️ **Refuted: `COLLECTEARLY=1`** (jagq #1997): racing px **482** vs 463,
+  fps **6.55 (−18%)**. The 68k sleeping through most of Tom's render does NOT
+  quiet the wedge, so "68k bus pressure" is not the A1 mechanism either.
+  ☠️ And the flag had a BUG: its `#if … && !defined(COLLECTEARLY)` gate at the
+  old collect ran to the `#endif` after the deferred `video_flip`, so it
+  compiled out the flip and the HUD paints — black on silicon (jagq #1995)
+  and in jagemu. Fixed (gate no longer excludes COLLECTEARLY; the old collect
+  is a no-op under it). Flag stays off.
+* ⇒ Both 68k-side hypotheses are dead. What is left is nondeterminism INSIDE
+  Tom's frame: the kernel's own "stale-BUSY window" (a Blitter status poll
+  that sails through before BUSY asserts) is the named candidate — jsim's
+  `blitter.bcmd_poll_in_settle` counter is the instrument to read first.
 
 **✅✅ 38-ROOM TOUR CONFIRMS IT, LARGER: jagq #1991 base vs #1992 M68A2** —
 32 valid rooms each, median **5.30 → 6.83 fps (+29%)**, mean 5.04 → 6.46;
