@@ -13,6 +13,14 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+### ☠️☠️ USER VERDICT 2026-08-26: "That's unplayable. It moves faster, but really hard to see." — BLOCKY / TALL PIXELS
+Every ROM put on the rig today was `VRESN=80` (the recipe's QUALITY=playable,
+3x vertical scale). The user's perception verdict on 80 lines is IN: **too
+blocky to play.** ★★★★★ A perception verdict closes a FEATURE — 80 lines is
+out as the ship quality. With M68A2 (+14–29%) the 120-line "pretty" build may
+now be as fast as 80-line was: **on the rig, jagq 120-line A/B (old vs
+M68A2+VCDRAIN)**. If 120 + levers ≥ the old 80-line 7.47, ship pretty.
+
 ### ✅✅✅ 2026-08-26 — A10 SOLVED: TWO BUGS, BOTH FIXED, PAD 0 RENDERS (interactive session)
 
 1. **A10 = OP scaled-object ALIGNMENT.** The OP fetches a TYPE-1 object as one
