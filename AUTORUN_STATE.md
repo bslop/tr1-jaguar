@@ -36,6 +36,14 @@ jagemu (mean 0.0854, 0 OP hits, 0 stray writes). **Pad 0 has never lit before.**
 logo → intro clip → title ring → Lara in the caves, on the pad that had never
 lit. `~/.jagq/jobs/1988/frame_0[0-7].png`. Capture card works.
 
+**✅✅ +13.9% ON SILICON — `M68A2=1` (jagq #1989 base vs #1990): 7.000 → 7.975
+fps** (beacon box, bimodal, every 5 s window; frame-change 7.12 → 8.09 agrees).
+The O(n²) room selection sort (main.c:9877-9888, `#else` branch) was 31.8% of
+68k main-line cycles and jagemu priced it at ZERO frames — the win is BUS
+CONTENTION while Tom renders under PIPELINE. Order-identical (pixel diff 0 /
+12 px). Added to `build_cof.sh` BUILD_FLAGS. ☠️ `fps_measure.py` locked onto an
+edge pixel at VRESN=80 and read 6.48 for a true 7.00; use `tools/beacon_box.py`.
+
 **Gameplay profile (jagemu, silicon fidelity, frames 300-1200, `final_p136`)**
 — kernel attribution verified by `cmp` of Tom SRAM against `gpu_geotex.bin`:
 * Tom busy 73.6% of wall; **~30% of Tom's cycles are WAITING**: `ss_bw` +

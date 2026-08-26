@@ -98,7 +98,18 @@ SPANSHADE=1 SHADEEXCL=1 TIMESTEP=1 ANIMRATE=1 OPDBL=1 LPLANES=1 \
 VCBIG=1 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 ENEMYTEX=1 BLOBCACHE=1 \
 JCENT=1 JOVL=1 SECTLONG=1 INLINEMUL=1 OFFHOIST=1 VPACK=1 NOPCLIP=1 \
 TRAPFLOOR=1 GUNS=1 BOOTVID=1 JVFASTKICK=1 PROBE_AHEAD=256 RCLIPFIX=1 \
-FITSTEP=1}"
+FITSTEP=1 M68A2=1}"
+
+# M68A2=1 (2026-08-26): the 68k's room painter sort was an O(n^2) SELECTION
+# SORT over all 38 rooms recomputing TWO Manhattan distances (4 abs) per inner
+# iteration from DRAM stack tables - 31.8% of the 68k's main-line cycles,
+# ~20 ms/frame.  jagemu said it costs NOTHING (frames 136 -> 136: PIPELINE
+# overlaps it with Tom).  SILICON says +13.9%: 7.000 -> 7.975 fps, beacon and
+# frame-change agreeing, because that DRAM traffic runs WHILE Tom renders and
+# the bus is what Tom is starved of (the HUDTEXT lesson, fourth time).  M68A2
+# sorts only the admit loop's own candidates with the distance hoisted; same
+# comparator, same scan order => order-identical (0 px diff @420, 12 px @700
+# = animation phase).  A July PERFHUNT arm that read flat under the old stack.
 
 # FITSTEP=1: TR1's headroom rule on the automatic <=256 step-up, so Lara stops
 # walking up into gaps she does not fit in (Lara's Home had 105 of 304 step-up
