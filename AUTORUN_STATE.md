@@ -51,8 +51,15 @@ edge pixel at VRESN=80 and read 6.48 for a true 7.00; use `tools/beacon_box.py`.
   wait executed (jagemu: 336 backoffs / 600 frames) and changed NOTHING on
   silicon: racing world px **469 vs 463** (M68A2 control), fps 8.00 vs 7.98
   (jagq #1993). Jerry is already done by dispatch; the race is elsewhere.
-* Metric = `race_px.py` (world pixels toggling ≥8 times in 40 s, Lara + beacon
-  masked): base 536 → M68A2 463 (−14%: less 68k bus traffic helps a little).
+* ☠️☠️ **THE FIRST METRIC WAS BROKEN** — its hand-placed beacon box missed the
+  block's top rows, so 536/463/469/482 were ~90% beacon edge + Lara breathing
+  (the mask IMAGE showed it). `tools/race_px.py` now derives the beacon mask
+  from the data. **Corrected, world only: base 60 → M68A2 30 → +JXWAIT 31 →
+  +COLLECTEARLY 31.** ⇒ M68A2 HALVES the still-camera flicker at the spawn
+  (the sort's DRAM traffic was a real A1 contributor, as PIPESTAGE=0's 89%
+  predicted); neither experiment adds anything beyond it; the residual ~30 px
+  do not respond to the 68k going quiet at all — Tom-internal. The spawn is a
+  weak A1 site; the user's "worst flickering" spot is elsewhere.
 * ☠️ **Refuted: `COLLECTEARLY=1`** (jagq #1997): racing px **482** vs 463,
   fps **6.55 (−18%)**. The 68k sleeping through most of Tom's render does NOT
   quiet the wedge, so "68k bus pressure" is not the A1 mechanism either.
