@@ -104,7 +104,16 @@ fbpix *const crash_fbs[3] = { fb0, fb1, fb2 };
 #define OPSTATIC          /* exported to startup.S in all builds */
 
 
-OPSTATIC uint32_t op_list[16] __attribute__((aligned(16)));
+/* DEFINED BY THE LINKER SCRIPT (jaguar.ld), 32-byte aligned by construction. */
+extern uint32_t op_list[16];
+/* ☠️☠️☠️ 32, NOT 16 (2026-08-26). The OP fetches a SCALED (TYPE-1) object as ONE
+   4-phrase = 32-BYTE burst and DIES if it straddles a 32-byte boundary: black
+   first field, wedged machine. aligned(16) let the linker put us at 16 mod 32
+   half the time - and THAT is the whole A10 / PADTEXT boot lottery. Hardware
+   result from jag_quake 2026-08-22; cobweb 905188f models it, and jsim scores
+   our own ship pads 0/408/544 dead (16 mod 32) against 136/272/816 clean.
+   With OPDBL, list B is at op_list[8] = +32, so both lists share the residue.
+   ☠️ Do not "tidy" this back to 16. */
 /* A10 (2026-07-30): CONTIGUOUS shadow of the 6 longs the vblank ISR restores.
    The ISR must rebuild the scaled object before the OP re-fetches it at VC 32.
    The old repair was six `move.l abs,abs` - each 5 words of INSTRUCTION FETCH
