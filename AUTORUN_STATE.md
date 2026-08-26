@@ -60,11 +60,16 @@ TRAPFLOOR off, sort hysteresis; **constant 48.6 with ENEMIES off.** The tour
 parks a PADMUTEd Lara beside a wolf that wakes and walks through the patch.
 ⇒ **A1 accounting after VCDRAIN: 6219 − ~4300 (wolf) ≈ 1900 racing px
 level-wide, from 9797 — the whole-face class is gone and no room stands out.**
-⬜ **NEW VISIBLE BUG: the WOLF drags a large flat BLACK polygon** across the
-floor as it walks (jagemu, tour seg 19 hold, `scratchpad/obj_zoom.png`
-shape: a black slab the size of the body, head textured). Untextured or
-degenerate body face — check the wolf's `tex<256` colour faces and any face
-whose UV tile is missing from the half-res enemy atlas.
+✅ **The wolf's flat BLACK polygon is a LOCAL-ASSET artifact, not a shipping
+bug.** `disc/mrt_entex.h` here is dated Aug 11 — before the all-three-enemies
+skin work — and carries 121/173 wolf quads (and 100% of bear/bat) as `0xFFFF`
+flat faces; those fall back to the tone swatch, which samples black against
+the current atlas. With ENEMYTEX off the wolf renders whole. **The shipping
+`ship_p136.cof` does NOT contain this wolf UV table (byte-signature search);
+`final_p0`/`tour_*` (built here) do.** The container regenerates it
+(`build_cof.sh` MRT_ENEMYTEX pass, default models `wolf,bat,bear`). ⇒ Before
+judging ANY enemy on a locally-built ROM, regenerate `disc/` with the
+build_cof.sh recipe. None of today's A10/M68A2/VCDRAIN results depend on it.
 ☠️ Still-camera flicker metrics must run with ENEMIES off (or mask entities);
 `tools/tour_pair.py`/`race_px.py` do not know a wolf from a wall.
 ☠️ Index-paired segments lied (the drain "fixed 94%" of a room that was a
