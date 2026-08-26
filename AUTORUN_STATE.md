@@ -68,6 +68,18 @@ edge pixel at VRESN=80 and read 6.48 for a true 7.00; use `tools/beacon_box.py`.
   compiled out the flip and the HUD paints — black on silicon (jagq #1995)
   and in jagemu. Fixed (gate no longer excludes COLLECTEARLY; the old collect
   is a no-op under it). Flag stays off.
+* ★★★★★ **THE A1 MAP (from the 38-room tour, frame-rate-fair metric,
+  `tools/race_px.py` masks): level-wide the two arms are EQUAL** (10,014 vs
+  9,797 racing px, 14 rooms ≥20 each) — M68A2 is not a regression, it shuffles
+  which near-tied faces flip. **Two shapes, two rooms:**
+  - **tour seg 19 = PSX room 32: SPECKLE** across the floor (5227 base / 4278
+    a2) — per-pixel nondeterminism; M68A2 visibly thins it ⇒ the bus-pressure
+    class PIPESTAGE=0 attacked.
+  - **tour seg 26 = PSX room 20: a WHOLE WALL FACE** toggling (2960/2698) —
+    painter-order flip between overlapping rooms; the idle camera breathes,
+    near-tied rooms swap. Candidate fix: hysteresis in the room sort.
+  ☠️ A 60-field window at 5 fps holds 5 frames: a ≥4-toggle threshold is
+  biased toward the faster arm. Use toggles ≥ 50% of frames rendered.
 * ⇒ Both 68k-side hypotheses are dead. What is left is nondeterminism INSIDE
   Tom's frame: the kernel's own "stale-BUSY window" (a Blitter status poll
   that sails through before BUSY asserts) is the named candidate — jsim's
