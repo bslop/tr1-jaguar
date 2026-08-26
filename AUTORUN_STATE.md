@@ -53,9 +53,15 @@ silicon returned the stale word — one wrong vertex = a face toggling. Only
 rooms dispatching >8 rooms (Jerry's cache cap) self-transform, which is why it
 was room-specific. Fix = ~8k-cycle drain after the pre-pass, self-transform
 path only. **Now in `build_cof.sh`.**
-⬜ **Second mechanism, OPEN: floor SPECKLE in PSX room 32 (tour seg 19)** —
-4278 → 4311, untouched by the drain, ~45% of remaining racing px, per-pixel
-(texel/span level), thinned by less 68k traffic (base 5227 → M68A2 4278).
+✅ **The "second mechanism" in PSX room 32 was a WOLF.** jagemu live session
+at the hold: camera block bit-identical for 96 fields, floor-patch luma steps
+48.6 → 44 → 41 → 54 at a fixed game time; unchanged by NEARLOW, BEXIT off,
+TRAPFLOOR off, sort hysteresis; **constant 48.6 with ENEMIES off.** The tour
+parks a PADMUTEd Lara beside a wolf that wakes and walks through the patch.
+⇒ **A1 accounting after VCDRAIN: 6219 − ~4300 (wolf) ≈ 1900 racing px
+level-wide, from 9797 — the whole-face class is gone and no room stands out.**
+☠️ Still-camera flicker metrics must run with ENEMIES off (or mask entities);
+`tools/tour_pair.py`/`race_px.py` do not know a wolf from a wall.
 ☠️ Index-paired segments lied (the drain "fixed 94%" of a room that was a
 different room) — pair by content, always.
 
