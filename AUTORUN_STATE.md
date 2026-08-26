@@ -25,8 +25,9 @@ M68A2+VCDRAIN)**. If 120 + levers ≥ the old 80-line 7.47, ship pretty.
 agrees. ☠️ The +14% seen at 80 lines does NOT transfer to 120: with more
 pixels Tom's render is longer and the 68k overlap matters less. So "pretty"
 runs at ~6.6 fps (9 fields) vs 8.0 for the 80-line build the user rejected.
-⬜ 96 lines + levers on the rig (2.5x scale; memory: "near-indistinguishable
-from 120, +7.2%") as the compromise arm. **The quality/fps trade is the
+✅ **96 lines + levers (jagq #2021): 7.35 fps** (frame-change 7.41) — +11%
+over 120+levers, within 8% of the rejected 80-line build. THE LADDER TODAY:
+120 → 6.63 · 96 → 7.35 · 80 → 7.98 (all M68A2+VCDRAIN, spawn, silicon). **The quality/fps trade is the
 user's call — present 120/96/80 numbers, do not pick.**
 
 ### ✅✅✅ 2026-08-26 — A10 SOLVED: TWO BUGS, BOTH FIXED, PAD 0 RENDERS (interactive session)
