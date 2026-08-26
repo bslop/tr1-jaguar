@@ -1,3 +1,18 @@
+## ☠️☠️☠️ 2026-08-26 — READ FIRST: the A10 lottery is OVER, and the recipes below are STALE
+
+* **PADTEXT no longer matters for booting.** A10 was the OP scaled object at
+  16 mod 32; `op_list` now lives in `jaguar.ld` under `ALIGN(32)`. Roll pads
+  only if a build is black for some NEW reason — and check `jagemu run`'s
+  `op.scaled_misaligned_hits` first, it is 0 on a good build.
+* **Pull cobweb ≥ `ba9c680` and rebuild jas** before building. Older jas
+  drops the destination reloc of mem-to-mem moves and every jcc68k build of
+  video.c is black on every pad (24 stores into the vector table). Check:
+  scan the ROM for opcode `23f9` with a destination < `$4000` — must be 0.
+* The "CURRENT RECIPE" below **no longer builds** (`g_gunst` undeclared —
+  needs `GUNS=1`, and the tree now hard-requires `BLOBCACHE=1 JCENT=1 JOVL=1
+  SECTLONG=1`). The recipe of record is **`tools/build_cof.sh`'s
+  `BUILD_FLAGS`** (+ `VRESN=80` for playable, `AUTOSTART=1` to skip the title).
+
 # The shipping build recipe (verified 2026-07-29)
 
 ## ★★★★★ 2026-08-15 — THE CONTAINER BUILDS IT ALL: `PADTEXT=136`

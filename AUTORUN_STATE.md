@@ -13,6 +13,34 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+### ✅✅✅ 2026-08-26 — A10 SOLVED: TWO BUGS, BOTH FIXED, PAD 0 RENDERS (interactive session)
+
+1. **A10 = OP scaled-object ALIGNMENT.** The OP fetches a TYPE-1 object as one
+   32-byte burst and dies on a straddle (jag_quake silicon, cobweb `905188f`).
+   `op_list` was `aligned(16)`. jsim now reproduces our whole silicon history:
+   shipped pads 0/408/544 are 16 mod 32 → 37366 misaligned hits, black;
+   136/272/816 clean. **Fix: `op_list` is defined in `jaguar.ld` under
+   `ALIGN(32)`** (`aligned(32)` in C does not survive `jas`). Commit `1cc0b9f`.
+   The 07-29 "VI never fires" was the consequence, not the cause.
+2. **`jas` dropped the DESTINATION reloc of `move.l sym,sym2`** — every
+   global-to-global copy in a jcc68k TU stored into the exception vector table
+   (24 sites; `fs_ph1/2/3` stayed zero → height-0 object → **black on every
+   pad** since video.c moved onto jcc68k; `ship_p136` dodged it via `GCCHOT=1`).
+   **Fixed in cobweb `ba9c680`** with a regression test. Pull cobweb and rebuild
+   jas before building ANYTHING.
+
+**Proof:** `final_p0.cof` and `final_p136.cof` render Lara in the caves in
+jagemu (mean 0.0854, 0 OP hits, 0 stray writes). **Pad 0 has never lit before.**
+
+⬜ NEXT: one rig turn with `final_p0.cof` — the historically-black pad — to
+confirm on silicon. The capture card is BACK (`jagq status`: capture ok).
+⬜ `PLAY_BUILD.md` recipe is stale (needs `GUNS BLOBCACHE JCENT JOVL SECTLONG`);
+build from `tools/build_cof.sh`'s `BUILD_FLAGS` (+`VRESN=80 AUTOSTART=1`).
+⬜ jas still leaves `.bss` `sh_addralign` at 16 under `.align 32` (filed in
+jaguar-shared) — keep the linker-script placement.
+★ Method: a commit bisect 18→19 Aug found NOTHING — the assembler was the
+variable. Diff linked bytes against generated asm.
+
 ### What may interrupt the 25 — and what may not (user, 2026-08-17)
 
 > **The full working agreement lives in `/home/jvilla/Documents/Git/jaguar-shared/DEVELOPMENT.md`** — read it
