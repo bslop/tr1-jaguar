@@ -44,6 +44,12 @@ CONTENTION while Tom renders under PIPELINE. Order-identical (pixel diff 0 /
 12 px). Added to `build_cof.sh` BUILD_FLAGS. ☠️ `fps_measure.py` locked onto an
 edge pixel at VRESN=80 and read 6.48 for a true 7.00; use `tools/beacon_box.py`.
 
+**✅✅ 38-ROOM TOUR CONFIRMS IT, LARGER: jagq #1991 base vs #1992 M68A2** —
+32 valid rooms each, median **5.30 → 6.83 fps (+29%)**, mean 5.04 → 6.46;
+rooms 0–17 pair cleanly and are ALL faster (+17.6% … +52.2%, median ≈ +33%).
+The spawn's +14% was the small end. Per-segment tables in `sweeps/`, tool =
+`tools/tour_box.py` (tour_fps.py's locator does not work at VRESN=80).
+
 **Gameplay profile (jagemu, silicon fidelity, frames 300-1200, `final_p136`)**
 — kernel attribution verified by `cmp` of Tom SRAM against `gpu_geotex.bin`:
 * Tom busy 73.6% of wall; **~30% of Tom's cycles are WAITING**: `ss_bw` +
