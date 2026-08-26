@@ -60,6 +60,11 @@ TRAPFLOOR off, sort hysteresis; **constant 48.6 with ENEMIES off.** The tour
 parks a PADMUTEd Lara beside a wolf that wakes and walks through the patch.
 ⇒ **A1 accounting after VCDRAIN: 6219 − ~4300 (wolf) ≈ 1900 racing px
 level-wide, from 9797 — the whole-face class is gone and no room stands out.**
+⬜ **NEW VISIBLE BUG: the WOLF drags a large flat BLACK polygon** across the
+floor as it walks (jagemu, tour seg 19 hold, `scratchpad/obj_zoom.png`
+shape: a black slab the size of the body, head textured). Untextured or
+degenerate body face — check the wolf's `tex<256` colour faces and any face
+whose UV tile is missing from the half-res enemy atlas.
 ☠️ Still-camera flicker metrics must run with ENEMIES off (or mask entities);
 `tools/tour_pair.py`/`race_px.py` do not know a wolf from a wall.
 ☠️ Index-paired segments lied (the drain "fixed 94%" of a room that was a
