@@ -20,6 +20,14 @@ blocky to play.** ★★★★★ A perception verdict closes a FEATURE — 80 l
 out as the ship quality. With M68A2 (+14–29%) the 120-line "pretty" build may
 now be as fast as 80-line was: **on the rig, jagq 120-line A/B (old vs
 M68A2+VCDRAIN)**. If 120 + levers ≥ the old 80-line 7.47, ship pretty.
+**RESULT (jagq #2018 vs #2019, spawn, PADMUTE+FASTBOOT):** 120-line old
+**6.325** → 120-line + levers **6.625 (+4.7%)**; frame-change 6.47 → 6.78
+agrees. ☠️ The +14% seen at 80 lines does NOT transfer to 120: with more
+pixels Tom's render is longer and the 68k overlap matters less. So "pretty"
+runs at ~6.6 fps (9 fields) vs 8.0 for the 80-line build the user rejected.
+⬜ 96 lines + levers on the rig (2.5x scale; memory: "near-indistinguishable
+from 120, +7.2%") as the compromise arm. **The quality/fps trade is the
+user's call — present 120/96/80 numbers, do not pick.**
 
 ### ✅✅✅ 2026-08-26 — A10 SOLVED: TWO BUGS, BOTH FIXED, PAD 0 RENDERS (interactive session)
 
