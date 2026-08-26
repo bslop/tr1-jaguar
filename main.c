@@ -8088,8 +8088,14 @@ bootvid_entry:
                                                  art's own palette */
 #ifndef FASTBOOT
         { extern volatile uint32_t frame_count;
+          extern int cpu_stop_unless_ge(volatile uint32_t *, uint32_t);
           uint32_t h0 = frame_count;
-          while (frame_count - h0 < 96u)      /* ~1.6s at 60Hz */
+          /* SLEEP the beat, don't spin it (2026-08-26): this was a bare
+             `while (frame_count - h0 < 96u) ;` - a 5710-deep DRAM poll by
+             jsim's detector against a 128-read hardware budget, the class of
+             loop that has stopped real silicon. STOP releases the bus; the
+             vblank wakes us each field. Same helper the title path uses. */
+          while (!cpu_stop_unless_ge(&frame_count, h0 + 96u))   /* ~1.6s */
               ;
         }
 #endif
@@ -8106,7 +8112,10 @@ bootvid_entry:
               blit_band(crash_fbs[b4], 0, 240, 0);
           video_flip();
           { extern volatile uint32_t frame_count; uint32_t h1 = frame_count;
-            while (frame_count - h1 < 2u) ; } }
+            /* SLEEP, don't spin (2026-08-26) - the twin of the 96-field beat
+               above; jsim's poll detector scored this one 5708 deep too. */
+            { extern int cpu_stop_unless_ge(volatile uint32_t *, uint32_t);
+              while (!cpu_stop_unless_ge(&frame_count, h1 + 2u)) ; } } }
         g_loadfb = 0;                         /* nothing may draw into the
                                                  panel buffer from here on */
         video_set_clut(S_pal);
