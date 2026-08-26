@@ -13,22 +13,14 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
-### ☠️☠️ USER VERDICT 2026-08-26: "That's unplayable. It moves faster, but really hard to see." — BLOCKY / TALL PIXELS
-Every ROM put on the rig today was `VRESN=80` (the recipe's QUALITY=playable,
-3x vertical scale). The user's perception verdict on 80 lines is IN: **too
-blocky to play.** ★★★★★ A perception verdict closes a FEATURE — 80 lines is
-out as the ship quality. With M68A2 (+14–29%) the 120-line "pretty" build may
-now be as fast as 80-line was: **on the rig, jagq 120-line A/B (old vs
-M68A2+VCDRAIN)**. If 120 + levers ≥ the old 80-line 7.47, ship pretty.
-**RESULT (jagq #2018 vs #2019, spawn, PADMUTE+FASTBOOT):** 120-line old
-**6.325** → 120-line + levers **6.625 (+4.7%)**; frame-change 6.47 → 6.78
-agrees. ☠️ The +14% seen at 80 lines does NOT transfer to 120: with more
-pixels Tom's render is longer and the 68k overlap matters less. So "pretty"
-runs at ~6.6 fps (9 fields) vs 8.0 for the 80-line build the user rejected.
-✅ **96 lines + levers (jagq #2021): 7.35 fps** (frame-change 7.41) — +11%
-over 120+levers, within 8% of the rejected 80-line build. THE LADDER TODAY:
-120 → 6.63 · 96 → 7.35 · 80 → 7.98 (all M68A2+VCDRAIN, spawn, silicon). **The quality/fps trade is the
-user's call — present 120/96/80 numbers, do not pick.**
+### 2026-08-26 — THE RESOLUTION LADDER WITH TODAY'S LEVERS (silicon, spawn, PADMUTE+FASTBOOT)
+120 lines **6.63** fps (was 6.33 without levers, +4.7%) · 96 lines **7.35** ·
+80 lines **7.98** (jagq #2018/#2019/#2021 + #1990). ☠️ The +14% the levers give
+at 80 lines does NOT transfer to 120 — more pixels, longer Tom render, less
+68k overlap to remove. **80 lines (QUALITY=playable) STAYS the shipped
+setting** — a "that's unplayable, hard to see" comment received today was
+meant for ANOTHER Claude instance (user, same day: "What we had was fine").
+The numbers stand; the verdict does not apply here.
 
 ### ✅✅✅ 2026-08-26 — A10 SOLVED: TWO BUGS, BOTH FIXED, PAD 0 RENDERS (interactive session)
 

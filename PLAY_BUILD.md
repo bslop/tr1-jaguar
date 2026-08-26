@@ -26,10 +26,10 @@
 ```
 docker build -t tr-jaguar .
 docker run --rm -v "$PWD/disc:/disc:ro" -v "$PWD/out:/out" \
-  -e DISC_NAME="Tomb Raider (USA) (v1.6).cue" -e QUALITY=pretty -e PADTEXT=136 tr-jaguar
-  # ☠️ QUALITY=playable (80 lines, 3x tall pixels) was the line here until 2026-08-26 -
-  # the user: "That's unplayable... really hard to see." pretty = 120 lines, ~6.6 fps
-  # with M68A2+VCDRAIN (was 6.3); 96 lines is the compromise being measured.
+  -e DISC_NAME="Tomb Raider (USA) (v1.6).cue" -e QUALITY=playable -e PADTEXT=136 tr-jaguar
+  # Ladder with M68A2+VCDRAIN, silicon, spawn (2026-08-26): 120 lines 6.63 fps ·
+  # 96 lines 7.35 · 80 lines (playable) 7.98. QUALITY=96 would need a one-line
+  # addition to build_cof.sh if ever wanted; playable stays the shipped setting.
 ```
 Emits the whole SD payload from the disc: **OPENLARA.COF + EIDOS/CORE/INTRO/
 CAVES.JV + MUSIC.PCM + GYMLOAD.DAT**. Boots on silicon (confirmed on the TV).
