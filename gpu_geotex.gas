@@ -369,6 +369,7 @@ RUNHIST_BUF	.equ	$1C0000		; RUNHIST=1 probe only (emu telemetry):
 					; free gap between BSS end and stack
 BEHINDF		.equ	$F03F48		; any-staged-vert-behind flag (per face)
 VCACHE_PRM	.equ	$F03F08		; params[2] = vertex-cache DRAM base
+VCDRAIN_N	.equ	2000		; VCDRAIN spin count (see vc_drain)
 RSAVE		.equ	$F03F4C		; r15 (byend) stash during span section
 ; PORTAL-WINDOW CLIP RECT (68k-written before each kick; full screen when
 ; unused). Spans clamp to [CLIPX0..CLIPX1], faces to [CLIPY0..CLIPY1].
@@ -1201,6 +1202,23 @@ vc_next:
 	subq	#1,r31
 	movei	#vc_loop,r22
 	jump	NE,(r22)
+	nop
+	.endif
+	.if VCDRAIN=1
+	; STORE->LOAD DRAIN (A1 experiment, 2026-08-26). The face loop reads back
+	; vertex-cache words this pre-pass JUST stored - jsim's round-trip
+	; detector puts the minimum store->load gap at 118 cycles - and silicon
+	; can return the STALE word under bus traffic (jag_quake: three kills).
+	; One wrong vertex is a wedge or a whole face toggling on a still camera:
+	; the A1 shape, in exactly the rooms that dispatch more rooms than Jerry's
+	; 8-entry cache, i.e. the rooms Tom transforms itself. Give the posted
+	; stores time to land. Only the self-transform path falls through here;
+	; vc_jok (Jerry rooms) jumps straight to vc_done. r0 is dead: quad_setup
+	; reloads it first thing. ~VCDRAIN_N*4 cycles per self-transformed room.
+	movei	#VCDRAIN_N,r0
+vc_drain:
+	subq	#1,r0
+	jr	NE,vc_drain
 	nop
 	.endif
 vc_done:
