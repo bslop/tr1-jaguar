@@ -32,8 +32,30 @@ summarise that checkpoint away.**
 **Proof:** `final_p0.cof` and `final_p136.cof` render Lara in the caves in
 jagemu (mean 0.0854, 0 OP hits, 0 stray writes). **Pad 0 has never lit before.**
 
-⬜ NEXT: one rig turn with `final_p0.cof` — the historically-black pad — to
-confirm on silicon. The capture card is BACK (`jagq status`: capture ok).
+✅ **CONFIRMED ON SILICON — jagq #1988, `WORK_ROMS/final_p0.cof`:** CORE
+logo → intro clip → title ring → Lara in the caves, on the pad that had never
+lit. `~/.jagq/jobs/1988/frame_0[0-7].png`. Capture card works.
+
+**Gameplay profile (jagemu, silicon fidelity, frames 300-1200, `final_p136`)**
+— kernel attribution verified by `cmp` of Tom SRAM against `gpu_geotex.bin`:
+* Tom busy 73.6% of wall; **~30% of Tom's cycles are WAITING**: `ss_bw` +
+  `bwait` Blitter spins ~17%, the `halt` idle spin 12.4%. Blitter-bound in the
+  span phase, as the closed perf memory says — now quantified per PC.
+* 68k: 43.5% asleep in STOP, 56.5% awake, 99% of that main-line. ~20% of
+  awake time is ONE comparison loop in `main` (`0xFE64`–`0x10298`: stack-table
+  lookups at sp+0x614/+0x814, cmp/blt/beq) — the per-frame depth/paint sort.
+  ~150k cycles/frame ≈ 11 ms ≈ 8% of a 133 ms frame IF serial with Tom.
+* ☠️ `m68k_dram_poll_max` = **5710** at `0xF08A` (budget 128): a 96-field
+  `frame_count` busy-wait in `main` after a `(8,8)` call — one-shot, not
+  per-frame, but a DRAM spin the detector flags. Find and STOP-sleep it.
+* ☠️ GPU store→load round trips: **36** in `stage_vert+0x16..0x2a` (the
+  vertex-cache reads of words the vc_loop pre-pass STORED, min gap 258 cyc).
+  Silicon can return stale/0 there — the same shape as the A1 "PIPELINE race"
+  flicker. Lead, not fixed.
+* `imul32` is NOT hot in geotex (INLINEMUL did its job); my first read said
+  otherwise because I attributed with the geomdirect map. Verify the resident
+  kernel by dumping SRAM before trusting any GPU PC name.
+
 ⬜ `PLAY_BUILD.md` recipe is stale (needs `GUNS BLOBCACHE JCENT JOVL SECTLONG`);
 build from `tools/build_cof.sh`'s `BUILD_FLAGS` (+`VRESN=80 AUTOSTART=1`).
 ⬜ jas still leaves `.bss` `sh_addralign` at 16 under `.align 32` (filed in
