@@ -63,8 +63,8 @@ def portals(prefix):
 def main():
     pfx = sys.argv[sys.argv.index("--prefix") + 1] if "--prefix" in sys.argv else "mrt"
     patch = "--patch" in sys.argv
-    ipath = os.path.join(D, pfx + ".bin")
-    spath = os.path.join(D, pfx + "_sect.bin")
+    ipath = _disc(os.path.join(D, pfx + ".bin"))
+    spath = _disc(os.path.join(D, pfx + "_sect.bin"))
     idx = open(ipath, "rb").read()
     sect = bytearray(open(spath, "rb").read())
     nroom = struct.unpack_from(">H", idx, 0)[0]

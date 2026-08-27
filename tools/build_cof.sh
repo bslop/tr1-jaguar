@@ -22,21 +22,18 @@ BUILD_COF_LOCK=/tmp/.build_cof.lock
 echo $$ > "$BUILD_COF_LOCK"
 trap 'rm -f "$BUILD_COF_LOCK"' EXIT
 
-# ☠️☠️ TOOLCHAIN PIN. cobweb bf31dee+ ships a jcc68k that moves a 16-bit
-# parameter read by +2 bytes, which breaks the gcc/jcc68k ABI boundary this
-# project links across: the ROM builds, runs at full speed, and renders a
-# COMPLETELY BLACK SCREEN. 59e5896 is the last good revision.
-# Forgetting this here would ship a black release, so default it rather than
-# rely on the caller exporting it. See jaguar-shared/COBWEB_ISSUES_JCC68K_ABI.md
-# and tools/toolchain_smoke.sh (which builds a ROM and looks at it).
-if [ -z "${COBWEB_DIR:-}" ] && [ -x /tmp/cobweb-old/sim/target/release/jas ]; then
-    export COBWEB_DIR=/tmp/cobweb-old
-    echo "   toolchain: pinned to /tmp/cobweb-old (cobweb 59e5896)"
-elif [ -z "${COBWEB_DIR:-}" ]; then
-    echo "   ☠️ WARNING: pinned toolchain not found at /tmp/cobweb-old."
-    echo "      git -C <cobweb> worktree add /tmp/cobweb-old 59e5896"
-    echo "      cargo build --release --manifest-path /tmp/cobweb-old/sim/Cargo.toml"
-    echo "      Building with the shared checkout may produce a BLACK ROM."
+# TOOLCHAIN (2026-08-26): the SHARED cobweb checkout, no pin. The 08-16 pin to
+# 59e5896 (/tmp/cobweb-old) was for a "jcc68k ABI regression": ROMs built with
+# newer cobweb ran at full speed and rendered 100% BLACK. That was never an ABI
+# change - newer jcc68k began emitting direct memory-to-memory `move.l sym,sym2`
+# and JAS DROPPED THE DESTINATION RELOCATION (cobweb ba9c680), so every
+# global-to-global copy stored into the 68000 exception vectors and the OP-list
+# shadow words stayed zero. jas is fixed at 9da2f99+ (also section-relative
+# .align, the A10 lottery). Every ROM measured on silicon on 2026-08-26 was built
+# with the shared checkout at 9da2f99. COBWEB_DIR still overrides if you must.
+# The container pins COBWEB_REV in the Dockerfile; keep it >= 9da2f99.
+if [ -n "${COBWEB_DIR:-}" ]; then
+    echo "   toolchain: COBWEB_DIR=$COBWEB_DIR (override)"
 fi
 
 DISC="${1:?usage: build_cof.sh <disc> <outdir>}"
@@ -273,11 +270,11 @@ say "Atlas patches (doors, pickups, pistols, enemy skins)"
 for patch in MRT_DOORPATCH MRT_PICKPATCH MRT_GUNPATCH; do
     env $MRTENV $patch=1 TRLEVEL="$PSX/LEVEL1.PSX" TRPREFIX=mrt \
         python3 tools/tr2jag_multiroom.py >/dev/null || echo "   note: $patch pass failed"
-    echo "   $patch -> atlas $(stat -c%s mrt_atlas.bin) B"
+    echo "   $patch -> atlas $(stat -c%s disc/mrt_atlas.bin) B"
 done
 env $MRTENV MRT_ENEMYTEX=1 MRT_ENEMYTEX_STEP=2 TRLEVEL="$PSX/LEVEL1.PSX" TRPREFIX=mrt \
     python3 tools/tr2jag_multiroom.py >/dev/null || echo "   note: MRT_ENEMYTEX pass failed"
-echo "   MRT_ENEMYTEX -> atlas $(stat -c%s mrt_atlas.bin) B"
+echo "   MRT_ENEMYTEX -> atlas $(stat -c%s disc/mrt_atlas.bin) B"
 env $MRTENV MRT_GUNONLY=1 TRLEVEL="$PSX/LEVEL1.PSX" TRPREFIX=mrt \
     python3 tools/tr2jag_multiroom.py >/dev/null || echo "   note: MRT_GUNONLY pass failed"
 # The pistol ARM animations (LARA_PISTOLS' arm joints). ☠️ Disc-derived, so it
@@ -332,9 +329,9 @@ esac
 # _lskin is skeleton + all-animation joint angles, with no atlas dependence.
 # If a future extractor change makes them diverge, Lara must get her own blob
 # back - so FAIL LOUDLY here rather than render her wrong in Lara's Home.
-if [ -f gym_lskin.bin ] && [ -f mrt_lskin.bin ]; then
-    if cmp -s mrt_lskin.bin gym_lskin.bin; then
-        echo "   gym_lskin == mrt_lskin (alias valid, saves $(stat -c%s gym_lskin.bin) B)"
+if [ -f disc/gym_lskin.bin ] && [ -f disc/mrt_lskin.bin ]; then
+    if cmp -s disc/mrt_lskin.bin disc/gym_lskin.bin; then
+        echo "   gym_lskin == mrt_lskin (alias valid, saves $(stat -c%s disc/gym_lskin.bin) B)"
     else
         echo "☠️ BUILD STOPPED: gym_lskin.bin and mrt_lskin.bin DIVERGED."
         echo "   mrt_data.S aliases gym_lskin onto mrt_lskin; that is now WRONG."

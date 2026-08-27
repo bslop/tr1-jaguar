@@ -180,7 +180,7 @@ def load_entity_cells():
     track Lara and never derive Y from the sector floor)."""
     import re
     bridges, others = set(), set()
-    path = os.path.join(D, PREFIX + "_spawn.h")
+    path = _disc(os.path.join(D, PREFIX + "_spawn.h"))
     for m in re.finditer(r"\{\s*(\d+),\s*\d+,\s*\d+,\s*(-?\d+),\s*-?\d+,"
                          r"\s*(-?\d+),", open(_disc(path)).read()):
         t, x, z = int(m.group(1)), int(m.group(2)), int(m.group(3))
@@ -302,7 +302,7 @@ def main():
         # SURGICAL in-place patch: floorY -> 0x7FFE ("room below supplies the
         # floor" — literally TR1's pitRoom semantic). Same size, so the ROM
         # layout does not move and the A10 roll stays lit.
-        sect_path = os.path.join(D, PREFIX + "_sect.bin")
+        sect_path = _disc(os.path.join(D, PREFIX + "_sect.bin"))
         bak = sect_path + ".prepatch"
         if not os.path.exists(bak):
             open(bak, "wb").write(open(sect_path, "rb").read())

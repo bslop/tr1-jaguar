@@ -205,7 +205,7 @@ def patch(bad):
     would wall real doorways and seal the level.
     """
     pfx = sys.argv[sys.argv.index("--prefix") + 1] if "--prefix" in sys.argv else "mrt"
-    sect_path = os.path.join(D, pfx + "_sect.bin")
+    sect_path = _disc(os.path.join(D, pfx + "_sect.bin"))
     bak = sect_path + ".precov"
     if not os.path.exists(bak):
         open(bak, "wb").write(open(sect_path, "rb").read())
