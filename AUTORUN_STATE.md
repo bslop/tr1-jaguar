@@ -49,6 +49,20 @@ setting** — a "that's unplayable, hard to see" comment received today was
 meant for ANOTHER Claude instance (user, same day: "What we had was fine").
 The numbers stand; the verdict does not apply here.
 
+### 2026-08-27 — ENTLISTS shipped (+2.5%), OT concluded (2.4× slower), micro-opt audit running
+* ✅ **ENTLISTS=1 in the ship recipe (`54e55a6` on perf-sliver-4bpp): +2.5% silicon
+  (7.90→8.10)**, pixel-identical, byte-identical off. Type-indexed entity lists built
+  once instead of 13 rescans/frame of all 60 entities. A 68k-bus-contention lever
+  ([[project_68k_contention_lever]]); sub-rung alone, STACKS. Next: 68k __udivsi3/
+  __mulsi3 (~10%), blit_band fb clear (~3%).
+* ☒ **Ordered-table renderer (OTLIST) CONCLUDED: 2.4× slower (3.25 vs 7.90), dead.**
+  Renders correctly but two GPU kicks + un-overlapped sort = ~18 fields vs 8; GPUHALT/
+  per-kick/SRAM-list all no-change (field quantization). Its benefits were already won by
+  M68A2 (sort) + VCDRAIN (flicker). Parked on `ot-campaign`. See [[project_ot_campaign]].
+* ⬜ Exhaustive micro-opt audit workflow in flight (kernel per-vert/face + 68k contention).
+* ☠️ RIG FLAKY 2026-08-27: repeated EXECUTE LIBUSB_ERROR_TIMEOUT every few jobs; USB reset
+  + `jagpower cycle` recovers it (device re-enumerates), but it re-wedges. May be hardware.
+
 ### ✅✅✅ 2026-08-26 — A10 SOLVED: TWO BUGS, BOTH FIXED, PAD 0 RENDERS (interactive session)
 
 1. **A10 = OP scaled-object ALIGNMENT.** The OP fetches a TYPE-1 object as one
