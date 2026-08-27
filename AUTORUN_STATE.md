@@ -13,6 +13,24 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+### ⬜ MICROOPT — per-face kernel stack BUILT + correctness-verified, silicon perf PENDING (rig flaky) (2026-08-27)
+The audit's level-wide per-face stack, behind one `MICROOPT` flag in `gpu_geotex.gas`:
+`[11]` inline imul32 into the backface cull (extends INLINEMUL — removes 4 taken
+branches/face from jump_refill), `[8]` drop the redundant per-span A2_PIXEL store,
+`[12]` delete the dead fl_go geometry-constants block, `[7]` delete the dead
+render_pkt colour build, `[13]` fix the stale stage_vert header doc.
+**VERIFIED OFFLINE:** gate OFF (flag omitted) == original kernel BYTE-FOR-BYTE;
+MICROOPT=1 renders PIXEL-IDENTICAL in jagemu (0 non-beacon diff px @ frame 900);
+kernel 3480→**3464 B** (net −16, under the 3680 budget); assembles clean.
+☠️ **`MICROOPT=0` does NOT turn it off** — `$(if $(MICROOPT),1,0)` returns 1 for
+the string "0" ([[feedback_make_flag_zero_trap]]); OFF = OMIT the flag.
+OFF silicon baseline #2055 = **8.25 fps**. The ON number is BLOCKED: the rig wedged
+on EXECUTE (`LIBUSB_ERROR_TIMEOUT`) for every ON upload — 4 fails across 2 power-
+cycles + 2 usbresets (device re-enumerated 120→12→37 each time; the OFF capture got
+through right after a cycle, then it re-wedged). Documented flaky hardware.
+NOT in shipped BUILD_FLAGS (gated, byte-identical off). ⬜ **NEXT: A/B mo_on.cof vs
+mo_off_clean.cof (`/tmp/…/entlists_proof/`) when the rig is healthy** — box (185,148,209,180).
+
 ### ☠️→✅ ENTLISTS WAS NEVER COMPILED — NOW WIRED, HONESTLY +4.1% (2026-08-27)
 The micro-opt audit's first hit was a **plumbing bug**: `ENTLISTS=1` sat in
 `build_cof.sh` BUILD_FLAGS but the **Makefile had no `ifdef ENTLISTS`** and no

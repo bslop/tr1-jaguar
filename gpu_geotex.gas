@@ -1311,6 +1311,10 @@ face_loop:
 	nop
 fl_go:
 	; geometry constants for stage_vert
+.if MICROOPT=0
+	; DEAD (MICROOPT): r10/r11/r13/r12 fed the OLD gpu_geomdirect stage_vert;
+	; the cache-based stage_vert never reads them and render_pkt rewrites all
+	; four before their next read (r10@1873 r11@1883 r12@1974 r13@1975).
 	movei	#RVBASE,r0
 	load	(r0),r10		; VERTS base
 	movei	#OFFXW,r0
@@ -1318,6 +1322,7 @@ fl_go:
 	movei	#OFFZW,r0
 	load	(r0),r13		; offZ<<8
 	moveq	#0,r12			; yTopD = 0 (offY=0)
+.endif
 	movei	#FACE_N,r0
 	load	(r0),r21		; n
 	movei	#FACE_CUR,r0
@@ -1582,11 +1587,16 @@ vcs_ok:
 	nop
 	move	r0,r6
 	shrq	#16,r6			; r6 = n
+.if MICROOPT=0
+	; DEAD (MICROOPT): r7 = replicated low16 colour is never read on the
+	; textured span (r7 rewritten at movei #AU,r7 / #BU,r7; r1=$FFFF and r0-low16
+	; both die before their next read). Residue of the flat-fill splice.
 	movei	#$FFFF,r1
 	and	r1,r0			; low 16 (ignored)
 	move	r0,r7
 	shlq	#16,r7
 	or	r0,r7			; r7 = replicated low16 (unused by textured span)
+.endif
 
 	; VERTEX CACHE: SX/SY filled during staging; transform vloop GONE.
 .if BEXIT=0
@@ -1693,6 +1703,50 @@ nc_back:
 	sub	r8,r20			; sx2 - sx0
 	sub	r21,r23			; sy1 - sy0
 	sub	r21,r24			; sy2 - sy0
+.if MICROOPT=1
+	; INLINE imul32 into the backface cull (extends the INLINEMUL lever, which
+	; was applied only to the vertex transform). Each call was 2 taken branches
+	; (call jump + imul32's return jump), so this removes 4 jump_refills/face on
+	; the per-face hot path. Bit-identical: the imul32 body copied VERBATIM
+	; (uses `mult`, so no MMULT settle hazard; the 2 post-mult nops stay).
+	; r2/r3/r26/r27 are imul32's scratch and were already clobbered by the call.
+	; --- p1 = (sx1-sx0)*(sy2-sy0) : imul32(r9, r24) -> r0 ---
+	move	r9,r0
+	move	r24,r1
+	move	r0,r2			; aLo
+	move	r1,r3			; bLo
+	move	r0,r26
+	shrq	#16,r26			; aHi
+	move	r1,r27
+	shrq	#16,r27			; bHi
+	mult	r3,r2			; aLo*bLo
+	mult	r27,r0			; aLo*bHi
+	mult	r1,r26			; aHi*bLo
+	nop
+	nop
+	add	r26,r0			; cross
+	shlq	#16,r0
+	add	r2,r0			; r0 = product
+	move	r0,r25			; p1
+	; --- p2 = (sx2-sx0)*(sy1-sy0) : imul32(r20, r23) -> r0 ---
+	move	r20,r0
+	move	r23,r1
+	move	r0,r2
+	move	r1,r3
+	move	r0,r26
+	shrq	#16,r26
+	move	r1,r27
+	shrq	#16,r27
+	mult	r3,r2
+	mult	r27,r0
+	mult	r1,r26
+	nop
+	nop
+	add	r26,r0
+	shlq	#16,r0
+	add	r2,r0			; r0 = p2
+	sub	r0,r25			; ar = p1 - p2
+.else
 	move	r9,r0
 	movei	#bc1,r28
 	.if BANKDIET=1
@@ -1717,6 +1771,7 @@ bc1:
 	nop
 bc2:
 	sub	r0,r25			; ar = p1 - p2
+.endif
 	movei	#pkt_done,r22
 	cmpq	#0,r25
 	.if ALLCULL=1
@@ -3267,10 +3322,16 @@ ss_bw:
 	; the left clip for every remaining span of the run, which is exactly
 	; the black wedges on the LEFT of the frame this cost me. sp_tail treats
 	; r0/r1/r2 as scratch, so those are the safe ones.
+.if MICROOPT=0
+	; REDUNDANT (MICROOPT): the texture pack already stored A2_PIXEL=(y<<16)|xl
+	; for this span at 2846-2850, and the shipped single-row launch uses
+	; BCMD_TEX (no UPDA2) so A2 is not stepped -> A2_PIXEL survives to here.
+	; r10(y) and r29(xl) are unchanged since that store on the shipped path.
 	move	r10,r1
 	shlq	#16,r1
 	or	r29,r1
 	store	r1,(r15+12)		; A2_PIXEL = (y<<16)|xl
+.endif
 	move	r23,r0
 	sub	r29,r0
 .if SHADEEXCL=1
@@ -4119,12 +4180,15 @@ nc_ha:
 	nop				; this arm is measurable, not live
 .endif
 
-; stage_vert: look up an RVert, add the room offset, append WORLD (x,y,z) as
-;   3 longs at r14.  gpu_geomdirect VERBATIM.
-;   in:  r1 = vertex index (unsigned), r10 = VERTS base, r11 = offX<<8,
-;        r12 = yTopD(=0), r13 = offZ<<8, r14 = write ptr, r8 = return addr.
-;   out: 3 world longs stored, r14 += 12.
-;   clobbers r0,r1,r2,r3,r9.  Preserves r6,r7,r10-r14,r20,r21,r23.
+; stage_vert: stage one face-vertex from the VERTEX CACHE (the pre-pass already
+;   transformed every vert once). Reads r1=index, computes idx*12, loads the
+;   cached sx/sy/viewZ via VCACHE_PRM and writes SX_BUF/SY_BUF (bank-1 movefa).
+;   ☠️ STALE CONTRACT REMOVED (2026-08-27): the old gpu_geomdirect inputs
+;   r10=VERTS,r11=offX<<8,r12=yTopD,r13=offZ<<8,r14=write-ptr are NOT read - the
+;   fl_go block that loaded them is dead (see the MICROOPT gate at fl_go). r14 is
+;   never written here; r10-r13 are never read.
+;   in:  r1 = vertex index (unsigned), r8 = return addr.
+;   clobbers r0,r1,r2,r3,r9.  Preserves r6,r7,r20,r21,r23.
 ;=====================================================================
 stage_vert:
 	; VERTEX CACHE lookup (pre-pass transformed every vert once)
