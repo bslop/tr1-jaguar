@@ -3426,11 +3426,14 @@ static int ent_is_bridge(int t) { return t >= 68 && t <= 70; }
    DRAM read of mrt_ent[e].type that contends with Tom's render under PIPELINE). */
 static uint8_t g_el_door[MRT_ENTCOUNT], g_el_sw[MRT_ENTCOUNT], g_el_bridge[MRT_ENTCOUNT];
 static uint8_t g_el_pickup[MRT_ENTCOUNT], g_el_bat[MRT_ENTCOUNT];
+static uint8_t g_el_wolf[MRT_ENTCOUNT], g_el_bear[MRT_ENTCOUNT];
 static int g_nel_door, g_nel_sw, g_nel_bridge, g_nel_pickup, g_nel_bat;
+static int g_nel_wolf, g_nel_bear;
 static void ent_lists_build(void)
 {
     int e;
     g_nel_door = g_nel_sw = g_nel_bridge = g_nel_pickup = g_nel_bat = 0;
+    g_nel_wolf = g_nel_bear = 0;
     for (e = 0; e < MRT_ENTCOUNT; e++) {
         int t = mrt_ent[e].type;
         if (ent_is_door(t))   g_el_door[g_nel_door++]     = (uint8_t)e;
@@ -3438,6 +3441,8 @@ static void ent_lists_build(void)
         if (ent_is_bridge(t)) g_el_bridge[g_nel_bridge++] = (uint8_t)e;
         if (ent_is_pickup(t)) g_el_pickup[g_nel_pickup++] = (uint8_t)e;
         if (ent_is_bat(t))    g_el_bat[g_nel_bat++]       = (uint8_t)e;
+        if (ent_is_wolf(t))   g_el_wolf[g_nel_wolf++]     = (uint8_t)e;
+        if (ent_is_bear(t))   g_el_bear[g_nel_bear++]     = (uint8_t)e;
     }
 }
 #define ENT_SCAN(LIST,NCAP) for (int li_=0; li_ < g_nel_##LIST && ndrawn < (NCAP) && ((e = g_el_##LIST[li_]), 1); li_++)
@@ -9221,7 +9226,13 @@ bootvid_entry:
 #ifdef DARTS
                   darts_update(g_ticks, g_curroom);
 #endif
+#ifdef ENTLISTS
+                  /* only the ~8 real pickups, not all 60 entities (list built
+                     at level start; g_pickgot still gates already-collected) */
+                  for (int li_=0; li_ < g_nel_pickup && ((pe = g_el_pickup[li_]), 1); li_++) {
+#else
                   for (pe = 0; pe < MRT_ENTCOUNT; pe++) {
+#endif
                       int pdx, pdz, pdy;
                       if (!ent_is_pickup(mrt_ent[pe].type) || g_pickgot[pe]) continue;
                       /* distance-only (stacked rooms make the room field
@@ -10917,7 +10928,7 @@ bootvid_entry:
                 /* wolves: ground enemies, ~6x the bat's faces - capped low and
                    gated tight (face count is the frame cost). */
                 { int e, na = 0;
-                  for (e = 0; e < MRT_ENTCOUNT && ndrawn < 39; e++) {
+                  ENT_SCAN(wolf, 39) {
                       if (g_useset) break;
                       if (!ent_is_wolf(mrt_ent[e].type)) continue;
                       /* a DEAD enemy keeps drawing while it sinks */
@@ -10943,7 +10954,7 @@ bootvid_entry:
                   } }
                 /* bear: single ground enemy, static reared pose (1 frame). */
                 { int e, na = 0;
-                  for (e = 0; e < MRT_ENTCOUNT && ndrawn < 39; e++) {
+                  ENT_SCAN(bear, 39) {
                       if (g_useset) break;
                       if (!ent_is_bear(mrt_ent[e].type)) continue;
                       /* a DEAD enemy keeps drawing while it sinks */

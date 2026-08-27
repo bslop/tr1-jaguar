@@ -245,6 +245,18 @@ CFLAGS   += -DM68PAD=$(M68PAD)
 CXXFLAGS += -DM68PAD=$(M68PAD)
 endif
 
+# ENTLISTS=1 (2026-08-27): precompute type-indexed entity lists at level start
+# so the per-frame draw / collect loops stop rescanning all 60 entities (each a
+# DRAM read of mrt_ent[].type that contends with Tom's render under PIPELINE —
+# the M68A2/HUDTEXT bus-contention class).  ☠️ THIS WAS UNPLUMBED until now:
+# `make ENTLISTS=1` set the make var but NEVER reached the compiler, so the
+# #ifdef ENTLISTS code compiled OUT and the 2026-08-27 "+2.5%" A/B (#2045 vs
+# #2046) compared two byte-identical ROMs.  Now wired for the first honest test.
+ifdef ENTLISTS
+CFLAGS   += -DENTLISTS
+CXXFLAGS += -DENTLISTS
+endif
+
 # GOVERNOR=1 (2026-07-22, PERFHUNT_CAMPAIGN.md smoothness campaign): frame
 # governor — one frame longer than GOV_HI fields clamps g_hopcap to 1;
 # GOV_K consecutive frames at/below GOV_LO restore the dial cap.  VARIANCE

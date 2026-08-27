@@ -13,6 +13,28 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+### ☠️→✅ ENTLISTS WAS NEVER COMPILED — NOW WIRED, HONESTLY +4.1% (2026-08-27)
+The micro-opt audit's first hit was a **plumbing bug**: `ENTLISTS=1` sat in
+`build_cof.sh` BUILD_FLAGS but the **Makefile had no `ifdef ENTLISTS`** and no
+generic var→`-D` passthrough, so `-DENTLISTS` never reached the compiler and
+every `#ifdef ENTLISTS` block compiled to the `#else` full-scan. PROVEN: the
+shipped `main.c` compile line carries no `-DENTLISTS`; adding it moves `main.o`
+146,964→149,980 B. **⇒ the recorded "+2.5% (#2045→#2046)" was two BYTE-IDENTICAL
+ROMs — pure beacon noise.** (M68A2 IS plumbed, via `-DM68D_A2`; VCDRAIN rides
+GEOTEX_DEFS; only ENTLISTS was orphaned.)
+FIXED: added the `ifdef ENTLISTS` block (Makefile) + completed the lever —
+`54e55a6` left the wolf/bear draw loops and the pickup-collect loop unconverted;
+`ent_lists_build` now builds `g_el_wolf/g_el_bear` and all three loops iterate
+the lists. OFF = byte-identical to shipped; ON differs (+1232 B ROM).
+**HONEST SILICON A/B (FASTBOOT, VRESN=80, PADMUTE, spawn, 40s):**
+jagq #2048 base **7.975** → #2049 ENTLISTS **8.300** = **+4.1%**, bimodal 1.00
+both, every 5 s window separated; frame-change instrument (beacon-blind) agrees
+**8.65→9.03 = +4.3%**. The real lever beats its own ghost. ★★★★★ **`make FOO=1`
+does NOTHING unless the Makefile maps FOO→-DFOO — grep the compile line for
+`-DFOO` before trusting ANY A/B.** ⬜ ships on the next container build
+(BUILD_FLAGS already lists ENTLISTS=1; now it will actually take effect).
+Committed on `perf-sliver-4bpp`. Beacon box for this capture rig = (185,148,209,180).
+
 ### ✅ THE CONTAINER BUILT THE ROM OF RECORD (2026-08-26, after three fixes)
 `out/OPENLARA.COF` 1,540,812 B, QUALITY=playable, PADTEXT=136, cobweb 9da2f99:
 **0** dropped-destination moves (`23f9` scan) · `op_list` 0 mod 32 ·
