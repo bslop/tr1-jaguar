@@ -13,6 +13,21 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+### ☠️☠️☠️ 68k/KERNEL MICRO-PERF IS AT ITS CEILING — the vein is tapped (2026-08-27)
+User picked "stack more 68k contention" to try to cross 8.30→8.57. Measured, it
+does NOT: after M68A2 (+14%) and ENTLISTS (+4.1%, reproducible: OFF 7.975 twice,
+ON 8.30), the remaining savers are each <1% of the frame and read FLAT on silicon.
+- **BFSCACHE [16]** (portal hop-BFS cache, the audit's biggest remaining DRAM
+  saver): OFF #2065 8.300 vs ON ×4 8.30/8.30/8.30/8.275 = FLAT. Correctness-verified
+  (vanish test: game render pixel-identical across 12 ROOMTOUR crossings). `0092c28`.
+- **Full stack** ENTLISTS+BFSCACHE+MICROOPT: 8.300→8.37 (+0.8%, #2078/79/81) —
+  sub-field, does NOT cross the rung (+3.3% needed). BFSCACHE + MICROOPT stay GATED.
+★★★★★ A field is 12.5%; the remainder is <1% each. The rung needs a STRUCTURAL
+lever (Blitter fill = 30% of frame, overdraw 2.07×, or lower VRESN [rejected]),
+not more micro-opts. ⬜ **RECOMMENDATION: pivot** — either the fill/overdraw
+(Tom-side, harder) or to the DEMO ENDPOINT (the actual goal). ENTLISTS +4.1% is
+the shippable win to bank into the next container ROM of record.
+
 ### ⬜ MICROOPT — per-face kernel stack BUILT + correctness-verified, silicon perf PENDING (rig flaky) (2026-08-27)
 The audit's level-wide per-face stack, behind one `MICROOPT` flag in `gpu_geotex.gas`:
 `[11]` inline imul32 into the backface cull (extends INLINEMUL — removes 4 taken
