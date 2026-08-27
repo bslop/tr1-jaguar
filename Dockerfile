@@ -30,7 +30,15 @@ FROM rust:1-slim-bookworm AS cobweb
 # cobweb was current when the layer was first built - this build failed on four
 # hazard errors that had already been fixed upstream. A real revision both busts
 # the cache and makes the image reproducible.
-ARG COBWEB_REV=59e5896
+# 2026-08-26: 59e5896 -> 9da2f99. Two jas fixes the shipping ROM needs:
+#   ba9c680  a memory-to-memory MOVE dropped its DESTINATION relocation
+#            (every global-to-global copy in a jcc68k TU stored into the 68000
+#            exception vectors; 4 sites in the last container ROM, 24 in a
+#            default local build)
+#   9da2f99  object-mode .align is SECTION-relative and raises sh_addralign
+#            (the A10 boot lottery; jaguar.ld places op_list regardless)
+# Every ROM measured on silicon on 2026-08-26 was built with this revision.
+ARG COBWEB_REV=9da2f99
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 RUN git clone https://github.com/bslop/cobweb.git /cobweb \
