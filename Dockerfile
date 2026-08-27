@@ -56,11 +56,13 @@ ENV JAS=/usr/local/bin/jas JCC68K=/usr/local/bin/jcc68k
 # Toolchain + asset/disc tooling:
 #   ngdevkit m68k-neogeo-elf gcc  - 68000 cross-compiler (its libgcc has no
 #                                   68020 bsr.l leak, unlike gcc-m68k-linux-gnu)
-#   python3 + Pillow + ffmpeg     - asset converters and the music encoder
+#   python3 + Pillow + numpy + ffmpeg - asset converters and the music encoder
+#   ☠️ numpy: tr2jag_video.py's JV_VQ=1 encoder imports it; without it every clip
+#   "failed to convert" (stderr discarded) and stale disc/*.JV shipped (2026-08-26)
 #   p7zip / bchunk / xorriso / mame-tools(chdman) - handle .7z/.bin+.cue/.chd
 RUN apt-get update && apt-get install -y --no-install-recommends \
         software-properties-common ca-certificates git build-essential make \
-        python3 python3-pil ffmpeg \
+        python3 python3-pil python3-numpy ffmpeg \
         p7zip-full bchunk xorriso mame-tools \
     && add-apt-repository -y ppa:dciabrin/ngdevkit \
     && apt-get update && apt-get install -y --no-install-recommends ngdevkit-toolchain \
