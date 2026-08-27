@@ -1238,6 +1238,16 @@ quad_setup:
 	nop
 	movei	#FACE_LEFT,r0
 	store	r8,(r0)
+.if REVFACE=1
+	; front-to-back: start at the LAST quad record (stride 36 for n=4),
+	; face_adv decrements. FACE_LEFT already holds the true count.
+	subq	#1,r8			; QCNT-1
+	move	r8,r1
+	shlq	#5,r1			; (QCNT-1)*32
+	shlq	#2,r8			; (QCNT-1)*4
+	add	r8,r1			; *36
+	add	r1,r9			; QBASE + (QCNT-1)*36
+.endif
 	movei	#FACE_CUR,r0
 	store	r9,(r0)
 	moveq	#4,r8
@@ -1259,6 +1269,15 @@ tri_setup:
 	nop
 	movei	#FACE_LEFT,r0
 	store	r8,(r0)
+.if REVFACE=1
+	; front-to-back: start at the LAST tri record (stride 30 for n=3)
+	subq	#1,r8			; TCNT-1
+	move	r8,r1
+	shlq	#5,r1			; (TCNT-1)*32
+	shlq	#1,r8			; (TCNT-1)*2
+	sub	r8,r1			; *30
+	add	r1,r9			; TBASE + (TCNT-1)*30
+.endif
 	movei	#FACE_CUR,r0
 	store	r9,(r0)
 	moveq	#3,r8
@@ -1503,7 +1522,11 @@ face_adv:
 .if STAGEDIET=1
 	addq	#12,r2			; + plane prefix
 .endif
+.if REVFACE=1
+	sub	r2,r1			; FACE_CUR - record size (front-to-back)
+.else
 	add	r2,r1			; FACE_CUR + record size
+.endif
 	store	r1,(r0)
 	movei	#FACE_LEFT,r0
 	load	(r0),r1
