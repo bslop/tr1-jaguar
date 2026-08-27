@@ -3405,6 +3405,15 @@ static void build_ent_bridge(uint8_t *buf, int atlasW, int e)
 }
 static uint8_t g_entact[MRT_ENTCOUNT];   /* activated by a trigger      */
 static uint8_t g_swpull[MRT_ENTCOUNT];   /* switch already pulled       */
+/* ONE-SHOT trigger guard: ent_update fires a trigger every tick Lara sits on
+   its sector.  ACTIVATE/CAMERA_TARGET are idempotent, but END/SECRET must run
+   ONCE.  g_trigfired[t] latches after the first ent_fire; reset at level load. */
+static uint8_t g_trigfired[MRT_TRIGCOUNT];
+static int     g_levcomplete;            /* END trigger reached — level done */
+static int     g_levhold;                /* frames left on the COMPLETE banner */
+#define LEVELEND_HOLD 30                 /* ~a few seconds before the demo loops */
+static int     g_secrets;                /* secrets found this level         */
+static uint8_t g_secfound[8];            /* per-secret-id found flag         */
 /* CAMERA_TARGET (trigger action 6): while Lara stands on one of these
    sectors the camera LOOKS AT a VIEW_TARGET entity instead of down her
    heading.  LEVEL1 carries 12 camera commands and we extracted every one
@@ -3621,6 +3630,7 @@ static int ent_trig_at(int room, int sx, int sz)
 static void ent_fire(int t)
 {
     int k = (mrt_trig[t].type >= 2 && mrt_trig[t].type <= 4) ? 1 : 0;
+    int fresh = !g_trigfired[t];         /* first time this trigger runs */
     for (; k < mrt_trig[t].ncmd; k++) {
         unsigned w = mrt_trigcmd[mrt_trig[t].cmd0 + k];
         unsigned a = (w >> 10) & 0x1F, g = w & 0x3FF;
@@ -3631,7 +3641,18 @@ static void ent_fire(int t)
            clears what was not re-armed, so writing g_camtgt here would be
            wiped by this same tick's clear. */
         else if (a == 6) { if (g < MRT_ENTCOUNT) g_camtgt_new = (int8_t)g; }
+        /* the ONE-SHOT actions: only on the FIRST fire of this trigger. */
+        else if (fresh) {
+            if      (a == 7)  g_levcomplete = 1;         /* END: level finished */
+            else if (a == 10) {                          /* SECRET g */
+                int s = (int)(g & 7);
+                if (!g_secfound[s]) { g_secfound[s] = 1; g_secrets++;
+                                      sfx_play(1, SFX_MENU_SHOW); }  /* found chime */
+            }
+            /* a == 8 SOUNDTRACK: area CD cue - deferred (needs track->cue map) */
+        }
     }
+    g_trigfired[t] = 1;
 }
 
 /* Lara's sector in her current room, from the SAME blob layout that
@@ -8043,6 +8064,10 @@ bootvid_entry:
 #ifdef ENEMIES
         g_health = 1000; g_kills = 0; g_firecd = 0;
 #endif
+        /* level flow: no END reached, no secrets found, no triggers latched */
+        g_levcomplete = 0; g_secrets = 0;
+        { int i2; for (i2 = 0; i2 < 8; i2++) g_secfound[i2] = 0;
+          for (i2 = 0; i2 < MRT_TRIGCOUNT; i2++) g_trigfired[i2] = 0; }
 #ifdef TRAPFLOOR
         g_tfn = 0;
         { int e; for (e = 0; e < MRT_ENTCOUNT && g_tfn < TF_MAX; e++)
@@ -9025,6 +9050,32 @@ bootvid_entry:
               if (!g_useset)
                   ent_update(rsect, g_curroom, g_lax, g_laz,
                              (pad & ACT_ACTION) != 0);
+              /* LEVEL COMPLETE: the END trigger fired (she reached the exit).
+                 Hold the banner briefly, then LOOP the demo — teleport her to
+                 the spawn and reset the gameplay state so the level replays. */
+              if (g_levcomplete) {
+                  if (g_levhold == 0) g_levhold = LEVELEND_HOLD;
+                  else if (--g_levhold == 0) {
+                      int e2;
+                      g_lax = MRT_SPAWN_X; g_lay = MRT_SPAWN_Y; g_laz = MRT_SPAWN_Z;
+                      g_layaw = MRT_SPAWN_YAW; g_curroom = MRT_SPAWN_ROOM; g_lavy = 0;
+#ifdef ENEMIES
+                      g_health = 1000; g_kills = 0;
+#endif
+                      g_secrets = 0; g_batinit = 0;
+                      for (e2 = 0; e2 < MRT_ENTCOUNT; e2++) {
+                          g_entact[e2] = 0; g_swpull[e2] = 0;
+                          g_dooff[e2] = 0;  g_pickgot[e2] = 0;
+#ifdef ENEMIES
+                          g_batdead[e2] = 0;
+                          g_enhp[e2] = (uint8_t)ent_max_hp(mrt_ent[e2].type);
+#endif
+                      }
+                      for (e2 = 0; e2 < MRT_TRIGCOUNT; e2++) g_trigfired[e2] = 0;
+                      for (e2 = 0; e2 < 8; e2++) g_secfound[e2] = 0;
+                      g_levcomplete = 0;
+                  }
+              }
 #ifdef BUSPROBE
             { uint32_t _k = vp_tick(); if (bp_s0) bp_sB += _k - bp_s0; bp_s0 = _k; }
 #endif
@@ -10484,6 +10535,32 @@ bootvid_entry:
               hs[p]=0;
               menu_text(hfb, RENDER_W, RENDER_H, hs, 4, 14, 1, 2, 255); }
 #endif
+#ifdef ENEMIES
+            /* HEALTH BAR — flat, UNCONDITIONAL (not behind HUDTEXT), no 68k
+               text pixels: a 102x6 top-left bar of direct byte stores, painted
+               after gpu_sync (Tom idle) so it costs ~nothing.  White fill
+               scaling with g_health; the low-health slice flips to gold (240). */
+            { uint8_t *hb = (uint8_t *)video_backbuffer();
+              int hh = g_health > 0 ? (g_health > 1000 ? 1000 : g_health) : 0;
+              int w  = (hh * 100) / 1000;            /* filled px, 0..100 */
+              int fillc = (hh <= 300) ? 240 : 255;   /* gold when low, else white */
+              int y, x;
+              for (y = 2; y < 8; y++) {
+                  uint8_t *row = hb + y * RENDER_W + 3;
+                  for (x = 0; x < 102; x++)
+                      row[x] = (x == 0 || x == 101) ? 255            /* border */
+                             : (x - 1 < w ? (uint8_t)fillc : 0);     /* fill/empty */
+              }
+            }
+#endif
+            /* LEVEL COMPLETE banner (gold), centered, while the END hold runs. */
+            if (g_levcomplete) {
+                uint8_t *cfb = (uint8_t *)video_backbuffer();
+                const char *msg = "LEVEL COMPLETE";
+                int tw = menu_text_width(msg, 1), cx = (RENDER_W - tw) / 2;
+                if (cx < 0) cx = 0;
+                menu_text(cfb, RENDER_W, RENDER_H, msg, cx, 22, 1, 1, 240);
+            }
             if (g_pipeframe)   { video_flip(); g_pipeframe = 0; }
 #endif
 #ifdef FARDIAL
