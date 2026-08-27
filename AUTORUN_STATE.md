@@ -13,6 +13,16 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+### ⬜ NEXT — a container build is the ROM of record for all of this (2026-08-26)
+Everything measured today was built LOCALLY (stale `disc/` enemy skins and
+all). The shipping artifact is the container: `Dockerfile` now pins cobweb
+`9da2f99` (both jas fixes), `build_cof.sh` BUILD_FLAGS carry `M68A2=1
+VCDRAIN=1`, `jaguar.ld` places `op_list`, `main.c` has the sleep fixes.
+**Run the container (QUALITY=playable, PADTEXT=136 — PADTEXT no longer
+matters for booting) and put its ROM on the rig once**: expect boot on any
+pad, ~8 fps at the spawn, no whole-face flicker, fully-skinned enemies. That
+ROM becomes `demo31`. Nothing else is owed before that.
+
 ### 2026-08-26 — THE RESOLUTION LADDER WITH TODAY'S LEVERS (silicon, spawn, PADMUTE+FASTBOOT)
 120 lines **6.63** fps (was 6.33 without levers, +4.7%) · 96 lines **7.35** ·
 80 lines **7.98** (jagq #2018/#2019/#2021 + #1990). ☠️ The +14% the levers give
