@@ -95,7 +95,15 @@ SPANSHADE=1 SHADEEXCL=1 TIMESTEP=1 ANIMRATE=1 OPDBL=1 LPLANES=1 \
 VCBIG=1 ENTITIES=1 SWANIM=1 DOORTEX=1 ENEMIES=1 ENEMYTEX=1 BLOBCACHE=1 \
 JCENT=1 JOVL=1 SECTLONG=1 INLINEMUL=1 OFFHOIST=1 VPACK=1 NOPCLIP=1 \
 TRAPFLOOR=1 GUNS=1 BOOTVID=1 JVFASTKICK=1 PROBE_AHEAD=256 RCLIPFIX=1 \
-FITSTEP=1 M68A2=1 VCDRAIN=1}"
+FITSTEP=1 M68A2=1 VCDRAIN=1 ENTLISTS=1}
+
+# ENTLISTS=1 (2026-08-27): the per-frame entity draw loops (doors, switches,
+# bridges, pickups, bats) each rescanned all 60 entities - 13 scans/frame, each
+# a DRAM read of mrt_ent[].type that contends with Tom's render under PIPELINE.
+# Entity type is static, so type-indexed lists are built once at level select.
+# Pixel-identical (room 20 w/ wolf: 0 px diff), byte-identical with the flag
+# off, +2.5% on silicon (7.90 -> 8.10). A 68k-bus-contention lever in the
+# M68A2 / HUDTEXT family - invisible offline, sub-rung alone, stacks."
 
 # VCDRAIN=1 (2026-08-26): A1 - the still-camera flicker - was TWO mechanisms,
 # and this kills the first: Tom's face loop read back vertex-cache words the

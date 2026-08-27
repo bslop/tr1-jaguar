@@ -3420,6 +3420,30 @@ static int ent_is_switch(int t) { return t == MRT_ENT_SWITCH; }
    chasm. Their FLOOR collision is already in the sector data (she "doesn't
    fall"); they just were never DRAWN -> she walked on an invisible bridge. */
 static int ent_is_bridge(int t) { return t >= 68 && t <= 70; }
+#ifdef ENTLISTS
+/* TYPE-INDEXED ENTITY LISTS (2026-08-27): an entity's type is static, so the
+   per-frame draw loops need not rescan all 60 entities (13 scans/frame, each a
+   DRAM read of mrt_ent[e].type that contends with Tom's render under PIPELINE). */
+static uint8_t g_el_door[MRT_ENTCOUNT], g_el_sw[MRT_ENTCOUNT], g_el_bridge[MRT_ENTCOUNT];
+static uint8_t g_el_pickup[MRT_ENTCOUNT], g_el_bat[MRT_ENTCOUNT];
+static int g_nel_door, g_nel_sw, g_nel_bridge, g_nel_pickup, g_nel_bat;
+static void ent_lists_build(void)
+{
+    int e;
+    g_nel_door = g_nel_sw = g_nel_bridge = g_nel_pickup = g_nel_bat = 0;
+    for (e = 0; e < MRT_ENTCOUNT; e++) {
+        int t = mrt_ent[e].type;
+        if (ent_is_door(t))   g_el_door[g_nel_door++]     = (uint8_t)e;
+        if (ent_is_switch(t)) g_el_sw[g_nel_sw++]         = (uint8_t)e;
+        if (ent_is_bridge(t)) g_el_bridge[g_nel_bridge++] = (uint8_t)e;
+        if (ent_is_pickup(t)) g_el_pickup[g_nel_pickup++] = (uint8_t)e;
+        if (ent_is_bat(t))    g_el_bat[g_nel_bat++]       = (uint8_t)e;
+    }
+}
+#define ENT_SCAN(LIST,NCAP) for (int li_=0; li_ < g_nel_##LIST && ndrawn < (NCAP) && ((e = g_el_##LIST[li_]), 1); li_++)
+#else
+#define ENT_SCAN(LIST,NCAP) for (e = 0; e < MRT_ENTCOUNT && ndrawn < (NCAP); e++)
+#endif
 /* TRAP_FLOOR (type 35/36): TR1's collapsing tile.  Solid until Lara stands on
    it, then it shakes for about a second, drops away and takes the floor with
    it.  It was the ONLY entity type in LEVEL1 with no runtime handler at all -
@@ -7637,6 +7661,9 @@ bootvid_entry:
         }
         roomCount = (S_index[0]<<8)|S_index[1];
         atlasW = (S_index[2]<<8)|S_index[3];
+#ifdef ENTLISTS
+        ent_lists_build();
+#endif
         g_swy = (((S_index[4]<<8)|S_index[5])) - 2*MRT_LARA_CELL;
         /* pick two palette slots this set doesn't use (entry == 0, idx > 0) */
         { int i2; g_pickidx = g_dooridx = 0;
@@ -10717,7 +10744,7 @@ bootvid_entry:
                    displist has 8 slots total and the rooms already took
                    most of them, so this is deliberately capped. */
                 { int e, nd = 0;
-                  for (e = 0; e < MRT_ENTCOUNT && ndrawn < 8; e++) {
+                  ENT_SCAN(door, 8) {
                       if (g_useset) break;
                       if (!ent_is_door(mrt_ent[e].type)) continue;
                       /* a door is visible from BOTH sides: keep drawing it
@@ -10751,7 +10778,7 @@ bootvid_entry:
                   } }
                 /* the wall levers in this room, drawn like the doors */
                 { int e, ns = 0;
-                  for (e = 0; e < MRT_ENTCOUNT && ndrawn < 8; e++) {
+                  ENT_SCAN(sw, 8) {
                       if (g_useset) break;
                       if (!ent_is_switch(mrt_ent[e].type)) continue;
                       if (mrt_ent[e].room != (unsigned char)g_curroom &&
@@ -10789,7 +10816,7 @@ bootvid_entry:
                    knowing before building the cull. */
 #ifndef NOBRIDGEDRAW
                 { int e, nb = 0;
-                  for (e = 0; e < MRT_ENTCOUNT && ndrawn < 39; e++) {
+                  ENT_SCAN(bridge, 39) {
                       if (g_useset) break;
                       if (!ent_is_bridge(mrt_ent[e].type)) continue;
                       /* bridges span stacked rooms (18/22) so the entity's room
@@ -10820,7 +10847,7 @@ bootvid_entry:
 #endif
                 /* uncollected pickups near Lara, spinning */
                 { int e, np = 0;
-                  for (e = 0; e < MRT_ENTCOUNT && ndrawn < 39; e++) {
+                  ENT_SCAN(pickup, 39) {
                       if (g_useset) break;
                       if (!ent_is_pickup(mrt_ent[e].type) || g_pickgot[e]) continue;
                       if (mrt_ent[e].room != (unsigned char)g_curroom &&
@@ -10868,7 +10895,7 @@ bootvid_entry:
 #ifdef ENEMIES
                 /* bats: flying enemies, near Lara, wing-flapping */
                 { int e, na = 0;
-                  for (e = 0; e < MRT_ENTCOUNT && ndrawn < 39; e++) {
+                  ENT_SCAN(bat, 39) {
                       if (g_useset) break;
                       if (!ent_is_bat(mrt_ent[e].type)) continue;
                       /* a DEAD enemy keeps drawing while it sinks */
