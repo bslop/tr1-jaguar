@@ -257,6 +257,16 @@ CFLAGS   += -DENTLISTS
 CXXFLAGS += -DENTLISTS
 endif
 
+# BFSCACHE=1 (2026-08-27): the portal hop-depth BFS (rdepth[]) is a pure fn of
+# g_curroom (S_adj/HOPDEPTH static), so recompute it only on a room crossing
+# instead of every frame — kills a 38-entry reset + 3-pass relaxation from the
+# Tom-overlap window on ~95% of frames (the M68A2 bus-contention class). prv[]
+# still recomputes every frame; g_bfs_room invalidates on level load.
+ifdef BFSCACHE
+CFLAGS   += -DBFSCACHE
+CXXFLAGS += -DBFSCACHE
+endif
+
 # GOVERNOR=1 (2026-07-22, PERFHUNT_CAMPAIGN.md smoothness campaign): frame
 # governor — one frame longer than GOV_HI fields clamps g_hopcap to 1;
 # GOV_K consecutive frames at/below GOV_LO restore the dial cap.  VARIANCE

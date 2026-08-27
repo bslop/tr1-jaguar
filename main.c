@@ -1141,6 +1141,13 @@ static const uint8_t g_padtext[PADTEXT] = { 1 };
 static const uint8_t g_padding[PADBYTES] __attribute__((used)) = { 1 };
 #endif
 static int g_curroom;                 /* room Lara is standing in (visibility) */
+#ifdef BFSCACHE
+/* [16] portal hop-depth BFS cache: rdepth[] is a pure fn of (g_curroom, S_adj,
+   HOPDEPTH), so recompute it only when g_curroom changes (prv[] still every
+   frame). -1 = force recompute; reset at level load so a same room-index in a
+   different level (different S_adj) can't reuse a stale depth map. */
+static int g_bfs_room = -1;
+#endif
 #ifdef DREWVIS
 /* ★ WHICH ROOMS DID THE RENDERER ACTUALLY DRAW THIS FRAME (bit r = room r).
    Runs 50-51 killed SIX explanations for the mansion coverage hole by A/B-ing
@@ -7669,6 +7676,9 @@ bootvid_entry:
 #ifdef ENTLISTS
         ent_lists_build();
 #endif
+#ifdef BFSCACHE
+        g_bfs_room = -1;   /* new level: S_adj changed, force a fresh depth map */
+#endif
         g_swy = (((S_index[4]<<8)|S_index[5])) - 2*MRT_LARA_CELL;
         /* pick two palette slots this set doesn't use (entry == 0, idx > 0) */
         { int i2; g_pickidx = g_dooridx = 0;
@@ -9837,6 +9847,27 @@ bootvid_entry:
               #ifndef HOPDEPTH
               #define HOPDEPTH 3
               #endif
+#ifdef BFSCACHE
+              /* [16] rdepth[] depends only on g_curroom (S_adj/HOPDEPTH static),
+                 so recompute it only on a room crossing. prv[] is the per-frame
+                 visibility chain and is ALWAYS reset+seeded below. rdepth[]
+                 persists across frames (its scope encloses the frame loop) and
+                 nothing else writes it, so a hit reuses last crossing's map. */
+              for (i=0;i<roomCount;i++) prv[i]=0;
+              if (g_curroom != g_bfs_room) {
+                  for (i=0;i<roomCount;i++) rdepth[i]=HOPDEPTH+1;
+                  rdepth[g_curroom]=0;
+                  { int dcur;
+                    for (dcur=0; dcur<HOPDEPTH; dcur++)
+                      for (a=0;a<roomCount;a++)
+                        if (rdepth[a]==dcur)
+                          for (b=0;b<MRT_ADJ_MAX && S_adj[a][b]!=255;b++)
+                            if (rdepth[S_adj[a][b]] > dcur+1) rdepth[S_adj[a][b]] = dcur+1;
+                  }
+                  g_bfs_room = g_curroom;
+              }
+              prv[g_curroom]=2;                                 /* full rect */
+#else
               for (i=0;i<roomCount;i++) { rdepth[i]=HOPDEPTH+1; prv[i]=0; }
               #ifdef DREWVIS
               /* masks accumulate; probe_spot zeroes them at the seat */
@@ -9849,6 +9880,7 @@ bootvid_entry:
                       for (b=0;b<MRT_ADJ_MAX && S_adj[a][b]!=255;b++)
                         if (rdepth[S_adj[a][b]] > dcur+1) rdepth[S_adj[a][b]] = dcur+1;
               }
+#endif
               /* RECT CHAIN in depth order: a room's window = union over its
                  shallower neighbours of intersect(neighbour window, doorway
                  rect neighbour->room). Empty window = not drawn AT ALL. */
