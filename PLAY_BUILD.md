@@ -1,3 +1,17 @@
+## ★★★★★ 2026-08-26 — THE ROM OF RECORD IS `demo31` (container build)
+`WORK_ROMS/demo31/` = the full SD payload from `tools/build_cof.sh` in the
+container (QUALITY=playable, PADTEXT=136, cobweb **9da2f99**); the ROM alone is
+`WORK_ROMS/demo31_p136.cof` (md5 `00872e51f9ab…`, 1,540,812 B). Verified:
+0 vector-table stores (`23f9` scan) · `op_list` 32-aligned · jagemu OP hits 0 ·
+fresh enemy skins · all four clips converted fresh · **silicon jagq #2025: CORE →
+cafe → intro → laptop → TV → TITLE ring** (holds at the title: no AUTOSTART in a
+release, press A). Carries everything from this date: A10 fixed (boots on ANY
+pad), M68A2 (+14–29% fps), VCDRAIN (whole-face flicker gone), sleep fixes.
+☠️ Rebuild it with the container ONLY — local trees carry stale `disc/` assets.
+☠️ The container had produced NO ROM since 08-19 until today's three fixes
+(paths after the `disc/` move, the retired cobweb pin, numpy); a run with no
+COF now exits 1 — judge it by `out/OPENLARA.COF`.
+
 ## ☠️☠️☠️ 2026-08-26 — READ FIRST: the A10 lottery is OVER, and the recipes below are STALE
 
 * **PADTEXT no longer matters for booting.** A10 was the OP scaled object at

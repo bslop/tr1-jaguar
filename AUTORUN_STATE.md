@@ -26,9 +26,9 @@ from the root. All routed through `disc/`; a run with no COF now exits 1. The
 ✅ The clip defect was **numpy** (the `JV_VQ=1` encoder imports it; the image
 lacked it) — `9c9d3e9`. All four clips convert fresh now.
 **`demo31` STAGED: `WORK_ROMS/demo31/` (full SD payload) + `demo31_p136.cof`,
-md5 `00872e51f9ab…`, container run 4 (20:28).** On the rig as jagq #2025
-(clips → title → caves stills) for confirmation before it becomes the ROM of
-record in PLAY_BUILD.md.
+md5 `00872e51f9ab…`, container run 4 (20:28).** ✅ **CONFIRMED ON SILICON (jagq #2025): CORE → cafe → intro → laptop → TV →
+TITLE ring**, clips fresh. Holds at the title (no AUTOSTART in a release).
+**`demo31` IS THE ROM OF RECORD** — PLAY_BUILD.md updated.
 
 ### (was) ⬜ NEXT — a container build is the ROM of record for all of this (2026-08-26)
 Everything measured today was built LOCALLY (stale `disc/` enemy skins and
