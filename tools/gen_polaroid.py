@@ -21,7 +21,7 @@ OUT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 gb = open(os.path.join(OUT, "photo_geom.bin"), "rb").read()
 nv, nq, nt, aw, ah = struct.unpack(">HHHHH", gb[:10])
 atl = bytearray(open(os.path.join(OUT, "photo_atlas.bin"), "rb").read())
-pal = struct.unpack(">256H", open(os.path.join(OUT, "title_pal.bin"), "rb").read())
+pal = struct.unpack(">256H", open(os.path.join(OUT, "disc", "title_pal.bin"), "rb").read())
 def dec(c): return (((c>>11)&31)*255//31, ((c>>1)&31)*255//31, ((c>>6)&31)*255//31)
 prgb = [dec(c) for c in pal]
 def nearest(r, g, b):

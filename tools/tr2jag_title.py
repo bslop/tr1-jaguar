@@ -216,7 +216,7 @@ def main():
     # art snap to those turned the passport's gold page-edge GREY
     # (user 2026-08-04: "the picture on the front of the passport is messed up").
     ART_COLORS = 245
-    tp=open(os.path.join(OUT,'title_pal.bin'),'rb').read()
+    tp=open(os.path.join(OUT,'disc','title_pal.bin'),'rb').read()
     tpal=[struct.unpack_from(">H",tp,i*2)[0] for i in range(256)]
     def unpack16(c): return ((c>>11)&31,(c>>1)&31,(c>>6)&31)
     tprgb=[unpack16(c) for c in tpal]

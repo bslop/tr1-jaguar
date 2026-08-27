@@ -44,7 +44,7 @@ MATS = [(28,28,31),   # body: lower shell / rim
         (7,7,8),      # black: dpad disc / grooves / panel bed
         (78,78,86),   # panel: pills / back label
         (46,46,52)]   # bodytop: the leaning control face
-pal = struct.unpack(">256H", open(os.path.join(OUT, "title_pal.bin"), "rb").read())
+pal = struct.unpack(">256H", open(os.path.join(OUT, "disc", "title_pal.bin"), "rb").read())
 def dec(c): return (((c>>11)&31)*255//31, ((c>>1)&31)*255//31, ((c>>6)&31)*255//31)
 prgb = [dec(c) for c in pal]
 def nearest(r, g, b):

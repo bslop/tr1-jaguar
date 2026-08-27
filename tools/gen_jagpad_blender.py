@@ -43,7 +43,7 @@ verts = [(int(round((v[0]-cx)*sc)),
 
 # ---- atlas: one 8x8 swatch cell per material, title_pal-nearest ----
 AW = 256
-pal = struct.unpack(">256H", open(os.path.join(OUT, "title_pal.bin"), "rb").read())
+pal = struct.unpack(">256H", open(os.path.join(OUT, "disc", "title_pal.bin"), "rb").read())
 def dec(c): return (((c>>11)&31)*255//31, ((c>>1)&31)*255//31, ((c>>6)&31)*255//31)
 prgb = [dec(c) for c in pal]
 GAIN = float(os.environ.get("JAGPAD_GAIN", "1.6"))   # title_pal is dark; bias up

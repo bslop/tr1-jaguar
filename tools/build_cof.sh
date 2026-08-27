@@ -429,6 +429,10 @@ make RMAC="$RMAC" ${JAS:+JAS="$JAS"} ${JCC68K:+JCC68K="$JCC68K"} \
 
 # ── 4. stage the GameDrive payload (everything the SD card needs, together) ───
 mkdir -p "$OUT"
+# ☠️ A run with NO ROM used to exit 0 (2026-08-26: every patch pass had failed on a
+# path and the make never produced a COF; the entrypoint reported success). Judge
+# the run by the artifact.
+[ -s build/openlara.cof ] || { echo "☠️ BUILD FAILED: build/openlara.cof was not produced - read the log above"; exit 1; }
 cp build/openlara.cof "$OUT/OPENLARA.COF"
 # ☠️ KEEP THE ELF BESIDE THE ROM. Symbol addresses are PER-BUILD, so without the
 # matching .elf the release ROM cannot be instrumented AT ALL - no peek, no

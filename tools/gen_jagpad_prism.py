@@ -325,7 +325,7 @@ verts=[]
 for (x,y) in capv: verts.append((x,y,-TH))     # front sheet (toward camera)
 for (x,y) in capv: verts.append((x,y, TH))     # back sheet
 # ---- 4. atlas: front 124x?, back beside, rim swatch; quantize ----
-pal=struct.unpack(">256H",open(OUT+"/title_pal.bin","rb").read())
+pal=struct.unpack(">256H",open(OUT+"/disc/title_pal.bin","rb").read())
 def dec(c): return (((c>>11)&31)*255//31,((c>>1)&31)*255//31,((c>>6)&31)*255//31)
 prgb=[dec(c) for c in pal]
 GAIN=float(os.environ.get("PAD_GAIN","1.0"))
