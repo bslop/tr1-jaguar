@@ -24,12 +24,20 @@ MICROOPT=1 renders PIXEL-IDENTICAL in jagemu (0 non-beacon diff px @ frame 900);
 kernel 3480→**3464 B** (net −16, under the 3680 budget); assembles clean.
 ☠️ **`MICROOPT=0` does NOT turn it off** — `$(if $(MICROOPT),1,0)` returns 1 for
 the string "0" ([[feedback_make_flag_zero_trap]]); OFF = OMIT the flag.
-OFF silicon baseline #2055 = **8.25 fps**. The ON number is BLOCKED: the rig wedged
-on EXECUTE (`LIBUSB_ERROR_TIMEOUT`) for every ON upload — 4 fails across 2 power-
-cycles + 2 usbresets (device re-enumerated 120→12→37 each time; the OFF capture got
-through right after a cycle, then it re-wedged). Documented flaky hardware.
-NOT in shipped BUILD_FLAGS (gated, byte-identical off). ⬜ **NEXT: A/B mo_on.cof vs
-mo_off_clean.cof (`/tmp/…/entlists_proof/`) when the rig is healthy** — box (185,148,209,180).
+**MEASURED AT SPAWN: no clear fps movement** — OFF #2055 **8.25** vs ON #2061 **8.35**
+(beacon +1.2%) BUT frame-change (beacon-blind) **9.30→9.03 = −3.0%**: the two
+instruments DISAGREE IN SIGN, and both deltas sit inside the ~0.3 fps run-to-run
+scatter (identical ENTLISTS config read 7.975 and 8.25 across two captures). Both
+sit at the same 8.2 fps field rung ⇒ the per-face cycle saving is SUB-FIELD at
+spawn, exactly as the audit predicted ("nothing crosses a rung alone"). Stays
+GATED, NOT in shipped BUILD_FLAGS — enable only inside a stacked, together-measured
+batch. Value banked: −16 B kernel budget + real cycles/face; may show in FACE-HEAVY
+rooms (like M68A2, spawn was its small end) — a tour/dense-room A/B is the open test.
+☠️☠️☠️ **THE UPLOAD WEDGE WAS MY OWN DESYNC**: I bounced with DIRECT `jagpower`
+(unlocked) while the jagq daemon held its lease — "two divergent locks wedge the
+USB link." Bouncing THROUGH the lock (`jag_gd.sh power cycle` → jaghw → jagq) cleared
+it and the ON upload went first try (#2061). ALWAYS bounce through jag_gd.sh, never
+raw jagpower, while jagq is the arbiter. Box (185,148,209,180); ROMs in `/tmp/…/entlists_proof/`.
 
 ### ☠️→✅ ENTLISTS WAS NEVER COMPILED — NOW WIRED, HONESTLY +4.1% (2026-08-27)
 The micro-opt audit's first hit was a **plumbing bug**: `ENTLISTS=1` sat in
