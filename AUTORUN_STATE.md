@@ -23,10 +23,12 @@ ROM since the 08-19 `disc/` move and exited 0 anyway**: patch tools wrote to
 the root, `build_cof.sh` stat'd bare names, title tools read `title_pal.bin`
 from the root. All routed through `disc/`; a run with no COF now exits 1. The
 59e5896 cobweb pin is RETIRED (its "ABI regression" was the jas reloc bug).
-⬜ **One defect left in the pipeline:** `tr2jag_video.py` fails inside the
-container (stderr discarded) and the four `.JV` clips in `out/` are STALE
-copies from `disc/`. Deps (python3-pil, ffmpeg) are in the image; cause open.
-⬜ Put `out/OPENLARA.COF` + payload on the rig once → `demo31`.
+✅ The clip defect was **numpy** (the `JV_VQ=1` encoder imports it; the image
+lacked it) — `9c9d3e9`. All four clips convert fresh now.
+**`demo31` STAGED: `WORK_ROMS/demo31/` (full SD payload) + `demo31_p136.cof`,
+md5 `00872e51f9ab…`, container run 4 (20:28).** On the rig as jagq #2025
+(clips → title → caves stills) for confirmation before it becomes the ROM of
+record in PLAY_BUILD.md.
 
 ### (was) ⬜ NEXT — a container build is the ROM of record for all of this (2026-08-26)
 Everything measured today was built LOCALLY (stale `disc/` enemy skins and
