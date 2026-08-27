@@ -69,7 +69,8 @@ RMAC="${RMAC:-$HOME/jaguar-tools/bin/rmac}"
 QUALITY="${QUALITY:-pretty}"
 case "$QUALITY" in
     pretty)   QUALITY_FLAGS="" ;;
-    playable) QUALITY_FLAGS="VRESN=80" ;;
+    # 2026-08-27: playable is now 60 lines (OP 4.0x scale) - the fastest rung.
+    playable) QUALITY_FLAGS="VRESN=60" ;;
     *) echo "error: QUALITY must be 'pretty' or 'playable' (got '$QUALITY')" >&2
        exit 2 ;;
 esac
