@@ -3423,6 +3423,13 @@ static uint8_t g_secfound[8];            /* per-secret-id found flag         */
    -1 = no override.  Re-armed every tick she is on a sector, so it lapses
    by itself the moment she walks off - which is how TR1 behaves. */
 static int8_t g_camtgt = -1, g_camtgt_new = -1;
+/* CAMERA_SWITCH (trigger action 1): TR1 cuts to a fixed camera showing the door
+   the switch just opened.  The Camera[] fixed positions are NOT extracted, so we
+   approximate the intent: a TIMED cut that aims at the opened DOOR entity, then
+   returns to Lara.  g_camcut = target door (-1 none); g_camcut_t = frames left. */
+static int8_t g_camcut = -1;
+static int    g_camcut_t;
+#define CAMCUT_FRAMES 20         /* ~2-3s of "here's the door opening" */
 #define CAMSTART_HOLD 200        /* ~3.3s at 60Hz, matching the PS1 */
 static int g_camhold;                    /* level-start establishing shot */
 static int16_t g_dooff[MRT_ENTCOUNT];    /* door swing angle, 0 = shut  */
@@ -3631,11 +3638,16 @@ static void ent_fire(int t)
 {
     int k = (mrt_trig[t].type >= 2 && mrt_trig[t].type <= 4) ? 1 : 0;
     int fresh = !g_trigfired[t];         /* first time this trigger runs */
+    int camdoor = -1;                    /* last entity this trigger activated */
     for (; k < mrt_trig[t].ncmd; k++) {
         unsigned w = mrt_trigcmd[mrt_trig[t].cmd0 + k];
         unsigned a = (w >> 10) & 0x1F, g = w & 0x3FF;
-        if      (a == 0) { if (g < MRT_ENTCOUNT) g_entact[g] = 1; }
-        else if (a == 1) k++;            /* CAMERA_SWITCH parameter word */
+        if      (a == 0) { if (g < MRT_ENTCOUNT) { g_entact[g] = 1; camdoor = (int)g; } }
+        else if (a == 1) {               /* CAMERA_SWITCH: a timed cut to the door */
+            if (fresh && camdoor >= 0) { g_camcut = (int8_t)camdoor;
+                                         g_camcut_t = CAMCUT_FRAMES; }
+            k++;                         /* consume the camera param word */
+        }
         /* CAMERA_TARGET: aim at entity g until she steps off. ☠️ Set the
            PENDING slot, not the live one - ent_update re-arms every tick and
            clears what was not re-armed, so writing g_camtgt here would be
@@ -3699,6 +3711,15 @@ static void ent_update(const uint8_t **rsect, int room, int wx, int wz, int act)
                 }
             } else if (mrt_trig[t].type == 0 || mrt_trig[t].type == 1) {
                 ent_fire(t);                      /* ACTIVATE / PAD: step on */
+            } else if (mrt_trig[t].type == 6) {   /* ANTIPAD: step-on DEACTIVATES
+                       — TR1's "the door shuts behind you". */
+                int kk;
+                for (kk = 0; kk < mrt_trig[t].ncmd; kk++) {
+                    unsigned w = mrt_trigcmd[mrt_trig[t].cmd0 + kk];
+                    unsigned a = (w >> 10) & 0x1F, g = w & 0x3FF;
+                    if      (a == 0) { if (g < MRT_ENTCOUNT) g_entact[g] = 0; }
+                    else if (a == 1) kk++;        /* skip camera param word */
+                }
             }
         }
     }
@@ -3718,8 +3739,15 @@ static void ent_update(const uint8_t **rsect, int room, int wx, int wz, int act)
         }
     }
 #endif
-    for (e = 0; e < MRT_ENTCOUNT; e++)
-        if (g_entact[e] && ent_is_door(mrt_ent[e].type)) {
+    for (e = 0; e < MRT_ENTCOUNT; e++) {
+        if (!ent_is_door(mrt_ent[e].type)) continue;
+        /* ANTIPAD / reset cleared this door's activation -> swing it SHUT. */
+        if (!g_entact[e]) {
+            if (g_dooff[e] > 0) { g_dooff[e] -= DOOR_ANG_STEP;
+                                  if (g_dooff[e] < 0) g_dooff[e] = 0; }
+            continue;
+        }
+        {
             /* ON THE FIRST TICK, swing TOWARD the side Lara is standing on.
                ☠️ I first had this backwards - "away from her" seemed obvious,
                but the user's screencast of the real game (10-20-18, 16.0-17.5s)
@@ -3736,6 +3764,7 @@ static void ent_update(const uint8_t **rsect, int room, int wx, int wz, int act)
             }
             if (g_dooff[e] < DOOR_ANG_OPEN) g_dooff[e] += DOOR_ANG_STEP;
         }
+    }
 }
 
 /* A SHUT DOOR IS A WALL ACROSS ITS DOORWAY, NOT A BOX FILLING ITS SECTOR.
@@ -8065,7 +8094,7 @@ bootvid_entry:
         g_health = 1000; g_kills = 0; g_firecd = 0;
 #endif
         /* level flow: no END reached, no secrets found, no triggers latched */
-        g_levcomplete = 0; g_secrets = 0;
+        g_levcomplete = 0; g_secrets = 0; g_camcut = -1; g_camcut_t = 0;
         { int i2; for (i2 = 0; i2 < 8; i2++) g_secfound[i2] = 0;
           for (i2 = 0; i2 < MRT_TRIGCOUNT; i2++) g_trigfired[i2] = 0; }
 #ifdef TRAPFLOOR
@@ -9296,6 +9325,9 @@ bootvid_entry:
 #endif
                       int pdx, pdz, pdy;
                       if (!ent_is_pickup(mrt_ent[pe].type) || g_pickgot[pe]) continue;
+                      /* SAVE CRYSTAL (83): TR1 save point.  No save system, so
+                         leave it spinning in the world instead of consuming it. */
+                      if (mrt_ent[pe].type == 83) continue;
                       /* distance-only (stacked rooms make the room field
                          unreliable), but gate Y too so she can't grab a pickup
                          one floor above/below through the ceiling. */
@@ -9837,8 +9869,13 @@ bootvid_entry:
                matches the aim - 256 dot products once a frame is nothing next
                to the frame we are in, and it cannot drift like an incremental
                angle would. */
-            if (g_camtgt >= 0) {
-                int tx = mrt_ent[(int)g_camtgt].x, tz = mrt_ent[(int)g_camtgt].z;
+            /* CAMERA_SWITCH cut (timed, aims at the opened door) takes priority
+               over the CAMERA_TARGET look-at; both aim the yaw at an entity. */
+            { int camtgt = -1;
+              if (g_camcut_t > 0) { camtgt = (int)g_camcut; g_camcut_t--; }
+              else if (g_camtgt >= 0) camtgt = (int)g_camtgt;
+              if (camtgt >= 0) {
+                int tx = mrt_ent[camtgt].x, tz = mrt_ent[camtgt].z;
                 int bx = g_lax - (int)(((int32_t)sY*CAMDIST)>>16);
                 int bz = g_laz - (int)(((int32_t)cY*CAMDIST)>>16);
                 int dx = tx - bx, dz = tz - bz;
@@ -9849,6 +9886,7 @@ bootvid_entry:
                     if (d > bestd) { bestd = d; best = a8; }
                 }
                 cY = COS(best); sY = SIN(best);
+              }
             }
             /* COMBAT CAMERA: TR1 pulls the camera BACK when the weapons are
                out (OpenLara camera.h: CAM_OFFSET_COMBAT = FOLLOW + 512, over a
@@ -10561,6 +10599,16 @@ bootvid_entry:
                 if (cx < 0) cx = 0;
                 menu_text(cfb, RENDER_W, RENDER_H, msg, cx, 22, 1, 1, 240);
             }
+#ifdef ENEMIES
+            /* death card — reuses the banner path; the g_dead flow revives on pad. */
+            else if (g_dead) {
+                uint8_t *dfb = (uint8_t *)video_backbuffer();
+                const char *msg = "YOU DIED";
+                int tw = menu_text_width(msg, 1), cx = (RENDER_W - tw) / 2;
+                if (cx < 0) cx = 0;
+                menu_text(dfb, RENDER_W, RENDER_H, msg, cx, 22, 1, 1, 255);
+            }
+#endif
             if (g_pipeframe)   { video_flip(); g_pipeframe = 0; }
 #endif
 #ifdef FARDIAL
