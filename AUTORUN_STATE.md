@@ -13,7 +13,22 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
-### ⬜ NEXT — a container build is the ROM of record for all of this (2026-08-26)
+### ✅ THE CONTAINER BUILT THE ROM OF RECORD (2026-08-26, after three fixes)
+`out/OPENLARA.COF` 1,540,812 B, QUALITY=playable, PADTEXT=136, cobweb 9da2f99:
+**0** dropped-destination moves (`23f9` scan) · `op_list` 0 mod 32 ·
+jagemu OP misaligned hits **0**, stray writes 0 · **no** stale wolf UV table
+(fresh enemy skins) · renders with its own SD payload (`--sd out`, frame 1500).
+It took three container fixes to get here — **the container had produced NO
+ROM since the 08-19 `disc/` move and exited 0 anyway**: patch tools wrote to
+the root, `build_cof.sh` stat'd bare names, title tools read `title_pal.bin`
+from the root. All routed through `disc/`; a run with no COF now exits 1. The
+59e5896 cobweb pin is RETIRED (its "ABI regression" was the jas reloc bug).
+⬜ **One defect left in the pipeline:** `tr2jag_video.py` fails inside the
+container (stderr discarded) and the four `.JV` clips in `out/` are STALE
+copies from `disc/`. Deps (python3-pil, ffmpeg) are in the image; cause open.
+⬜ Put `out/OPENLARA.COF` + payload on the rig once → `demo31`.
+
+### (was) ⬜ NEXT — a container build is the ROM of record for all of this (2026-08-26)
 Everything measured today was built LOCALLY (stale `disc/` enemy skins and
 all). The shipping artifact is the container: `Dockerfile` now pins cobweb
 `9da2f99` (both jas fixes), `build_cof.sh` BUILD_FLAGS carry `M68A2=1
