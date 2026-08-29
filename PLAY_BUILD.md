@@ -1,3 +1,18 @@
+## ★★★★★ 2026-08-28 — RELEASE CANDIDATE `demo32` (VRESN=60 + full Caves mechanics)
+`out/` = the complete SD payload; the ROM is `out/OPENLARA.COF` (md5 `bc001c371a1e…`,
+1,543,804 B). Built from the current tree via `make $BUILD_FLAGS VRESN=60` (build_cof.sh
+= the container entrypoint, so identical). VERIFIED OFFLINE: **0** `23f9` vector-table
+stores · `op_list` 32-aligned (`0x17cde0`) · jagemu 200-frame run: **0** OP misaligned
+hits, 0 illegal, 0 stray writes, 0 unaligned · renders sane. Boots clips→title→caves.
+NEW since demo31: **VRESN=60** (9.4 fps, +13.6%), and the full CAVES completeness pass —
+the level now ENDS (END trigger + LEVEL COMPLETE + loop), a flat HUD **health bar**,
+**secrets** (chime+count), **dart traps** live, **ANTIPAD** doors shut behind Lara, the
+save **crystal** stays in-world, a **YOU DIED** card, and **CAMERA_SWITCH** door-reveal
+cuts. Debug/drive flags (GDPAD/GDPADDBG/FASTBOOT) are NOT in the release. Clips/music/load
+carried from demo31 (unchanged — same disc/encoder, not linked into the ROM).
+⬜ Silicon full-chain boot confirm pending (rig flaky). ☠️ NOT pushed to origin — the
+origin push IS the gated release; the user calls that moment.
+
 ## ★★★★★ 2026-08-26 — THE ROM OF RECORD IS `demo31` (container build)
 `WORK_ROMS/demo31/` = the full SD payload from `tools/build_cof.sh` in the
 container (QUALITY=playable, PADTEXT=136, cobweb **9da2f99**); the ROM alone is
