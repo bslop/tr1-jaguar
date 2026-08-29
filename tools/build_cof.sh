@@ -66,14 +66,31 @@ RMAC="${RMAC:-$HOME/jaguar-tools/bin/rmac}"
 #
 #      120 lines  6.40 fps        80 lines  7.15 fps  (+11.7%)
 #
+# RES=<N>: pick the render-line count explicitly (OVERRIDES QUALITY). The OP's
+# vertical scaler fixes the rungs (240/N must be a 1/32 multiple), so the ladder
+# is exactly: 120 (full LOWRES, sharpest+slowest) / 96 / 80 / 64 / 60 (coarsest+
+# fastest). Higher = better quality, lower = higher fps.
+#   local:  RES=120 tools/build_cof.sh <disc> <out>
+#   docker: docker run ... -e RES=96 tr-jaguar
+# With no RES, QUALITY picks it: pretty=120, playable=60.
 QUALITY="${QUALITY:-pretty}"
-case "$QUALITY" in
-    pretty)   QUALITY_FLAGS="" ;;
-    # 2026-08-27: playable is now 60 lines (OP 4.0x scale) - the fastest rung.
-    playable) QUALITY_FLAGS="VRESN=60" ;;
-    *) echo "error: QUALITY must be 'pretty' or 'playable' (got '$QUALITY')" >&2
-       exit 2 ;;
-esac
+if [ -n "${RES:-}" ]; then
+    case "$RES" in
+        120)         QUALITY_FLAGS="" ;;               # 120 = full LOWRES, no VRESN
+        96|80|64|60) QUALITY_FLAGS="VRESN=$RES" ;;
+        *) echo "error: RES must be one of 120 96 80 64 60 (the hardware OP-scale ladder)" >&2
+           exit 2 ;;
+    esac
+    echo "   resolution: ${RES} render lines (RES override)"
+else
+    case "$QUALITY" in
+        pretty)   QUALITY_FLAGS="" ;;
+        # 2026-08-27: playable is now 60 lines (OP 4.0x scale) - the fastest rung.
+        playable) QUALITY_FLAGS="VRESN=60" ;;
+        *) echo "error: QUALITY must be 'pretty' or 'playable' (got '$QUALITY')" >&2
+           exit 2 ;;
+    esac
+fi
 
 # ☠️ THE SHIPPING FLAG SET.  This used to read
 #   MULTIROOM=1 LOWRES=1 CFLAGS_EXTRA=-DJERRYPOSE

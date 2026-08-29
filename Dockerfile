@@ -10,10 +10,13 @@
 #   docker run --rm -v "$PWD/disc:/disc:ro" -v "$PWD/out:/out" \
 #              -e DISC_NAME="Tomb Raider (USA) (v1.6).cue" tr-jaguar
 #
-# Two builds come out of the same image and the same disc; pick with QUALITY:
+# Resolution comes out of the same image and the same disc; pick with QUALITY:
 #   -e QUALITY=pretty     (default) 120 render lines, full vertical resolution
-#   -e QUALITY=playable             80 render lines through the OP 3.0x scaler -
-#                                   full screen and FOV, coarser, ~12% faster
+#   -e QUALITY=playable             60 render lines through the OP 4.0x scaler -
+#                                   full screen and FOV, coarser, fastest
+# ...or choose ANY rung explicitly with RES (overrides QUALITY). The OP scaler
+# fixes the ladder to 120/96/80/64/60 (higher = sharper+slower):
+#   -e RES=120   sharpest      -e RES=96 / -e RES=80 / -e RES=64      -e RES=60  fastest
 #
 # The build also converts the FRONT END off the same disc - the Eidos and Core
 # logos, the attract cinematic and the trek that plays before the Caves - and
