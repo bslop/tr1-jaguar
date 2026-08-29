@@ -3414,6 +3414,9 @@ static int     g_levhold;                /* frames left on the COMPLETE banner *
 #define LEVELEND_HOLD 30                 /* ~a few seconds before the demo loops */
 static int     g_secrets;                /* secrets found this level         */
 static uint8_t g_secfound[8];            /* per-secret-id found flag         */
+#ifdef GDPADDBG
+static uint32_t g_dbg_gdready, g_dbg_gdp; /* remote-pad diagnostic */
+#endif
 /* CAMERA_TARGET (trigger action 6): while Lara stands on one of these
    sectors the camera LOOKS AT a VIEW_TARGET entity instead of down her
    heading.  LEVEL1 carries 12 camera commands and we extracted every one
@@ -8436,7 +8439,11 @@ bootvid_entry:
              * FASTBOOT builds stream neither. */
             { static uint32_t gdp, gdc;
               if ((gdc++ & 3u) == 0) gdp = gd_input_poll();
-              pad |= gdp; }
+              pad |= gdp;
+#ifdef GDPADDBG
+              g_dbg_gdready = gd_input_ready(); g_dbg_gdp = gdp;
+#endif
+            }
 #endif
 #ifdef TIMESTEP
             { static uint32_t ts_last;
@@ -10608,6 +10615,15 @@ bootvid_entry:
                 if (cx < 0) cx = 0;
                 menu_text(dfb, RENDER_W, RENDER_H, msg, cx, 22, 1, 1, 255);
             }
+#endif
+#ifdef GDPADDBG
+            /* remote-pad probe: left block WHITE=gd_ready GOLD=not;
+               right block WHITE=gdp got input this poll, GOLD=zero. */
+            { uint8_t *pf = (uint8_t *)video_backbuffer(); int y, x;
+              for (y = 12; y < 18; y++) {
+                  for (x = 0;  x < 20; x++) pf[y*RENDER_W + x] = g_dbg_gdready ? 255 : 240;
+                  for (x = 24; x < 44; x++) pf[y*RENDER_W + x] = g_dbg_gdp     ? 255 : 240;
+              } }
 #endif
             if (g_pipeframe)   { video_flip(); g_pipeframe = 0; }
 #endif
