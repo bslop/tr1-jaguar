@@ -9710,14 +9710,16 @@ bootvid_entry:
                 if (g_dead) {
                     lanim_set(LANIM_DEATH);
                     lanim_step(0, 1);            /* one-shot, clamps at the end */
-                    /* No health bar or reload screen yet, so a fatal fall must
-                       not soft-lock the demo: once the anim has played out and
-                       the pad is touched, she gets back up. Replace this with a
-                       real death/reload once the menu is in. */
-                    if (lanim_done() && pad) { g_dead = 0; g_fally = 0;
-#ifdef ENEMIES
-                        g_health = 1000;   /* revive on respawn */
-#endif
+                    /* DEATH RESTARTS THE DEMO: play the death anim, hold the
+                       "YOU DIED" card a beat, then SOFT-REBOOT to the attract —
+                       _start (startup.S) resets SP, clears .bss and re-runs
+                       main(), so the boot chain replays from the EIDOS video. */
+                    if (lanim_done()) {
+                        static int death_hold = 0;   /* BSS: zeroed by the reboot */
+                        if (++death_hold > 30) {     /* ~a few seconds of YOU DIED */
+                            extern void _start(void);
+                            _start();                /* -> attract (Eidos) */
+                        }
                     }
                 } else if (!grounded) {
                     /* TR1: a JUMP holds its own pose; walking off a ledge (or
