@@ -103,6 +103,61 @@ fixed) · `REQ_frame_time_measurement`
 `REQ_pchistogram_warmup_start` · `REQ_wall_clock_accounting`
 
 ---
+## C2. ☠☠ INBOX FROM `jaguar-shared` (2026-09-04) — the kernel uploader drops the last instruction of 6 of 12 blobs
+
+⚠ **Filed by the shared-brain session because no session was running this project.
+Read it before the next kernel edit — it is currently harmless for a reason
+nobody chose.**
+
+`gpu_upload()`-style loops here size the kernel `(end - start) / 4` and copy
+**32-bit words**. ☠ **JRISC instructions are 2 bytes**, so any blob whose byte
+length is `≡ 2 (mod 4)` loses its **final instruction** — and adding or removing
+one instruction anywhere flips it. It assembles, links, uploads and runs.
+
+**Five call sites**: `gpu.c:64-65`, `gpu.c:112`, `gpu.c:261`, `jerry.c:31`,
+`jerry.c:258`, `main.c:4398`.
+
+☠ **And every `.balign 4` in `gpu_blob.S` / `dsp_blob.S` sits BEFORE the
+`.incbin`** — that aligns the blob's *start* and does nothing for its *length*.
+`gpu_kernel_end:` follows the blob immediately, so `end - start` is the raw byte
+count.
+
+| blob | bytes | `% 4` |
+|---|---|---|
+| `gpu_spanfill.bin` | 186 | ☠ **2** |
+| `gpu_jvdec.bin` (boot FMV) | 386 | ☠ **2** |
+| `gpu_geomwalk.bin` | 1034 | ☠ **2** |
+| `gpu_textured.bin` | 1858 | ☠ **2** |
+| `gpu_bltex.bin` | 2042 | ☠ **2** |
+| `gpu_geomdirect.bin` | 2850 | ☠ **2** |
+| `gpu_blitprobe` 560 · `gpu_geomxform` 1588 · `gpu_geotex` 3480/3572 · `dsp_pose` 2876 · `dsp_ovl_ent` 596 | | ✅ 0 |
+
+✅ **Why the game is nonetheless correct today.** All six end with the same three
+words — `d7c0` (jump) `e400` (nop, the delay slot) `e400` (**a redundant trailing
+nop**). The truncation eats that last nop. It has been harmless since the day it
+was written, by luck.
+
+### ☠☠☠ THE HAZARD IS THE COMBINATION — do not delete the second nops first
+
+`jaguar-shared` now actively recommends removing the redundant second nop after
+every jump (**one delay slot, not two** — worth 184 bytes in `jag_resident`, 64 in
+`jag_s3k`, both silicon-verified). ☠ **Take that advice here before fixing the
+uploader and the dropped word becomes the DELAY SLOT**, and the failure will look
+like anything at all. `jag_aerodagger` is already in that state.
+
+✅ **Fix, two halves, both needed:**
+1. `.balign 4` **after** each `.incbin` in `gpu_blob.S` and `dsp_blob.S`.
+2. `(n + 3) / 4` at all five call sites.
+
+`jag_s3k` gates it (`make blobcheck`: compare each blob's file size against its
+`end - start` span from the link map, and assert the `(span>>2)*4` the uploader
+moves covers the whole file). Its negative control is the good one — removing
+*only* one blob's pad must fail while the other stays clean.
+
+**Reproduce:** `stat -c%s build/*.bin` and `xxd -s -6 -g2 build/gpu_spanfill.bin`.
+**Full write-up incl. a nine-project census:** `jaguar-shared`
+`techniques/coprocessor-offload.md` §"A KERNEL UPLOAD SIZED IN THE WRONG UNIT".
+
 ## D. FIXED THIS SESSION
 - **Lara's head TWITCH** — Jerry's `LOOP_COUNT` was allocated on top of her head's
   Y rotation angle (`$F1C32C` = angle long 43 = mesh 14). Relocated. Head
