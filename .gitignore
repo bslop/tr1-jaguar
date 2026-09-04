@@ -82,3 +82,4 @@ gym_lplanes.h
 # Referenced as disc/<name> by mrt_data.S / room0data.S (.incbin) and found by
 # #include via -Idisc (Makefile).
 /disc/
+cobweb/
