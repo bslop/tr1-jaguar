@@ -13,6 +13,46 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+### ✅✅✅ 160x120 SHIPS ON SILICON — jobs #2538/#2539, one turn, 2026-09-05
+    320x120 control      6.450 fps   9.30 fields/frame   6.40 6.40 6.60 6.40
+    160x120 HRESN=160    7.500 fps   8.00 fields/frame   7.40 7.40 7.40 7.60
+**+16.3%**, both bimodal=1.00. ★★★★★ **HRESN=160 lands on EXACTLY 8.00
+fields/frame** — dead on a whole-field step, so it is repeatable across turns
+rather than the bimodal coin-flip a straddling build gives.
+
+#### ★ PWIDTH CONFIRMED ON SILICON — fills the line, hard edges, no artifact
+Capture #2539: full active width, no letterboxing, no stretch. Chunky
+double-width pixels, exactly as jag_quake's 3,273 grabs describe. The OP
+H-SCALER (bus-starving, blacks the display) was never touched — HSCALE stays
+1.0x. `VMODE=$0EC7`, PWIDTH field 7.
+
+#### ★★★★★ THE PREDICTION LADDER — offline under-predicts, and by a LOT
+    offline HALFW gate (jagemu)        +7.3%
+    silicon HALFW (B_COUNT proxy)     +14.1%
+    silicon HRESN=160 (the real thing) +16.3%
+The proxy beat its own offline number by 2x, and the REAL lever beat the proxy
+by another 2 points — the extra is PWIDTH's bus saving, which HALFW cannot
+capture (it only halves B_COUNT) and which jagemu cannot model at all.
+⇒ **An offline fill A/B in this engine is a FLOOR.** Under the old reading my
++7.3% was "inconclusive, do not build"; the truth was +16.3%.
+
+#### ★ THE TRADE, MEASURED (all same instrument, FASTBOOT+PADMUTE+FPSBEACON)
+    320x60  (ships today)   8.650 fps   6.94 fields   half vertical detail
+    160x120 (new)           7.500 fps   8.00 fields   FULL vertical detail
+-13.3% fps to buy the vertical axis back, and it lands on a stable step.
+160x120 also beats QUALITY=pretty (320x120, 6.450) by +16.3% at the same
+vertical resolution.
+
+#### ☠☠ A FLAG CAN LAND IN 2 OF 3 DEFINE PATHS AND THE ROM STILL DIFFERS
+The HRESN ladder was first written inside `ifdef VRESN`. With QUALITY=pretty
+(no VRESN) the CFLAGS line never ran: `-DHRESN` reached **jas and jcc68k but
+not gcc**. main.c kept VIEW_W==320 while the kernel used CENTER_X=80 — and the
+ROM DIFFERED FROM ITS CONTROL, so "the flag landed" read TRUE. It rendered 309
+columns instead of 160; only measuring content extent caught it.
+★★★★★ This Makefile has THREE define paths — CFLAGS (gcc), JCCDEFS (jcc68k,
+which builds video.c), GEOTEX_DEFS (jas). Grep the actual compile lines for all
+three. "The ROM differs" proves ONE of them took.
+
 ### ✅✅ RUN 14 SILICON BATCH — jobs #2530-2533, ONE turn, 2026-09-05
 Four arms, all `FASTBOOT=1 PADMUTE=1 FPSBEACON=1`, each verified distinct from
 its control BEFORE flashing. Read with `tools/beacon_find.py` (new).
