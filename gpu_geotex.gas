@@ -2945,6 +2945,27 @@ uc_dv_ok:
 .else
 	addq	#1,r0			; npix = xr-xl+1
 .endif
+	.if HALFW=1
+	; ── HALFW PRICE PROBE ────────────────────────────────────────────────
+	; ☠ PRICING ONLY. This DRAWS A HALF-WIDTH SMEAR; it is not a picture.
+	; Halves the Blitter's transfer count per span while span count,
+	; geometry, FOCAL, CENTER_X, BASE_X, framebuffer size, BSS layout and
+	; the OP list stay BYTE-FOR-BYTE unchanged.  It answers the only
+	; question that gates the 160-wide build -- "does the fill pool
+	; actually CASH through the field quantiser?" -- without touching the
+	; projection.  This is the gate TRAPEZOID never took: TRAPEZOID was
+	; authorised by a ceiling its implementation could not reach, built in
+	; full, and came out net negative.
+	; Placed BEFORE the TRAPEZOID/RUNBATCH npix copies so r3 cannot go
+	; stale if either is ever re-enabled.
+	; ☠ The zero guard MUST re-run: npix==1 halves to 0, and a 0 count
+	; blits 65536 pixels (see the guard above).
+	shrq	#1,r0
+	cmpq	#0,r0
+	movei	#sp_skip,r22
+	jump	EQ,(r22)
+	nop
+	.endif
 	.if TRAPEZOID=1
 	move	r5,r1
 	shlq	#16,r1
@@ -3373,6 +3394,16 @@ ss_bw:
 .else
 	addq	#1,r0			; width = xr - xl + 1
 .endif
+	.if HALFW=1
+	; HALFW (shade pass): halve the width BEFORE A2_STEP is derived from r0
+	; below, so the step and the count stay consistent.  ss_none is this
+	; path's own skip target.
+	shrq	#1,r0
+	cmpq	#0,r0
+	movei	#ss_none,r22
+	jump	EQ,(r22)
+	nop
+	.endif
 	moveq	#0,r1
 	bset	#17,r1
 	sub	r0,r1			; (1<<16)|((-width)&$FFFF)
