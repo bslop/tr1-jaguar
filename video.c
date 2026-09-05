@@ -35,18 +35,35 @@ int  cpu_stop_unless(volatile uint32_t *addr, uint32_t val);
 #define PAL_HEIGHT  287
 #define PAL_VMID    322
 
+/* XPOS is an OP LINE-BUFFER index, so it counts PIXEL CLOCKS, not framebuffer
+   pixels.  Widening the pixel clock halves that index space. */
+#if defined(HRESN) && (HRESN == 160)
+#define BASE_X 8
+#else
 #define BASE_X 16
+#endif
+
+/* ☠☠ VMODE IS RE-ASSERTED IN TWO PLACES (video_init and video_rearm_irq, the
+   latter reached from gpu_sync via gpu.c).  Hard-coding it in one and not the
+   other makes the picture silently double in width mid-session.  One symbol. */
+#if defined(HRESN) && (HRESN == 160)
+#define JAG_VMODE 0x0EC7      /* PWIDTH 7 - [HW] jag_quake ships this */
+#else
+#define JAG_VMODE 0x06C7      /* PWIDTH 3 - the standard 320 mode      */
+#endif
 #define BASE_Y 16
 
 /* FB8: 8bpp indexed framebuffer + OP CLUT (for Blitter hardware texturing);
  * else RGB16 direct. Switchable so the RGB16 builds are untouched. */
 #ifdef FB8
 typedef uint8_t fbpix;
-#define SCREEN_PWIDTH ((RENDER_W * 1) / 8)   /* 8bpp: 40 phrases/line */
+#define SCREEN_PWIDTH ((RENDER_W * 1) / 8)   /* 8bpp: 40 phrases/line (STRIDE) */
+#define SCREEN_IWIDTH ((VIEW_W   * 1) / 8)   /* 8bpp: what the OP FETCHES     */
 #define OP_DEPTH      (3u << 12)             /* OBDEPTH 3 = 8bpp        */
 #else
 typedef uint16_t fbpix;
-#define SCREEN_PWIDTH ((RENDER_W * 2) / 8)   /* 16bpp: 80 phrases/line */
+#define SCREEN_PWIDTH ((RENDER_W * 2) / 8)   /* 16bpp: 80 phrases/line (STRIDE)*/
+#define SCREEN_IWIDTH ((VIEW_W   * 2) / 8)   /* 16bpp: what the OP FETCHES     */
 #define OP_DEPTH      (4u << 12)             /* OBDEPTH 4 = 16bpp       */
 #endif
 
@@ -263,7 +280,7 @@ static void build_object_list(uint32_t fb_addr)
     op_list[0] = (fb_addr << 8) | (link >> 8);
     op_list[1] = (link << 24) | ((uint32_t)RENDER_H << 14) | ((uint32_t)BASE_Y << 4);
     op_list[2] = SCREEN_PWIDTH >> 4;
-    op_list[3] = ((uint32_t)SCREEN_PWIDTH << 28) | ((uint32_t)SCREEN_PWIDTH << 18)
+    op_list[3] = ((uint32_t)SCREEN_IWIDTH << 28) | ((uint32_t)SCREEN_PWIDTH << 18)
                | (1u << 15) | OP_DEPTH | BASE_X;
     op_list[4] = 0;
     op_list[5] = 4;
@@ -294,7 +311,7 @@ static void build_object_list(uint32_t fb_addr)
                | ((uint32_t)BASE_Y << 4);           /* TYPE 0 = plain bitmap  */
 
     op_list[2] = SCREEN_PWIDTH >> 4;
-    op_list[3] = ((uint32_t)SCREEN_PWIDTH << 28)
+    op_list[3] = ((uint32_t)SCREEN_IWIDTH << 28)
                | ((uint32_t)SCREEN_PWIDTH << 18)
                | (1u << 15)                         /* PITCH 1 */
                | OP_DEPTH
@@ -369,7 +386,7 @@ static void build_object_list(uint32_t fb_addr)
                | t_type;                            /* 1 = scaled, 0 = plain      */
 
     op_list[2] = SCREEN_PWIDTH >> 4;
-    op_list[3] = ((uint32_t)SCREEN_PWIDTH << 28)
+    op_list[3] = ((uint32_t)SCREEN_IWIDTH << 28)
                | ((uint32_t)SCREEN_PWIDTH << 18)
                | (1u << 15)                         /* PITCH 1 */
                | OP_DEPTH                         /* DEPTH 16bpp */
@@ -462,7 +479,7 @@ static void build_object_list(uint32_t fb_addr)
                | ((uint32_t)BASE_Y << 4);
 
     op_list[2] = SCREEN_PWIDTH >> 4;
-    op_list[3] = ((uint32_t)SCREEN_PWIDTH << 28)
+    op_list[3] = ((uint32_t)SCREEN_IWIDTH << 28)
                | ((uint32_t)SCREEN_PWIDTH << 18)
                | (1u << 15)                       /* PITCH 1 */
                | OP_DEPTH                       /* DEPTH 16bpp */
@@ -717,7 +734,7 @@ void video_init(void)
 #endif
 
     /* RGB16, CSYNC, BGEN, VIDEN, PWIDTH=4 -> the standard 320-wide mode */
-    VMODE = 0x06C7;
+    VMODE = JAG_VMODE;
 #ifdef EARLYCON
     { extern void dbg_kv(const char *, long); dbg_kv("vi_done", 1); }
 #endif
@@ -746,7 +763,7 @@ void video_rearm_irq(void)
 {
     VI   = (uint16_t)(a_vdb_g - 4);
     INT1 = 0x0003;
-    VMODE = 0x06C7;
+    VMODE = JAG_VMODE;
     cpu_irq_on();
 }
 

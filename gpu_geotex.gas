@@ -268,9 +268,23 @@ VIEW_H		.equ	VIEWH_NOT_ON_THE_LADDER_SEE_THE_MAKEFILE
 	.endif
 CENTER_Y	.equ	(VIEW_H/2)
 YMAX		.equ	(VIEW_H-1)	; edge-walk bottom clamp
+; HRESN: render only the leftmost N columns and let PWIDTH widen the pixel
+; clock.  Enumerated rather than computed because jas takes -d only in .if
+; comparisons, never as a value - the same reason FOCAL_Y is a ladder below.
+; ☠ The STRIDE does not change: A2_FLAGS_VAL keeps WID320, because the
+; framebuffer row is still RENDER_W bytes.  Only what we DRAW into narrows.
+	.if HRESN=160
+CENTER_X	.equ	80
+FOCAL		.equ	95		; 190/2 - half the columns, same FOV.
+					; At 160x120 this EQUALS FOCAL_Y (95):
+					; PWIDTH's 2x and the OP's 2x cancel, so
+					; the render is isotropic.  Less
+					; anisotropic than the 320x60 it replaces.
+	.else
 CENTER_X	.equ	160
 FOCAL		.equ	190		; TR1's ~80-degree FOV (160 was 90:
 					; too wide -> world read as too far)
+	.endif
 .if NEARLOW=1
 ; NEARLOW (2026-07-30): near plane 64 -> 16 to test the whole-face rejection
 ; BEXIT performs. There is NO near-plane CLIPPING, so a large face loses ALL of

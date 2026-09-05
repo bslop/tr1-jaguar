@@ -12,6 +12,31 @@
  * OP scaling starves the Jaguar bus ~15-20x and blacks the display, so ONLY the
  * vertical axis is scaled (see video.c build_object_list). */
 #define RENDER_W 320
+/* HRESN=N (2026-09-05) - THE HORIZONTAL DIAL, and it is NOT the OP scaler.
+ * Render only the leftmost N columns of each RENDER_W-byte row and widen the
+ * PIXEL CLOCK (VMODE PWIDTH) so those N pixels fill the same active line.
+ *
+ * ☠☠ DO NOT reach for HSCALE here.  The comment in build_object_list is right
+ * and is about a DIFFERENT mechanism: the OP's horizontal SCALER holds the bus
+ * for most of the active display (~15-20x) and blacks the screen.  PWIDTH is
+ * the opposite - fewer, wider pixels per line means FEWER OP FETCHES, so it is
+ * a bus WIN.  [HW] jag_quake has shipped VMODE=$0EC7 (PWIDTH field 7) since
+ * 2026-08-12 across 3,273 capture grabs: full active width, hard edges, no
+ * stretch artifact.
+ *
+ * ★ The STRIDE stays RENDER_W.  Only IWIDTH (what the OP fetches per line)
+ * shrinks; DWIDTH (the row step) does not.  That keeps the title, ring menu,
+ * loading art and the FMV decoder - all of which assume a 320-byte row - and
+ * leaves BSS byte-identical, so this does NOT re-roll the A10 boot lottery.
+ * ★ 160x120 with the OP's 2.0x VERTICAL scale is exactly ASPECT-NEUTRAL:
+ * PWIDTH's 2x horizontal and the OP's 2x vertical cancel, so FOCAL and FOCAL_Y
+ * come out EQUAL (95) and no projection fudge is needed.  It is LESS
+ * anisotropic than the 320x60 build it replaces. */
+#ifdef HRESN
+#define VIEW_W HRESN
+#else
+#define VIEW_W RENDER_W
+#endif
 /* VRES60 (2026-07-29): render 60 lines and let the OP scaler stretch 4.0x to
    the 240-line window, exactly as LOWRES does at 2.0x.  Spans are emitted PER
    SCANLINE, so halving the scanlines halves the span count - and every

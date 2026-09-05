@@ -1081,6 +1081,35 @@ $(error VRESN=$(VRESN) requires LOWRES=1 (it is the OP-scaler display path))
 endif
 CFLAGS   += -DVRESN=$(VRESN)
 CXXFLAGS += -DVRESN=$(VRESN)
+
+endif
+
+# ☠☠ THIS BLOCK MUST LIVE OUTSIDE `ifdef VRESN`.  It was first written just
+# after the VRESN CFLAGS append, which put it INSIDE that conditional: with
+# QUALITY=pretty (no VRESN) the CFLAGS line never ran, so -DHRESN reached jas
+# and jcc68k but NOT gcc, and main.c kept VIEW_W==320 while the kernel used
+# CENTER_X=80.  The ROM still differed from its control, so "the flag landed"
+# looked true.  ★ A flag is landed only when EVERY define path has it -- this
+# Makefile has three (CFLAGS/gcc, JCCDEFS/jcc68k, GEOTEX_DEFS/jas).
+# HRESN=N: the HORIZONTAL dial.  Render only the leftmost N columns of each
+# RENDER_W-byte row and widen the PIXEL CLOCK (VMODE PWIDTH) so they fill the
+# active line.  The STRIDE does not change, so the title/ring/loading/FMV paths
+# (all of which assume a 320-byte row) are untouched and BSS stays put -- which
+# is why this does NOT re-roll the A10 boot lottery.
+# ☠ NOT the OP horizontal scaler: that holds the bus ~15-20x and blacks the
+# display.  PWIDTH is the opposite and is a bus WIN.  [HW] jag_quake ships
+# VMODE=$0EC7 (PWIDTH 7) since 2026-08-12.
+# ☠ Ladder is closed on purpose: the Blitter width field encodes only
+# 2^e x (4+m)/4, so 160 and 80 are expressible and e.g. 72 is NOT -- and it
+# fails SILENTLY.  Refuse anything off it rather than emit a wrong picture.
+HRESN_LADDER := 160 80
+ifdef HRESN
+ifeq ($(filter $(HRESN),$(HRESN_LADDER)),)
+$(error HRESN=$(HRESN) is not expressible: the Blitter width field encodes only \
+2^e x (4+m)/4 and PWIDTH must divide the line cleanly. Available: $(HRESN_LADDER))
+endif
+CFLAGS   += -DHRESN=$(HRESN)
+CXXFLAGS += -DHRESN=$(HRESN)
 endif
 
 # TRAPFLOOR=1: TR1's collapsing tiles (the 2 in r19). VERIFIED on silicon with
@@ -1393,7 +1422,7 @@ ifdef TRAPEZOID
 $(error ROWDIET=1 and TRAPEZOID=1 are mutually exclusive (both claim r4/r21 in the span run))
 endif
 endif
-GEOTEX_DEFS := $(LOWRES_DEF) -d VRES60=$(if $(VRES60),1,0) $(NOFILL_DEF) $(NOSPAN_DEF) $(PROFGPU_DEF) $(NOMUL_DEF) $(NODIV_DEF) $(NOSTORE_DEF) $(SHADEPASS_DEF) $(NOCULL_DEF) $(STAGEDIET_DEF) -d NOBLIT=$(if $(NOBLIT),1,0) -d ALLCULL=$(if $(ALLCULL),1,0) -d RUNHIST=$(if $(RUNHIST),1,0) -d TRAPEZOID=$(if $(TRAPEZOID),1,0) -d DRIFTLOOSE=$(if $(DRIFTLOOSE),1,0) -d XCULL=$(if $(XCULL),1,0) -d BEXIT=$(if $(BEXIT),1,0) -d ROWDIET=$(if $(ROWDIET),1,0) -d PHRASESHADE=$(if $(PHRASESHADE),1,0) -d DIVHIDE=$(if $(DIVHIDE),1,0) -d BANKDIET=$(if $(BANKDIET),1,0) -d RUNBATCH=$(if $(RUNBATCH),1,0) -d RBNOUV=$(if $(RBNOUV),1,0) -d CULLCOUNT=$(if $(CULLCOUNT),1,0) -d NOBFCULL=$(if $(NOBFCULL),1,0) -d BEXCNT=$(if $(BEXCNT),1,0) -d SDPROBE=$(if $(SDPROBE),1,0) -d NOSDCULL=$(if $(NOSDCULL),1,0) -d WCCNT=$(if $(WCCNT),1,0) -d NOEMPTYY=$(if $(NOEMPTYY),1,0) -d GPUBG=$(if $(GPUBG),1,0) -d SHADEEXCL=$(if $(SHADEEXCL),1,0) -d RCLIPFIX=$(if $(RCLIPFIX),1,0) -d NEARLOW=$(if $(NEARLOW),1,0) -d PREPASSONLY=$(if $(PREPASSONLY),1,0) -d MMULTX=$(if $(MMULTX),1,0) -d MMXDIAG=$(if $(MMXDIAG),1,0) -d UVCLAMP=$(if $(UVCLAMP),1,0) -d UVPROBE=$(if $(UVPROBE),1,0) -d UVFIX=$(if $(UVFIX),1,0) -d UVNEG=$(if $(UVNEG),1,0) -d TINYCULL=$(if $(TINYCULL),$(TINYCULL),0) -d JMPDIET=$(if $(JMPDIET),1,0) -d LARACOUNT=$(if $(LARACOUNT),1,0) -d KEEPDEGEN=$(if $(KEEPDEGEN),1,0) -d DIVZGUARD=$(if $(DIVZGUARD),1,0) -d TINYKEEP=$(if $(TINYKEEP),$(TINYKEEP),0) -d BWOVER=$(if $(BWOVER),1,0) -d ODRAW=$(if $(ODRAW),1,0) -d PHRASEDST=$(if $(PHRASEDST),1,0) -d IMULPROBE=$(if $(IMULPROBE),1,0) -d SPANSHADE=$(if $(SPANSHADE),$(SPANSHADE),0) -d FOURBPP=$(if $(FOURBPP),1,0) -d INLINEMUL=$(if $(INLINEMUL),1,0) -d OFFHOIST=$(if $(OFFHOIST),1,0) -d VPACK=$(if $(VPACK),1,0) -d VCJDIET=$(if $(VCJDIET),1,0) -d NEARCLIP=$(if $(NEARCLIP),1,0) -d SYNCDRAIN=$(if $(SYNCDRAIN),1,0) -d ODRAWS=$(if $(ODRAWS),1,0) -d GPUHALT=$(if $(GPUHALT),1,0) -d VIEWH=$(if $(VIEWH),$(VIEWH),0) -d VRESN=$(if $(VRESN),$(VRESN),0) -d VCDRAIN=$(if $(VCDRAIN),1,0) -d MICROOPT=$(if $(MICROOPT),1,0) -d REVFACE=$(if $(REVFACE),1,0) -d HALFW=$(if $(HALFW),1,0)
+GEOTEX_DEFS := $(LOWRES_DEF) -d VRES60=$(if $(VRES60),1,0) $(NOFILL_DEF) $(NOSPAN_DEF) $(PROFGPU_DEF) $(NOMUL_DEF) $(NODIV_DEF) $(NOSTORE_DEF) $(SHADEPASS_DEF) $(NOCULL_DEF) $(STAGEDIET_DEF) -d NOBLIT=$(if $(NOBLIT),1,0) -d ALLCULL=$(if $(ALLCULL),1,0) -d RUNHIST=$(if $(RUNHIST),1,0) -d TRAPEZOID=$(if $(TRAPEZOID),1,0) -d DRIFTLOOSE=$(if $(DRIFTLOOSE),1,0) -d XCULL=$(if $(XCULL),1,0) -d BEXIT=$(if $(BEXIT),1,0) -d ROWDIET=$(if $(ROWDIET),1,0) -d PHRASESHADE=$(if $(PHRASESHADE),1,0) -d DIVHIDE=$(if $(DIVHIDE),1,0) -d BANKDIET=$(if $(BANKDIET),1,0) -d RUNBATCH=$(if $(RUNBATCH),1,0) -d RBNOUV=$(if $(RBNOUV),1,0) -d CULLCOUNT=$(if $(CULLCOUNT),1,0) -d NOBFCULL=$(if $(NOBFCULL),1,0) -d BEXCNT=$(if $(BEXCNT),1,0) -d SDPROBE=$(if $(SDPROBE),1,0) -d NOSDCULL=$(if $(NOSDCULL),1,0) -d WCCNT=$(if $(WCCNT),1,0) -d NOEMPTYY=$(if $(NOEMPTYY),1,0) -d GPUBG=$(if $(GPUBG),1,0) -d SHADEEXCL=$(if $(SHADEEXCL),1,0) -d RCLIPFIX=$(if $(RCLIPFIX),1,0) -d NEARLOW=$(if $(NEARLOW),1,0) -d PREPASSONLY=$(if $(PREPASSONLY),1,0) -d MMULTX=$(if $(MMULTX),1,0) -d MMXDIAG=$(if $(MMXDIAG),1,0) -d UVCLAMP=$(if $(UVCLAMP),1,0) -d UVPROBE=$(if $(UVPROBE),1,0) -d UVFIX=$(if $(UVFIX),1,0) -d UVNEG=$(if $(UVNEG),1,0) -d TINYCULL=$(if $(TINYCULL),$(TINYCULL),0) -d JMPDIET=$(if $(JMPDIET),1,0) -d LARACOUNT=$(if $(LARACOUNT),1,0) -d KEEPDEGEN=$(if $(KEEPDEGEN),1,0) -d DIVZGUARD=$(if $(DIVZGUARD),1,0) -d TINYKEEP=$(if $(TINYKEEP),$(TINYKEEP),0) -d BWOVER=$(if $(BWOVER),1,0) -d ODRAW=$(if $(ODRAW),1,0) -d PHRASEDST=$(if $(PHRASEDST),1,0) -d IMULPROBE=$(if $(IMULPROBE),1,0) -d SPANSHADE=$(if $(SPANSHADE),$(SPANSHADE),0) -d FOURBPP=$(if $(FOURBPP),1,0) -d INLINEMUL=$(if $(INLINEMUL),1,0) -d OFFHOIST=$(if $(OFFHOIST),1,0) -d VPACK=$(if $(VPACK),1,0) -d VCJDIET=$(if $(VCJDIET),1,0) -d NEARCLIP=$(if $(NEARCLIP),1,0) -d SYNCDRAIN=$(if $(SYNCDRAIN),1,0) -d ODRAWS=$(if $(ODRAWS),1,0) -d GPUHALT=$(if $(GPUHALT),1,0) -d VIEWH=$(if $(VIEWH),$(VIEWH),0) -d VRESN=$(if $(VRESN),$(VRESN),0) -d VCDRAIN=$(if $(VCDRAIN),1,0) -d MICROOPT=$(if $(MICROOPT),1,0) -d REVFACE=$(if $(REVFACE),1,0) -d HALFW=$(if $(HALFW),1,0) -d HRESN=$(if $(HRESN),$(HRESN),0)
 $(BUILD)/gpu_geotex.bin: gpu_geotex.gas | $(BUILD)
 	$(JAS) $< -o $@ --gpu $(call jasd,$(GEOTEX_DEFS))
 
@@ -1512,7 +1541,7 @@ verify-asm: $(BUILD)/gpu_geotex.bin $(BUILD)/gpu_spanfill.bin $(BUILD)/gpu_geomw
 # prologue elision, a soft-mul/div runtime). A second front-end catches
 # portability/UB the same way a second assembler catches encoding bugs.
 JCC68K ?= $(if $(wildcard $(COBWEB_BIN)/jcc68k),$(COBWEB_BIN)/jcc68k,$(HOME)/Documents/Git/cobweb/sim/target/release/jcc68k)
-JCCDEFS := -DMULTIROOM -DFB8 $(if $(JERRYPOSE),-DJERRYPOSE) $(if $(AUTOSTART),-DAUTOSTART) $(if $(PROFILE),-DPROFILE)
+JCCDEFS := -DMULTIROOM -DFB8 $(if $(HRESN),-DHRESN=$(HRESN)) $(if $(JERRYPOSE),-DJERRYPOSE) $(if $(AUTOSTART),-DAUTOSTART) $(if $(PROFILE),-DPROFILE)
 verify-c:
 	@ok=1; for f in video.c blit.c gpu.c jerry.c joypad.c gd_input.c; do \
 	  if $(JCC68K) $$f -o $(BUILD)/jcc_$$f.s $(JCCDEFS) >/dev/null 2>&1 && [ -s $(BUILD)/jcc_$$f.s ]; then \
