@@ -1425,6 +1425,13 @@ endif
 GEOTEX_DEFS := $(LOWRES_DEF) -d VRES60=$(if $(VRES60),1,0) $(NOFILL_DEF) $(NOSPAN_DEF) $(PROFGPU_DEF) $(NOMUL_DEF) $(NODIV_DEF) $(NOSTORE_DEF) $(SHADEPASS_DEF) $(NOCULL_DEF) $(STAGEDIET_DEF) -d NOBLIT=$(if $(NOBLIT),1,0) -d ALLCULL=$(if $(ALLCULL),1,0) -d RUNHIST=$(if $(RUNHIST),1,0) -d TRAPEZOID=$(if $(TRAPEZOID),1,0) -d DRIFTLOOSE=$(if $(DRIFTLOOSE),1,0) -d XCULL=$(if $(XCULL),1,0) -d BEXIT=$(if $(BEXIT),1,0) -d ROWDIET=$(if $(ROWDIET),1,0) -d PHRASESHADE=$(if $(PHRASESHADE),1,0) -d DIVHIDE=$(if $(DIVHIDE),1,0) -d BANKDIET=$(if $(BANKDIET),1,0) -d RUNBATCH=$(if $(RUNBATCH),1,0) -d RBNOUV=$(if $(RBNOUV),1,0) -d CULLCOUNT=$(if $(CULLCOUNT),1,0) -d NOBFCULL=$(if $(NOBFCULL),1,0) -d BEXCNT=$(if $(BEXCNT),1,0) -d SDPROBE=$(if $(SDPROBE),1,0) -d NOSDCULL=$(if $(NOSDCULL),1,0) -d WCCNT=$(if $(WCCNT),1,0) -d NOEMPTYY=$(if $(NOEMPTYY),1,0) -d GPUBG=$(if $(GPUBG),1,0) -d SHADEEXCL=$(if $(SHADEEXCL),1,0) -d RCLIPFIX=$(if $(RCLIPFIX),1,0) -d NEARLOW=$(if $(NEARLOW),1,0) -d PREPASSONLY=$(if $(PREPASSONLY),1,0) -d MMULTX=$(if $(MMULTX),1,0) -d MMXDIAG=$(if $(MMXDIAG),1,0) -d UVCLAMP=$(if $(UVCLAMP),1,0) -d UVPROBE=$(if $(UVPROBE),1,0) -d UVFIX=$(if $(UVFIX),1,0) -d UVNEG=$(if $(UVNEG),1,0) -d TINYCULL=$(if $(TINYCULL),$(TINYCULL),0) -d JMPDIET=$(if $(JMPDIET),1,0) -d LARACOUNT=$(if $(LARACOUNT),1,0) -d KEEPDEGEN=$(if $(KEEPDEGEN),1,0) -d DIVZGUARD=$(if $(DIVZGUARD),1,0) -d TINYKEEP=$(if $(TINYKEEP),$(TINYKEEP),0) -d BWOVER=$(if $(BWOVER),1,0) -d ODRAW=$(if $(ODRAW),1,0) -d PHRASEDST=$(if $(PHRASEDST),1,0) -d IMULPROBE=$(if $(IMULPROBE),1,0) -d SPANSHADE=$(if $(SPANSHADE),$(SPANSHADE),0) -d FOURBPP=$(if $(FOURBPP),1,0) -d INLINEMUL=$(if $(INLINEMUL),1,0) -d OFFHOIST=$(if $(OFFHOIST),1,0) -d VPACK=$(if $(VPACK),1,0) -d VCJDIET=$(if $(VCJDIET),1,0) -d NEARCLIP=$(if $(NEARCLIP),1,0) -d SYNCDRAIN=$(if $(SYNCDRAIN),1,0) -d ODRAWS=$(if $(ODRAWS),1,0) -d GPUHALT=$(if $(GPUHALT),1,0) -d VIEWH=$(if $(VIEWH),$(VIEWH),0) -d VRESN=$(if $(VRESN),$(VRESN),0) -d VCDRAIN=$(if $(VCDRAIN),1,0) -d MICROOPT=$(if $(MICROOPT),1,0) -d REVFACE=$(if $(REVFACE),1,0) -d HALFW=$(if $(HALFW),1,0) -d HRESN=$(if $(HRESN),$(HRESN),0)
 $(BUILD)/gpu_geotex.bin: gpu_geotex.gas | $(BUILD)
 	$(JAS) $< -o $@ --gpu $(call jasd,$(GEOTEX_DEFS))
+	@# ☠☠ THIS GUARD MUST SIT IN THIS RECIPE.  It used to live after the
+	@# gpu_geotex_hq.bin rule, separated only by a BLANK LINE -- which does
+	@# NOT end a make recipe.  So both guards were commands of the _hq_ rule
+	@# and both stat'd $@ = the HQ file, leaving the SHIPPING kernel with no
+	@# ceiling check at all.  A kernel-growing change would have silently
+	@# overlapped the SRAM vars at F03E60 and died on silicon only.
+	@sz=$$(stat -c%s $@); if [ $$sz -gt 3680 ]; then 	  echo "!!! gpu_geotex.bin $$sz bytes OVERLAPS SRAM vars at F03E60 (max 3680; AU/BU at F03FA8+; SY/U/V relocated to F03FCC+; SX_BUF at F03F24; F03F74+ = DISPATCH LIST, not free)"; 	  rm -f $@; exit 1; fi
 
 # TITLE-HQ kernel (task #4): SAME source/defs but LOWRES=0 -> 240-line
 # projection constants (CENTER_Y 120, FOCAL_Y 190, YMAX 239). Uploaded to Tom
@@ -1433,7 +1440,6 @@ $(BUILD)/gpu_geotex_hq.bin: gpu_geotex.gas | $(BUILD)
 	$(JAS) $< -o $@ --gpu $(call jasd,$(subst -dLOWRES=1,-dLOWRES=0,$(GEOTEX_DEFS)))
 	@sz=$$(stat -c%s $@); if [ $$sz -gt 3680 ]; then echo "!!! gpu_geotex_hq.bin $$sz > 3680"; rm -f $@; exit 1; fi
 
-	@sz=$$(stat -c%s $@); if [ $$sz -gt 3680 ]; then 	  echo "!!! gpu_geotex.bin $$sz bytes OVERLAPS SRAM vars at F03E60 (max 3680; AU/BU at F03FA8+; SY/U/V relocated to F03FCC+; SX_BUF at F03F24; F03F74+ = DISPATCH LIST, not free)"; 	  rm -f $@; exit 1; fi
 
 $(BUILD)/gpu_blitprobe.bin: gpu_blitprobe.gas | $(BUILD)
 	$(JAS) $< -o $@ --gpu
