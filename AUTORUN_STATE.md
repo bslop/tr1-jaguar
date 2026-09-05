@@ -13,6 +13,51 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+### ✅✅ RUN 14 SILICON BATCH — jobs #2530-2533, ONE turn, 2026-09-05
+Four arms, all `FASTBOOT=1 PADMUTE=1 FPSBEACON=1`, each verified distinct from
+its control BEFORE flashing. Read with `tools/beacon_find.py` (new).
+
+    arm                          fps     fields/frame   per-5s
+    320x60  control            8.650        6.94        8.60 8.40 8.40 8.80
+    320x60  + SLIVERW=56/24    8.600        6.98        8.60 8.60 8.40 8.60
+    320x120 control            6.400        9.38        6.40 6.40 6.40 6.40
+    320x120 + HALFW=1          7.300        8.22        7.20 7.20 7.40 7.20
+All four bimodal=1.00, span ~246-249. Stable, not straddling.
+
+#### ☠️☠️ SLIVERW IS A NULL — era C's +17% DOES NOT REPRODUCE
+8.650 -> 8.600 = **-0.6%**, inside scatter. Pre-declared criterion was "<+3%
+⇒ era C's +17% was a 4-fps-era artefact". It was. **The open list has lost its
+last unspent item**, and the offload campaign plan's Stack A -- which crossed
+the rung ONLY if SLIVERW survived -- does not cross. Do not re-propose it.
+
+#### ✅✅✅ HALFW PASSES ON SILICON — AND jagemu UNDER-PREDICTED IT BY 2x
+6.400 -> 7.300 = **+14.1% frames** (frame time -12.3%). Pre-declared bar was
+>= +11% at 120 lines. **PASSES.**
+★★★★★ Offline said **+7.3%**; silicon says **+14.1%**. The emulator under-valued
+a fill saving by nearly 2x. That is the opposite direction to "jagemu
+OVERCHARGES the Blitter" and it means an offline fill A/B here is a FLOOR, not
+a ceiling. HALFW uses no PWIDTH at all, so this is not the PWIDTH hole -- it is
+jagemu missing the bus/DRAM-page cost that a real Blitter imposes.
+⇒ The horizontal lever is real and the 160-wide build is authorised by its own
+pre-declared gate. And the PWIDTH bus saving (fewer fetches per line) is
+ADDITIONAL and still unmeasured, because jagemu cannot see it at all.
+
+#### ★ THE 160x120 TRADE, PRICED
+Against today's 320x60 at 8.650: 160x120 lands at **>= 7.30 fps** (the HALFW
+number is the fill half of it; PWIDTH should add). So the vertical axis costs
+roughly **-15% fps**, not the -2 fps guessed earlier. User has chosen 160x120.
+
+#### ☠️ MEASUREMENT: THE BEACON BOX MOVES WITH RENDER_H — CONFIRMED, NOT THEORY
+`main.c:10344` paints fb x32..63, y24..31. Measured capture boxes:
+    VRESN=60   x 168..216  y 192..256      (24/60  = 40% down)
+    VRESN=120  x 168..216  y  96..128      (24/120 = 20% down)
+Same x, different y. A box hard-coded for one resolution reads a plausible
+WRONG number at the other. ☠️ The capture is PILLARBOXED: active picture is
+x 114..637, y 0..473 of 720x480 -- a naive full-frame mapping lands off the
+beacon and `beacon_find.py read` correctly REFUSED (flat box, p5..p95 28.4..28.5).
+☠️ The beacon flips per PUBLISHED frame, not per FIELD: diffing jagemu fields
+N and N+1 finds Lara's idle animation, not the beacon. Use >= 12 fields.
+
 ### ✅ RUN 14 (2026-09-05) — OFFLINE MEASUREMENT BASELINE STANDS UP FROM COLD
 Branch **`offload-campaign`**, cut from `main` at tag
 `checkpoint-2026-09-05-pre-offload`. Campaign: what moves off Tom onto the
