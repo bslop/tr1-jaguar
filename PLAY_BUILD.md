@@ -1,3 +1,57 @@
+## ★★★★★ 2026-09-05 — `demo33`: THE FIRST GENUINE CONTAINER BUILD SINCE demo31
+`out_demo33/` is the complete SD payload; the ROM is `OPENLARA.COF`
+(md5 `f941b8184722…`, 1,543,564 B). Built by the container ONLY:
+
+    docker build -t tr-jaguar .
+    docker run --rm -v "$PWD/disc:/disc:ro" -v "$PWD/out:/out" \
+      -e DISC_NAME="Tomb Raider (USA) (v1.6).cue" -e RES=120 -e HRES=160 tr-jaguar
+
+**NEW: `HRES=160` — the horizontal dial.** Render 160 columns and widen the
+VMODE pixel clock (PWIDTH) so they fill the active line. 160x120 replaces
+320x60: the SAME pixel count and the same Blitter transfer, but the vertical
+axis is back. Silicon, one turn, jobs #2538/#2539:
+
+    320x120  6.450 fps  (9.30 fields/frame)
+    160x120  7.500 fps  (8.00 fields/frame)   +16.3%
+
+★ It lands on EXACTLY 8.00 fields/frame — a whole-field step, so it is
+repeatable across rig turns instead of the bimodal coin flip a straddling build
+gives. Re-measured after the phase fix (#2550): 7.550 / 7.95, unchanged.
+☠ NOT the OP horizontal scaler (which starves the bus ~15-20x and blacks the
+display). PWIDTH is the opposite and is a bus WIN. HSCALE stays 1.0x.
+
+VERIFIED: `HRESN=160` on all THREE define paths (gcc/jcc68k/jas, checked on the
+compile lines) · 0 debug flags · **0** `23f9` vector-table stores · `op_list`
+`0x17cd00` = 0 mod 32 · jagemu 900 frames: 0 OP scaled/bitmap misaligned, 0
+illegal, 0 stray, 0 unaligned, 0 cart writes · DRAM budget 102,272 B headroom.
+SILICON: FMV full width and centred (#2548) · game 160x120 correct (#2550).
+⬜ The TITLE RING was not directly captured — the front end runs long and loops
+to the attract cinematic; offline the title object is back to 320 wide and it
+shares the `g_disp240=1` path with the FMV, which IS confirmed. Catch it next
+rig turn before this is called shipped.
+
+☠☠ **RC1 WAS BROKEN AND SILICON IS THE ONLY REASON WE KNOW.** The first cut
+narrowed all four `op_list` sites, so the intro FMV came back CUT OFF at the
+right edge on a real TV (#2545) while jagemu rendered a plausible picture —
+jagemu ignores PWIDTH and takes its screenshot from the framebuffer, so a wrong
+OP object is invisible offline (JAGUAR_FINDINGS section 1). `IWIDTH`/`VMODE`
+are now PHASE-dependent on `g_disp240`: the game narrows, the title/FMV/loading
+art (full-width 320 assets) do not. VMODE changes ONLY in
+`video_set_disp240()` — the title<->game transition — per gpu.c:423-431.
+
+☠ NOT pushed to origin — the origin push IS the gated release; the user calls it.
+
+## ☠☠ CORRECTION (2026-09-05): demo32 WAS NEVER A CONTAINER BUILD
+The entry below describes demo32 as `make $BUILD_FLAGS VRESN=60` with
+"build_cof.sh = the container entrypoint, so identical". The first half is what
+happened; **the parity claim was never true.** `54e55a6` (ENTLISTS) dropped the
+closing quote on the `BUILD_FLAGS` assignment, so the shell swallowed the
+following comment block — which contains `(7.90 -> 8.10)` — and passed its `>`
+to make, which printed its usage and **exited 0** with an empty `out/`.
+`build_cof.sh` could not produce a ROM at all from 2026-08-27 until `fb2b316`
+on 2026-09-05. demo31 (08-26) predates the break and IS a real container build;
+demo32 is a hand-made ROM. Judge any container run by `out/OPENLARA.COF`.
+
 ## ★★★★★ 2026-08-28 — RELEASE CANDIDATE `demo32` (VRESN=60 + full Caves mechanics)
 `out/` = the complete SD payload; the ROM is `out/OPENLARA.COF` (md5 `bc001c371a1e…`,
 1,543,804 B). Built from the current tree via `make $BUILD_FLAGS VRESN=60` (build_cof.sh

@@ -13,6 +13,51 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+### ✅✅✅ demo33 BUILT BY THE CONTAINER AT 160x120 (2026-09-05)
+`out_demo33/` = full SD payload. ROM md5 `f941b8184722…`, 1,543,564 B.
+    docker run ... -e RES=120 -e HRES=160 tr-jaguar
+Gates: HRESN=160 on all THREE define paths · 0 debug flags · 0 `23f9` ·
+op_list 0x17cd00 (0 mod 32) · jagemu 0/0/0/0/0 · DRAM 102,272 B headroom.
+Silicon: FMV full width (#2548) · game 160x120 at 7.550 fps / 7.95 fields
+(#2550, matches #2539's 7.500/8.00 — the phase code costs nothing).
+⬜ **TITLE RING still not captured** — front end runs long and loops to the
+attract cinematic. Offline it is back to 320 wide and it shares the
+`g_disp240=1` path with the FMV, which IS confirmed. Catch it next turn.
+
+#### ☠☠☠ THREE CONTAINER GUARDS WERE DEAD — ALL FIXED THIS RUN
+1. `build_cof.sh` unclosed quote (`54e55a6`→`fb2b316`): make got `>` from a
+   comment, printed usage, **exited 0**. NO ROM for 9 days. demo32 is therefore
+   NOT a container build; PLAY_BUILD.md corrected.
+2. The SHIPPING kernel had **no size guard**: a blank line does not end a make
+   recipe, so both guards were commands of the `_hq_` rule and both stat'd the
+   HQ file. `124daba`.
+3. `strtonum()` is **gawk-only**; the container ships mawk, so `$end` was empty
+   and `[ -gt ]` errored to stderr while the build carried on. The 2MB DRAM
+   guard had NEVER run in any container ROM. Now POSIX, fails loud on a missing
+   symbol, and **prints headroom on success**.
+★★★★★ All three are the same shape: **the check ran, on something else, and
+said nothing.** A missing check is visible in review; a check pointed at the
+wrong subject is not. Make guards report positively.
+
+#### ☠☠ RC1 SHIPPED A CUT-OFF FMV — jagemu CANNOT SEE THE DISPLAY PATH
+Narrowing all four `op_list` sites broke the front end: the intro FMV was cut
+off at the right edge on silicon (#2545) while jagemu rendered it plausibly.
+`IWIDTH`/`VMODE` are now phase-dependent on `g_disp240`; VMODE changes ONLY in
+`video_set_disp240()` (gpu.c:423-431 — a VMODE write disturbs the timing
+generator, so never per-frame). The offline tell existed but was WEAK: the
+title screenshot's bounding box had gone 320→288 and I nearly argued past it.
+☠ Second bug caught by the NO-OP CHECK: the ternaries were ungated, so at 320
+`g_disp240 ? 0x06C7 : JAG_VMODE` picked the same value — identical behaviour,
+different codegen — and the 320 ROM stopped being byte-identical. **"Same
+value" is not "same build".**
+
+#### ☠ MY OWN HELPER BROKE THE SAME WAY
+`BF=$(... sed -n "109,117p" tools/build_cof.sh)` extracted BUILD_FLAGS by LINE
+NUMBER. Adding the HRES block shifted those lines onto the new `case`, my
+host-side eval fell into its `*)` branch and exit 2'd, and the failure LOOKED
+like the container rejecting HRES=160. Match the assignment, not a line number:
+`sed -n "/^BUILD_FLAGS=/,/}\"$/p"`.
+
 ### ✅✅✅ 160x120 SHIPS ON SILICON — jobs #2538/#2539, one turn, 2026-09-05
     320x120 control      6.450 fps   9.30 fields/frame   6.40 6.40 6.60 6.40
     160x120 HRESN=160    7.500 fps   8.00 fields/frame   7.40 7.40 7.40 7.60
