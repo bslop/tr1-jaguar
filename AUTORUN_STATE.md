@@ -13,6 +13,82 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+### ✅ RUN 14 (2026-09-05) — OFFLINE MEASUREMENT BASELINE STANDS UP FROM COLD
+Branch **`offload-campaign`**, cut from `main` at tag
+`checkpoint-2026-09-05-pre-offload`. Campaign: what moves off Tom onto the
+Blitter / OP / 68k / Jerry.
+
+#### ☠️☠️☠️ `build_cof.sh` HAS BEEN UNABLE TO BUILD A ROM SINCE 54e55a6 (9 DAYS)
+Fixed in `fb2b316`. `BUILD_FLAGS="${BUILD_FLAGS:-...}` opens a quote on line 109;
+the closing `"` used to sit on the last flag line and **54e55a6 (ENTLISTS) dropped
+it**. The shell scanned on to the next `"` — end of the ENTLISTS comment block —
+so BUILD_FLAGS expanded to the flags PLUS comment text containing `(7.90 -> 8.10)`
+and `store->load`. Those `>` reached make:
+    make: invalid option -- '>'   → make prints usage, **exits 0**, run ends with empty out/
+★★★★★ c3ee230's "a run with no ROM now fails" guard did NOT catch it: the guard is
+downstream of a step that never reported failing. **A guard placed after a silent
+step guards nothing.**
+⚠ **demo32 IS NOT A CONTAINER ROM.** demo31 (08-26) predates the break and is real.
+PLAY_BUILD.md calls demo32 `make $BUILD_FLAGS VRESN=60` with "build_cof.sh = the
+container entrypoint, so identical" — the parity half was never true after 54e55a6.
+Re-verify demo32 before releasing it as a container build.
+☠️ Also latent in the image build: `awk: function strtonum never defined` (mawk vs
+gawk) and `/bin/sh: 2: [: -gt: unexpected operator` — a ROM size check that silently
+does nothing. Not fixed yet.
+
+#### ✅ THE BASELINE, REPRODUCIBLE FROM COLD — recipe of record
+Tree had NO assets (`disc/` did not exist) and no ROM. Full path, ~15 min:
+    7z x -o disc "$_ARCHIVE/Tomb_Raider_(USA)_(v1.6).7z"     # user's own disc, gitignored
+    docker build -t tr-jaguar .                              # image was STALE (VRESN=80, no RES)
+    docker run --rm -v "$PWD/disc:/disc:ro" -v "$PWD/out_auto:/out" \
+      -e DISC_NAME="Tomb Raider (USA) (v1.6).cue" -e QUALITY=playable -e VIDEO=0 \
+      -e BUILD_FLAGS="<the 109-117 flags> AUTOSTART=1 PADMUTE=1" tr-jaguar
+    cobweb/sim/target/release/jagemu run out_auto/OPENLARA.COF --frames {600,900} --fidelity silicon
+★ `COBWEB_REV` stays pinned at **9da2f99** deliberately — that is the toolchain every
+silicon-measured ROM used; bumping it re-rolls A10 and changes the ROM. Local cobweb
+(03b4ef5) is used only to MEASURE.
+☠️ **`AUTOSTART=1` is mandatory or you profile the TITLE RING** — a plain release ROM
+sat at 491 GPU cycles/field and blit_count 29 over 200 frames. Same trap as
+JAGUAR_FINDINGS §4b. Window verified by SCREENSHOT (Lara in the caves, 320x60) before
+any number was trusted.
+☠️ **`cycles_per_field` as emitted is boot-contaminated** — it is `cycles/frame` over
+the WHOLE run. Naive read 188,754; the true steady-state figure is **367,266**, a 1.9x
+error. Take a DELTA between two runs (600 → 900) instead.
+☠️ redirect with `>file 2>/dev/null`, not `2>&1` — jagemu writes hazard warnings to
+stderr and they corrupt the JSON.
+
+#### ★★★★★ THE BASELINE NUMBERS (VRESN=60, frames 600–900, --fidelity silicon)
+    GPU cycles/field        367,266      <- the campaign's cost metric
+    blit                     20.3%   (launch 1.8% · transfer 18.5%)
+    jump_refill              14.8%
+    mem_external             16.2%
+    stalls alu/load/div/flg  13.5%
+    contention                0.6%   <- jsim mis-prices this; do not trust
+    408 blits/field · 182.9 cyc/blit · launch 16.0 · transfer 166.9
+    DSP 443,304 cycles/field · 68k op_tax 4,501/field
+★★★★★ **CORRECTIONS TO THE PROFILE THIS CAMPAIGN WAS SCOPED AGAINST:**
+1. **Launch is 8.7% of blit cost, transfer is 91.3%** (16.0 vs 166.9 per blit).
+   Even weaker than the shared brain's 14/86 model. **Amortising launches is dead** —
+   RUNBATCH/TRAPEZOID measured null and this is why. Only the transfer side matters.
+2. **Spans are ~15 px here, not 9** (166.9/5.6 ≈ 30 accesses ≈ 15 px at 2/px).
+3. **Blitter is 20.3% of Tom, not 34.6%** — VRESN=60 cut the fill, not the
+   per-vertex/per-face work. Exactly what §4b predicts. The 34.6% figure is a
+   120-line number and must not be quoted at 60.
+4. ☠️ **Jerry is BUSIER than Tom** — 443k vs 367k cycles/field. "Offload to the DSP"
+   starts from a processor with less headroom than the one we are unloading, not more.
+   (Caveat: the resident mixer spins; some of that may be idle. Needs a PC histogram.)
+
+#### ⬜ NEXT
+- `PHRASEDST=1` is the one lever that ever touched the 91% (brain: +9.1–11.3%). ☠️ It
+  is plumbed (`GEOTEX_DEFS`) but it ONLY swaps `A2_FLAGS_VAL` to XADDPHR at
+  gpu_geotex.gas:161 — **it does NOT phrase-align the span start**. The `XL &= ~7`
+  alignment exists only in the PHRASESHADE path (gpu_geotex.gas:3678); the textured
+  path stores unaligned `xl` (:2712, :2897, :3356). Establish whether the probe as
+  built is even correct before quoting its number.
+- Offload audit (Tom/Blitter/OP/68k/Jerry/prior-art) was still running at run end.
+- ⚠ `hw/LOOPMODE` lapsed 08:42; `hw/burnmode` reads SLOW (DEVELOPMENT.md §12).
+- Roster: `jag_openlara` flipped to **active** on the Foreman board this run.
+
 ### ☠️☠️☠️ 68k/KERNEL MICRO-PERF IS AT ITS CEILING — the vein is tapped (2026-08-27)
 User picked "stack more 68k contention" to try to cross 8.30→8.57. Measured, it
 does NOT: after M68A2 (+14%) and ENTLISTS (+4.1%, reproducible: OFF 7.975 twice,
