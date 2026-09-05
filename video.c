@@ -250,6 +250,32 @@ uint32_t fs_ph5 = ((uint32_t)FS_VSCALE << 8) | (uint32_t)FS_HSCALE;
  * the room renders CORRECTLY in the top 120 lines -> kernel+fb are FINE; the
  * ONLY blocker is the TYPE-1 scaled object below. Re-enable to re-confirm. */
 extern int g_disp240;               /* task #4: 1 = title plain-240 mode */
+
+/* ☠☠ UNDER HRESN, IWIDTH AND VMODE ARE PHASE-DEPENDENT, NOT BUILD-CONSTANT.
+   The GAME renders VIEW_W columns and wants the narrow fetch + wide pixel
+   clock.  The TITLE, the FMV clips and the loading art are full-width 320
+   assets and want neither.  Narrowing all four op_list sites unconditionally
+   shipped a build whose intro FMV was CUT OFF at the right edge on silicon
+   (job #2545) while rendering plausibly in jagemu -- which cannot see PWIDTH
+   and takes its screenshot from the framebuffer, so a wrong OP object is
+   invisible offline.  g_disp240 is the phase, so it is the switch.
+   ☠ gpu.c:423-431: a VMODE write disturbs the video timing generator, so it
+   must happen ONLY on the title<->game transition, never per frame. */
+#ifdef HRESN
+#define OP_IWIDTH   ((uint32_t)(g_disp240 ? SCREEN_PWIDTH : SCREEN_IWIDTH))
+#define VMODE_NOW   ((uint32_t)(g_disp240 ? 0x06C7 : JAG_VMODE))
+#else
+/* ☠ Without HRESN these MUST collapse to the old constants, not to a runtime
+   conditional that happens to pick the same value.  The first cut left the
+   ternary in unconditionally: JAG_VMODE is 0x06C7 at 320 so the BEHAVIOUR was
+   identical, but the codegen was not and the 320 ROM stopped being
+   byte-identical -- which is this project's standard proof that a new flag is
+   inert when off.  It also added a VMODE write to the 320 phase transition
+   that was never there (gpu.c:423-431: VMODE writes disturb the video timing
+   generator). Caught by the no-op check, which is what it is for. */
+#define OP_IWIDTH   ((uint32_t)SCREEN_PWIDTH)
+#define VMODE_NOW   ((uint32_t)JAG_VMODE)
+#endif
 /* ☠️☠️ THIS DECLARATION MUST STAY ABOVE build_object_list (run 11).
  * It was below it, and video.c is compiled by **jcc68k, which accepted the
  * undeclared identifier SILENTLY** where gcc errors out. The result was not a
@@ -280,7 +306,7 @@ static void build_object_list(uint32_t fb_addr)
     op_list[0] = (fb_addr << 8) | (link >> 8);
     op_list[1] = (link << 24) | ((uint32_t)RENDER_H << 14) | ((uint32_t)BASE_Y << 4);
     op_list[2] = SCREEN_PWIDTH >> 4;
-    op_list[3] = ((uint32_t)SCREEN_IWIDTH << 28) | ((uint32_t)SCREEN_PWIDTH << 18)
+    op_list[3] = (OP_IWIDTH << 28) | ((uint32_t)SCREEN_PWIDTH << 18)
                | (1u << 15) | OP_DEPTH | BASE_X;
     op_list[4] = 0;
     op_list[5] = 4;
@@ -311,7 +337,7 @@ static void build_object_list(uint32_t fb_addr)
                | ((uint32_t)BASE_Y << 4);           /* TYPE 0 = plain bitmap  */
 
     op_list[2] = SCREEN_PWIDTH >> 4;
-    op_list[3] = ((uint32_t)SCREEN_IWIDTH << 28)
+    op_list[3] = (OP_IWIDTH << 28)
                | ((uint32_t)SCREEN_PWIDTH << 18)
                | (1u << 15)                         /* PITCH 1 */
                | OP_DEPTH
@@ -386,7 +412,7 @@ static void build_object_list(uint32_t fb_addr)
                | t_type;                            /* 1 = scaled, 0 = plain      */
 
     op_list[2] = SCREEN_PWIDTH >> 4;
-    op_list[3] = ((uint32_t)SCREEN_IWIDTH << 28)
+    op_list[3] = (OP_IWIDTH << 28)
                | ((uint32_t)SCREEN_PWIDTH << 18)
                | (1u << 15)                         /* PITCH 1 */
                | OP_DEPTH                         /* DEPTH 16bpp */
@@ -449,6 +475,15 @@ int g_disp240 = 1;   /* PROBE: boot in title-240 (scaled-1x) */
 void video_set_disp240(int on)
 {
     g_disp240 = on;
+#ifdef HRESN
+    /* ★ THE ONLY PLACE THE PIXEL CLOCK MAY CHANGE.  This is the title<->game
+       transition, which is exactly the boundary gpu.c:423-431 says a VMODE
+       write must be confined to -- it disturbs the video timing generator, so
+       doing it per-frame costs half the frame throughput.  Written BEFORE the
+       rebuild so the OP never scans one field with the new IWIDTH against the
+       old pixel clock. */
+    VMODE = VMODE_NOW;
+#endif
     build_object_list(front_fb);
 }
 #else
@@ -479,7 +514,7 @@ static void build_object_list(uint32_t fb_addr)
                | ((uint32_t)BASE_Y << 4);
 
     op_list[2] = SCREEN_PWIDTH >> 4;
-    op_list[3] = ((uint32_t)SCREEN_IWIDTH << 28)
+    op_list[3] = (OP_IWIDTH << 28)
                | ((uint32_t)SCREEN_PWIDTH << 18)
                | (1u << 15)                       /* PITCH 1 */
                | OP_DEPTH                       /* DEPTH 16bpp */
@@ -734,7 +769,7 @@ void video_init(void)
 #endif
 
     /* RGB16, CSYNC, BGEN, VIDEN, PWIDTH=4 -> the standard 320-wide mode */
-    VMODE = JAG_VMODE;
+    VMODE = VMODE_NOW;
 #ifdef EARLYCON
     { extern void dbg_kv(const char *, long); dbg_kv("vi_done", 1); }
 #endif
@@ -763,7 +798,7 @@ void video_rearm_irq(void)
 {
     VI   = (uint16_t)(a_vdb_g - 4);
     INT1 = 0x0003;
-    VMODE = JAG_VMODE;
+    VMODE = VMODE_NOW;
     cpu_irq_on();
 }
 
