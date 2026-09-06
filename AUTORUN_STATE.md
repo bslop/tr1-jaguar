@@ -13,7 +13,48 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
-### ★★★★★ THE SPAWN IS THE WORST ROOM — every headline fps here is a FLOOR (2026-09-05)
+### ★★★★★ E ANSWERED IN REAL PLAY — THE ROOM IS THE COST, THE WOLVES ARE A THIRD OF IT
+Live user playtest on silicon, 300 s capture with FPSBEACON, job #2584 (beacon
+bimodal 1.00). The first frame-rate data this project has from ACTUAL PLAY.
+
+    corridors (t<=172s)                   8.2 fps
+    LARGE COMPLEX ROOM, no wolves yet     3.2-3.9      <- 2.3x collapse
+    same room + wolves engaged            2.3-2.7      <- ~1.4x more
+    whole 300 s run                       4.12 mean, min 0, max 10
+
+☠☠ **THE ROOM DOMINATES, NOT THE ENEMIES.** My first read attributed the whole
+3.5x drop to wolves; the user corrected it ("the room itself is large and
+somewhat complex") and the capture proves it — the collapse happens on ENTERING
+the room, ~25 s before any wolf is on screen. Geometry ~2.3x, wolves ~1.4x on
+top. Do not quote a wolf cost without saying which room.
+
+☠☠☠ **EVERY fps NUMBER THIS PROJECT HAS EVER QUOTED IS FROM AN EMPTY ROOM WITH
+LARA STANDING STILL.** 7.98 / 7.50 / 8.00 fields are all PADMUTE at the spawn.
+Real play is **4.12 mean**. The engine is roughly HALF as fast as the ledger
+says when someone is actually playing it.
+⇒ This reconciles the old room sweep (median 5.83, worst r22 3.69) with the
+user's experience: the heavy rooms were always the frame rate. The sweep knew;
+every campaign since measured the spawn instead.
+⇒ **E's lever is heavy-room geometry cost, not enemies and not fill.**
+
+#### ⬜ ALSO SEEN, NOT YET CHASED
+- ⬜ **"YOU DIED" is STILL cut off at the right edge** in a build made AFTER the
+  `VIEW_W` centring fix (`f979f65`) — so that fix does NOT do what I intended.
+  Re-open; do not assume the text work is done.
+- ⬜ After Lara died the capture went **black and completely static** (frame diff
+  0.00, luma 1.0) for 60 s. Most likely the FASTBOOT measurement build: death
+  soft-reboots to the EIDOS attract and FASTBOOT has no boot-video path to
+  return to. ☠ NOT confirmed — this repo has 9 phantom "black boots" that were a
+  dead capture card. Ask what the TV showed before treating it as a game bug.
+
+★ Methodology note that cost two rig turns: a SCRIPTED drive is not gameplay.
+My drive.sh run passed its own go/no-go (start-vs-end diff 31.7 vs the 28.8 bar)
+while Lara was jammed against a wall for most of it, which inflated the reading
+to 9.29 and had me report the engine as FASTER than the spawn. The go/no-go
+proves she MOVED, not that she moved anywhere useful. A human on the pad found
+the real number in 90 seconds.
+
+### ⚠ SUPERSEDED BY THE ABOVE — THE SPAWN IS THE WORST ROOM (drive was invalid) — every headline fps here is a FLOOR (2026-09-05)
 First DRIVEN fps measurement (`tools/drive.sh`, jobs #2579/#2580, 51 s, host-driven
 pad, beacon bimodal 1.00, go/no-go start-vs-end diff **31.7** against the 28.8 bar):
 
