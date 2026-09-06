@@ -13,6 +13,40 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+### ✅ THE WOLVES ARE THE RIGHT MODEL — the size is the CAMERA (2026-09-06)
+User: *"the dogs look nothing like the wolves in the PS version. They seem a lot
+bigger, are you sure they're the right ones?"* Answered from the disc via
+`MRT_ENEMYAUDIT=1`:
+
+    model 7 WOLF  meshes=26 verts=264 faces=251  bbox 190 x 255 x 521
+    model 8 BEAR  meshes=18 verts=241 faces=261  bbox 538 x 538 x 868
+    model 9 BAT   meshes= 8 verts= 45 faces= 41  bbox 329 x  62 x 200
+
+✅ Distinct models, correctly assigned — a wolf is not a bear, and 255 tall by
+521 long is the right shape for one (longer than tall).
+✅ **Rooms and models share raw TR world units** — neither path scales in the
+extractor (both just append (x,y,z)), and `build_ent_model` (main.c:2918-2934)
+only rotates and translates. So the wolf's size RELATIVE to the world is right,
+and "no scale is applied" is correct behaviour, not the bug I first suspected.
+
+☠ **SO THE SIZE COMPLAINT IS THE FOV, AND IT IS A BY-EYE TUNING DECISION.**
+`gpu_geotex.gas:285` — `FOCAL .equ 190 ; TR1's ~80-degree FOV (160 was 90: too
+wide -> world read as too far)`. FOCAL was raised 160 -> 190, and a HIGHER focal
+is a NARROWER field of view, which magnifies everything by **19%**. It was
+chosen because 160 "read as too far", not by matching the reference.
+⇒ Everything is 19% larger than a 160 focal would draw it. Lara is centred and
+familiar so it does not read as wrong on her; a wolf running at you does.
+⬜ **This is checkable against `res/` PS1 footage, which the corpus calls THE
+AUTHORITY** — measure a wolf's on-screen height in a PS1 frame against ours at a
+comparable distance before changing FOCAL. Do NOT re-tune it by eye a second
+time; that is how it got here.
+
+☠ Diagnostic defect found while doing this: the audit prints the header
+"(Lara for scale: model 0)" and then NO DATA. The comparison its own label
+promises is an unimplemented stub, so the one number that makes the enemy bboxes
+interpretable is missing. Same shape as the three dead guards: a check whose
+useful half never runs.
+
 ### ★★★★★ E ANSWERED IN REAL PLAY — THE ROOM IS THE COST, THE WOLVES ARE A THIRD OF IT
 Live user playtest on silicon, 300 s capture with FPSBEACON, job #2584 (beacon
 bimodal 1.00). The first frame-rate data this project has from ACTUAL PLAY.
