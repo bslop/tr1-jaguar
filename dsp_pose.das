@@ -1154,8 +1154,19 @@ no_jc:
 	load	(r10),r0
 	nop
 	nop
-	or	r0,r0			; consume (order barrier; `or` is the
-					; idiom the hazard checker credits)
+	or	r0,r0			; consume (order barrier; the value is
+					; DISCARDED - a stale read is fine here,
+					; the read exists only to flush the queue)
+	; ☠ THE CLAIM THAT WAS HERE IS FALSE (checked 2026-09-05, cobweb 7b1e9c8):
+	; this said "`or` is the idiom the hazard checker credits". It is not.
+	; risc.rs check_ext_load flags ANY external 32-bit load that re-reads a
+	; word this core stored within 4096 cycles, and has NO dataflow notion of
+	; whether the loaded value is used or thrown away. So both intentional
+	; drains here are reported as store->load hazards on every run (~400 per
+	; 900 fields), and they are FALSE POSITIVES: the value is consumed and
+	; discarded, which is the whole point of a write-drain barrier.
+	; ⚠ Do not "fix" these loads. Removing them re-opens the real bug they
+	; exist to prevent - the 68k seeing MAGIC_DONE before the verts land.
 .if JCENT=1
 	; ☠️ The LAST mesh's centroid store happens AFTER its last vertex store,
 	; so draining on the vert long above does NOT cover it - the 68k could
