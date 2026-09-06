@@ -1,0 +1,12 @@
+# Walk forward a long way to reach wolf territory, then hold still so the
+# fps beacon reads a settled scene rather than a turn.
+# mask seconds -- UP 1 DOWN 2 LEFT 4 RIGHT 8 A=jump 16 B=action 32 C=walk 64
+0 2
+1 8
+0 2
+1 8
+0 2
+1 6
+0 6
+1 6
+0 8

@@ -13,6 +13,37 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+### ★★★★★ THE SPAWN IS THE WORST ROOM — every headline fps here is a FLOOR (2026-09-05)
+First DRIVEN fps measurement (`tools/drive.sh`, jobs #2579/#2580, 51 s, host-driven
+pad, beacon bimodal 1.00, go/no-go start-vs-end diff **31.7** against the 28.8 bar):
+
+    t=0-10s   6.00-7.50 fps   <- the level START, where EVERY arm has been measured
+    t=12-30s  9.00-10.50
+    t=32-48s  9.00-11.00
+    WHOLE RUN mean **9.29 fps**
+
+☠☠ **The 7.500 fps / 8.00 fields figure quoted everywhere is the SPAWN, and the
+spawn is the slowest place in the level.** Every static arm this project has ever
+run — mine included — parks Lara at the level start with PADMUTE. In actual play
+the build sits at **9-11 fps**, not 7.5. The shipping number is a floor, not a
+typical case, and the demo reads better than the ledger says.
+⇒ Any future fps claim must say WHERE. "7.98 at the spawn" and "9.29 driven" are
+both true and describe different things.
+
+#### ⬜ THE WOLVES ARE STILL UNPRICED — the drive never reached one
+51 s of forward walking from the spawn met no wolf; the only dip (6.00 at t=10) is
+heavier geometry, confirmed by eye. The user's "slows tremendously with the wolves"
+is real and remains the open perf question. ⬜ NEXT: locate a wolf room and drive
+there, or SPAWNAT into one — do not assume forward-from-start reaches them.
+☠ **`ENEMIES` CANNOT BE TURNED OFF ANY MORE**, so the obvious build A/B is
+unavailable: `ent_is_wolf` / `ent_is_bat` / `ent_is_bear` / `g_batinit` are called
+from sites that escaped the `#ifdef ENEMIES`, and the build fails to compile
+(`main.c:3476-3478`, `:9121`). Either fix the guards or price the wolves
+within one run (same ROM, two scenes), which is the better experiment anyway.
+☠ **A real controller contaminates a driven run.** The first attempt (#2579) was
+invalidated because the user touched the pad mid-capture — same family as the
+earlier "pad resting on FORWARD" confound. Re-run clean before quoting anything.
+
 ### ⬜⬜ USER PLAYTEST ON SILICON (2026-09-05) — 160x120 IS THE BEST-PLAYING BUILD YET
 User, on the TV, verbatim: *"Gameplay wise, that plays the best out of all that
 I've played thus far."* The 160x120 direction is validated by the only oracle
