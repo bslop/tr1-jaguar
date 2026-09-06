@@ -36,6 +36,40 @@ wolves) is that room: heavy geometry + 12 bridge entities + 2 wolves.
 room was cheap — when it is in fact r22, the worst room in the level. Always say
 which numbering.
 
+#### ⬜ ENTVIEWCULL ON SILICON — content-aligned, LOW confidence, does NOT support shipping it
+Live playtest A/B, single variable vs job #2584 (same build config, ENTVIEWCULL=1
+flipped): jobs #2584 control / #2699 cull, 300 s each, user driving.
+
+☠ **A naive time-index comparison said +0.54 fps mean and is WORTHLESS** — the
+two playthroughs put different content at the same timestamp (control dies at
+t=230 and blacks out; cull has a dark stretch t=80-130 and RECOVERS). Same
+fixed-index error as the offline arms, this time from human variability.
+`tools/tour_pair.py`'s own docstring records this exact failure: index pairing
+"silently compares different rooms", and once showed a 94% fix in a room that
+was a different room.
+
+✅ CONTENT-ALIGNED (nearest-image match on the bridge-room view), with the
+metric CALIBRATED first so "match" means something:
+    same view, +/-2s in the control's own run   dist  442 .. 2229
+    anywhere else in the level                  dist 1619 .. 5020
+    ENTVIEWCULL best match                      dist 1445   <- below any
+                                                   "elsewhere" frame, inside band
+    control 3.83 fps   |   ENTVIEWCULL 3.00 fps
+⚠ **LOW CONFIDENCE, and it points the WRONG way for the cull.** One ~6 s window
+each, two different playthroughs, different camera angles, and the same-view
+band OVERLAPS the elsewhere band. It also contradicts the one comparable offline
+arm (-2.0% cycles, -3.1% blits, i.e. slightly favourable).
+⇒ **Do not ship ENTVIEWCULL on this.** Do not reject it on this either.
+⬜ What would settle it: **ROOMTOUR** captures — a deterministic camera per room
+is what `tour_pair.py` was built for, and it removes the human variable that
+makes free-play A/B unmeasurable.
+
+★★★★★ FOUR ATTEMPTS, FOUR FAILURE MODES, ONE ROOT: comparing two things without
+first establishing they are the same thing. Per-field offline (arms diverge),
+per-published-frame offline (scenes differ), fixed-index silicon (playthroughs
+differ), content-matched (needed a calibrated distance before the match meant
+anything). The check is always cheaper than the retraction.
+
 #### ☠☠☠ FRAME-INDEXED OFFLINE A/B IS IMPOSSIBLE IN THIS ENGINE — closed, with the reason
 Second attempt at pricing the bridges offline (spawn moved to the far end of the
 cluster, ~6 sectors from the wolves, to get a quiet window). It failed the same
