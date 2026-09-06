@@ -83,3 +83,23 @@ gym_lplanes.h
 # #include via -Idisc (Makefile).
 /disc/
 cobweb/
+
+# ☠☠ BUILD-OUTPUT / MEASUREMENT-ARM DIRECTORIES — DISC-DERIVED, NEVER COMMIT
+# Every container run and every A/B arm drops a full SD payload: OPENLARA.elf
+# (the linked image, with the disc's level/texture/model data .incbin'd into
+# it), CAVSLOAD.DAT / GYMLOAD.DAT (loading art), the .JV clips and MUSIC.PCM.
+# `*.cof` and `*.bin` were already ignored; `.elf` and `.DAT` were NOT, so 28
+# untracked paths of disc-derived material were sitting one `git add -A` away
+# from a PUBLIC repo (2026-09-06). 43 MB of exactly this had to be purged once
+# before — see the /disc/ note above.
+# ★ Named by PREFIX rather than one-by-one: the next arm will be called
+# something nobody has thought of yet, and a rule that needs updating per
+# experiment is a rule that fails on the experiment nobody edited it for.
+out/
+out_*/
+arm[0-9]*/
+br_*/
+wolf_*/
+*.elf
+*.DAT
+*.JV
