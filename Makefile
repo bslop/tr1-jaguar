@@ -822,14 +822,42 @@ $(BUILD)/gd_input.o: gd_input.c | $(BUILD)
 # 2026-07-20). Repro asm saved; narrowing for the cobweb report.
 $(BUILD)/jerry.o: jerry.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
-# make ... GCCHOT=1 : pin the remaining PER-FRAME TUs to gcc as well.
-# Rationale (2026-07-24): jcc68k emits ~1.9x gcc -O2's text (note above), and
-# main.c was already pinned back here "for PERFORMANCE ... the game crawls".
-# blit.c is where the 68k pc-histogram puts ~60% of awake time and gpu.c runs
-# every kick, so both were still paying that 1.9x on the critical path.
-# video.c carries the vblank ISR, where jcc68k costs ~10 instructions per store.
-# Correctness risk is nil (gcc is the reference compiler); this only opts out of
-# dogfooding cobweb's codegen on the hot path.
+# make ... GCCHOT=1 : build blit.c, gpu.c and video.c with gcc instead of jcc68k.
+#
+# ☠☠ THE PERFORMANCE RATIONALE IS REVOKED (2026-09-05). Kept as a DIFFERENTIAL
+# INSTRUMENT, which is the only thing it is now good for. Three independent
+# refutations, all of which were already in this repo and none of which had been
+# joined up:
+#
+#  1. The number it rested on is dead. The original rationale said "blit.c is
+#     where the 68k pc-histogram puts ~60% of awake time" -- a 2026-07-24,
+#     320x60-era measurement. ENGINE_HEATMAP.md:5 retracts that whole class
+#     ("every previous conclusion about the 68000 was measured at 320x60"), and
+#     the 160x120 histogram puts blit_band at 5.78% of awake, not 60%. The
+#     largest category is software mul/div helpers at 13.6%, which the old
+#     rationale does not mention at all.
+#  2. The predicted benefit was already measured at ZERO. ENGINE_HEATMAP.md:51
+#     and JAGUAR_FINDINGS.md:56, independently: GCCHOT cut 68k instructions 22%
+#     for 0.00% fps. 68k CYCLES are nearly free; only 68k DRAM traffic during
+#     Tom's render costs anything, and this moves none.
+#  3. ☠ The only historical USE was not a codegen workaround. AUTORUN_STATE.md:347
+#     -- `ship_p136` used GCCHOT=1 to dodge the JAS destination-relocation bug
+#     (24 sites in video.c storing into the 68000 exception vectors, black on
+#     every pad), fixed in cobweb `ba9c680`. demo33 at the 9da2f99 pin scans 0
+#     `23f9` stores below $4000, so that bug is not present.
+#     ⚠ DO NOT read "ship_p136 shipped with GCCHOT=1" as evidence that jcc68k
+#     miscompiles video.c. It reads exactly like that and it is not what happened.
+#
+# ⇒ Do not enable this for speed. It exists so a gcc-vs-jcc68k differential can
+# be run on the three hot TUs as a group (see CCVERIFY). And note that offline
+# can FIND a codegen difference but never CLEAR one: two of the four historical
+# per-TU pins were silicon-only and would have passed any offline oracle.
+#
+# ★ Lesson, and the reason this comment is long: the retraction that killed the
+# ~60% reached every document that QUOTED a 68000 number and not the build rule
+# whose COMMENT carried one. Date the number inside the decision -- written as
+# "~60% (2026-07-24, 320x60)" it would have refuted itself the moment the
+# regime changed.
 ifdef GCCHOT
 $(BUILD)/blit.o: blit.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -1487,10 +1515,23 @@ $(BUILD)/openlara.elf: $(OBJS) jaguar.ld
 	fi
 
 $(BIN): $(BUILD)/openlara.elf
-	@end=$$(m68k-neogeo-elf-nm $< | awk '/__bss_end/{print strtonum("0x"$$1)}'); \
+	@# ☠☠ strtonum() IS A GAWK EXTENSION.  Ubuntu 24.04 (the container base)
+	@# ships mawk, where it does not exist -- awk printed nothing, $$end came
+	@# out EMPTY, and the test errored with "[: -gt: unexpected operator" on
+	@# stderr while the build carried on.  This guard has been DEAD in every
+	@# container ROM.  $$((0x...)) is POSIX and works in dash, bash and sh.
+	@# ★ It now PRINTS the headroom on success: a guard that is silent when it
+	@# passes is indistinguishable from one that is not running, which is
+	@# exactly how this survived.
+	@hex=$$(m68k-neogeo-elf-nm $< | awk '/ __bss_end$$/{print $$1}'); \
+	if [ -z "$$hex" ]; then \
+	  echo "!!! __bss_end not found in $< - the DRAM budget guard CANNOT RUN"; \
+	  exit 1; fi; \
+	end=$$((0x$$hex)); \
 	if [ $$end -gt 2080768 ]; then \
 	  echo "!!! __bss_end $$end > 0x1FC000: <16KB 68k stack headroom (sp=0x200000 grows DOWN)"; \
-	  exit 1; fi
+	  exit 1; fi; \
+	echo "   DRAM budget OK: __bss_end 0x$$hex = $$end / 2080768 ($$(( 2080768 - $$end )) B headroom)"
 	$(OBJCOPY) -O binary $< $@
 
 $(TARGET): $(BIN) makecof.py
