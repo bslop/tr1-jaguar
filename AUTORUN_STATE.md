@@ -13,6 +13,78 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+### ★★★★★ THE BRIDGES ARE THE ROOM — user's hunch confirmed, already measured in-repo (2026-09-06)
+User: *"I have a feeling it's the bridges."* They were right, and the number was
+already sitting in `main.c` unreferenced by any campaign doc.
+
+`MRT_ENTAUDIT=1` against the disc:
+    type 68/69/70  BRIDGE_1/2/3   x4 each = **12 bridges, ALL in one room**
+    type 7 ENEMY_WOLF             rooms [14, 27, 33, 35]  -- incl. that same room
+`main.c:11019-11021`: *"Room 22 draws all twelve bridges on a pure DISTANCE
+gate, and the bridges are worth **33% of that room's frame rate** (measured:
+**6.07 fps with, 8.07 without**, Lara walking in)."*
+`main.c:11027`: r22 is the level's worst room (**3.69** in the 38-room sweep)
+and **the only one with bridges**.
+
+⇒ The user's real-play collapse (8.2 -> 3.2 entering the room, -> 2.3 with
+wolves) is that room: heavy geometry + 12 bridge entities + 2 wolves.
+
+☠☠ **DUAL ROOM NUMBERING — I got this wrong once and it inverted a conclusion.**
+`MRT_ENTAUDIT` reports **ORIGINAL TR1** room numbers; the code and the sweep use
+**LOCAL** indices. Local 22 == original 14. I read "bridges in room 14", checked
+14 against the heaviest-rooms table, did not find it, and briefly concluded the
+room was cheap — when it is in fact r22, the worst room in the level. Always say
+which numbering.
+
+#### ☠☠☠ AN OFFLINE A/B IN A SCENE WITH LIVE AI IS UNMEASURABLE — three attempts, all invalid
+Tried to re-price the bridges at 160x120 by SPAWNAT into the bridge room
+(LOCAL 22) with three arms: control / `ENTVIEWCULL=1` / `NOBRIDGEDRAW=1`.
+**Every reading was confounded and the tell was arithmetic, not intuition:**
+
+    per FIELD      br_none (bridges REMOVED): cycles -5.6% but blits +9.7%
+    per PUBLISHED  br_none: cycles +57.4%, blits +82.9%, only 15 frames vs 25
+
+Removing draws cannot ADD blits. Both readings are impossible, which is what
+exposed them.
+
+☠ **CAUSE: the world advances per PUBLISHED FRAME, so arms that render at
+different rates are at different GAME STATES by the same field.** At field 450:
+control 100 published frames, cull 102, **NOBRIDGEDRAW 82**. The wolves in that
+room had done different things in each arm — Lara alive in one, dead in another.
+⇒ Normalising per published frame does NOT rescue it: the scenes are not the
+same scene, so there is nothing common to normalise. The fix is a scene with
+**no live AI**, not better arithmetic.
+☠ And `ENEMIES` cannot be compiled out (call sites escaped the `#ifdef`), so the
+obvious remedy is unavailable.
+
+⭐ The one arm that stayed comparable (26 published frames vs 25) is
+`ENTVIEWCULL=1`: **-2.0% GPU cycles, -3.1% blits/frame.** Weak but the right
+sign, and it is the only number here I would repeat.
+
+⇒ **To price bridges properly: spawn where bridges are VISIBLE but no enemy is
+live.** The code says the cluster spans stacked LOCAL rooms 18/22; original-room
+13 (LOCAL 18) carries no wolves in the entity audit, so a viewpoint there is the
+candidate. Or drive/played capture, where the user reaches it naturally.
+
+★ This generalises past bridges and past this project: **any offline A/B whose
+scene contains an agent that advances per frame will diverge, and the divergence
+is silent unless you check an invariant that cannot legitimately move.** Blits
+under a draw-removal was that invariant here.
+
+#### ⬜ THE MEASUREMENT THAT IS NOW OWED
+Tooling already exists; nobody has run the A/B on the shipping config:
+- `NOBRIDGEDRAW=1` — DIAGNOSTIC gate. Prices the **CEILING** on any bridge cull.
+- `ENTVIEWCULL` — culls bridges BEHIND the camera. ☠ Behind-only ON PURPOSE: a
+  lateral test pops a bridge at the screen edge, trading a visible bug for
+  invisible cycles.
+- Known target: 6.07 -> 8.07 fps with bridges gone entirely.
+⬜ Three arms in ONE rig turn at 160x120: control / ENTVIEWCULL state / 
+NOBRIDGEDRAW. Tells us how much of the 33% the existing cull already recovers
+and how much is left.
+★ The 33% was measured at the OLD resolution. Re-measure at 160x120 before
+quoting it — SLIVERW is the standing proof that a number does not survive a
+configuration change.
+
 ### ✅ THE WOLVES ARE THE RIGHT MODEL — the size is the CAMERA (2026-09-06)
 User: *"the dogs look nothing like the wolves in the PS version. They seem a lot
 bigger, are you sure they're the right ones?"* Answered from the disc via
