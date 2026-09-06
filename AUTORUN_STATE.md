@@ -36,6 +36,39 @@ wolves) is that room: heavy geometry + 12 bridge entities + 2 wolves.
 room was cheap — when it is in fact r22, the worst room in the level. Always say
 which numbering.
 
+#### ☠☠☠ FRAME-INDEXED OFFLINE A/B IS IMPOSSIBLE IN THIS ENGINE — closed, with the reason
+Second attempt at pricing the bridges offline (spawn moved to the far end of the
+cluster, ~6 sectors from the wolves, to get a quiet window). It failed the same
+way, and the third check explains why the first two failed:
+
+    invariant   removing bridge draws changed blits/frame  944 -> 1,960 (+107.6%)
+                — arithmetically impossible, so DISCARD
+    lockstep    published frames at field 360:  ctl 86 | none 73 | cull 80
+                at 380/400/410/420/440: never equal, at any field
+
+☠ **There is no lockstep window at all — not even before the level starts.** The
+divergence is NOT the wolves. Removing code changes the image layout, which
+changes SD load pacing, which changes how many frames have been published by a
+given FIELD. So two builds are at different game states from boot onward.
+⇒ **Any frame-indexed offline A/B in this engine is invalid**, regardless of
+scene. Sampling "at field N" compares different moments. This is not fixable by
+picking a better window, a quieter room, or normalising per published frame —
+all three were tried.
+⇒ What remains valid offline: comparisons that need no scene equivalence at all
+(byte-identical ROM checks, static counters, per-blit costs). What needs
+silicon: anything whose answer is a RATE in a live scene.
+★ That is presumably why the in-repo 6.07 -> 8.07 bridge number was taken on
+hardware with Lara walking in: a human driving the same ROM sidesteps the whole
+problem, because there is only one build.
+
+★★★★★ THE REUSABLE PART IS THE CHECK, NOT THE RESULT. Three invalid readings
+were caught by two cheap self-tests, and neither needed judgement:
+  1. **an invariant that cannot legitimately move** — removing draws must not
+     increase blits. Caught attempts 1 and 2.
+  2. **a lockstep test** — published frames must match across arms at the sample
+     point. Caught the cause, and would have caught 1 and 2 before they ran.
+Run the lockstep test FIRST on any multi-arm offline measurement here.
+
 #### ☠☠☠ AN OFFLINE A/B IN A SCENE WITH LIVE AI IS UNMEASURABLE — three attempts, all invalid
 Tried to re-price the bridges at 160x120 by SPAWNAT into the bridge room
 (LOCAL 22) with three arms: control / `ENTVIEWCULL=1` / `NOBRIDGEDRAW=1`.
