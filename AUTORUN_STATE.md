@@ -13,6 +13,52 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+### ⬜⬜ USER PLAYTEST ON SILICON (2026-09-05) — 160x120 IS THE BEST-PLAYING BUILD YET
+User, on the TV, verbatim: *"Gameplay wise, that plays the best out of all that
+I've played thus far."* The 160x120 direction is validated by the only oracle
+that matters. Two problems reported, one of them the next perf lead.
+
+#### ★★★★★ ⬜ THE WOLVES — "still slows tremendously with the wolves" (E, STILL OPEN)
+☠☠ **EVERY PERFORMANCE NUMBER IN THIS REPO WAS MEASURED WITHOUT WOLVES.** All my
+arms are `PADMUTE=1` at a spawn point: Lara idle, nothing hunting. The room
+sweep (median 5.83, worst r22 3.69) is static geometry. The 7.500 fps at 8.00
+fields is a **static** figure. The user is reporting a large, reproducible drop
+in the one case nobody has instrumented.
+⇒ This is the SLIVERW lesson a third time: **measured the wrong scene**, not the
+wrong quantity. E is NOT closed and this is where it reopens.
+⬜ NEXT: price a wolf. `SPAWNAT_ROOM` into a wolf room (r32 is named in the
+corpus), FPSBEACON, and A/B `ENEMIES` on/off in ONE rig turn. Enemies are
+skinned + posed on Jerry + AI on the 68k, so the cost could be in any of three
+places and the split is the whole question.
+
+#### ⬜ THE MENU / TEXT — three symptoms, TWO causes, one fixed
+User: *"The menu isn't right"*, *"The you died is not right either. Letters
+aren't right"*, *"the in game menu is messed up as well."*
+✅ **CAUSE 1, FIXED (`f979f65`)** — HRESN was never made phase-aware beyond the
+display path. Three consumers were still laid out for 320:
+  · `gpu_geotex_hq.bin` (the TITLE's 3D) is built with
+    `$(subst -dLOWRES=1,-dLOWRES=0,...)`, which leaves **HRESN=160 in place** —
+    verified on the emitted command line. Ring items projected at CENTER_X=80 /
+    FOCAL=95 then displayed at 320: half scale, shifted. HRESN now substituted
+    out exactly as LOWRES is.
+  · `menu_text`'s `W` is BOTH row stride and clip bound in one expression.
+    Split: stride stays RENDER_W, bound follows VIEW_W in the game phase.
+  · "YOU DIED" centred on `(RENDER_W - tw)/2` and the pause label sat at a hard
+    `x=130`. Both now anchored to VIEW_W.
+  Silicon #2577: ring geometry visibly CHANGED vs #2576, so the fix took.
+⬜ **CAUSE 2, STILL OPEN — this is A6.** The ring's front item still does not
+render as a passport. A6 ("Passport renders wrong: pose/scale/position") predates
+HRESN and is now the *remaining* cause of "the menu isn't right". Do not treat
+the title as fixed.
+⬜ YOU DIED and the in-game menu fixes are IN but UNVERIFIED on silicon — both
+need input to trigger, so a static capture cannot show them.
+
+★★★★★ **THE PATTERN, THIRD TIME TODAY: making ONE consumer phase-aware is not
+making the FEATURE phase-aware.** The FMV came back cut off, I fixed the display
+path and stopped. The projection and the text layout were two more consumers of
+the same fact. **Nothing in the build, the test suite or the emulator could see
+any of it** — all three needed a human looking at a television.
+
 ### ✅✅✅ demo33 BUILT BY THE CONTAINER AT 160x120 (2026-09-05)
 `out_demo33/` = full SD payload. ROM md5 `f941b8184722…`, 1,543,564 B.
     docker run ... -e RES=120 -e HRES=160 tr-jaguar
