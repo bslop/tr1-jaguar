@@ -1464,8 +1464,22 @@ $(BUILD)/gpu_geotex.bin: gpu_geotex.gas | $(BUILD)
 # TITLE-HQ kernel (task #4): SAME source/defs but LOWRES=0 -> 240-line
 # projection constants (CENTER_Y 120, FOCAL_Y 190, YMAX 239). Uploaded to Tom
 # only during the TITLE phase; the game phase re-uploads the normal kernel.
+# ☠☠ HRESN MUST BE SUBSTITUTED OUT HERE TOO, EXACTLY AS LOWRES IS.
+# The TITLE always displays FULL WIDTH -- IWIDTH and VMODE are phase-dependent
+# on g_disp240 (video.c), so the title keeps the 320 fetch and the standard
+# pixel clock while only the GAME narrows. The HQ kernel draws the title's 3D
+# (the ring and its items), so it must project for 320: CENTER_X 160, FOCAL 190.
+# Leaving HRESN=160 in gave it CENTER_X 80 / FOCAL 95 -- ring items drawn at
+# half scale and shifted left, reported from the TV as "the menu isn't right".
+# The LOWRES subst was already doing exactly this job for the vertical axis;
+# the horizontal dial simply was not added to it.
+GEOTEX_HQ_DEFS := $(subst -dLOWRES=1,-dLOWRES=0,$(GEOTEX_DEFS))
+ifdef HRESN
+GEOTEX_HQ_DEFS := $(subst -d HRESN=$(HRESN),-d HRESN=0,$(GEOTEX_HQ_DEFS))
+endif
+
 $(BUILD)/gpu_geotex_hq.bin: gpu_geotex.gas | $(BUILD)
-	$(JAS) $< -o $@ --gpu $(call jasd,$(subst -dLOWRES=1,-dLOWRES=0,$(GEOTEX_DEFS)))
+	$(JAS) $< -o $@ --gpu $(call jasd,$(GEOTEX_HQ_DEFS))
 	@sz=$$(stat -c%s $@); if [ $$sz -gt 3680 ]; then echo "!!! gpu_geotex_hq.bin $$sz > 3680"; rm -f $@; exit 1; fi
 
 

@@ -4533,6 +4533,19 @@ static void menu_text(uint8_t *fb, int W, int H, const char *s,
 {
     extern const uint8_t font_load[];
     int n = (font_load[0] << 8) | font_load[1], i, gx, gy;
+    /* ☠ W IS BOTH THE ROW STRIDE AND THE CLIP BOUND, and under HRESN those are
+       DIFFERENT numbers. Every caller passes RENDER_W (320), which is the real
+       row pitch and must stay that for `fb[Y*W + X]` to address correctly -- but
+       in the GAME phase only VIEW_W columns are fetched by the OP, so text laid
+       out across 320 runs off the visible area. Reported from the TV as the
+       YOU DIED letters and the in-game menu being wrong.
+       The TITLE keeps the full width (IWIDTH/VMODE are phase-dependent on
+       g_disp240, video.c), so the bound follows the same phase. */
+    int CW = W;
+#ifdef HRESN
+    { extern int g_disp240;
+      if (!g_disp240 && CW > VIEW_W) CW = VIEW_W; }
+#endif
     for (i = 0; s[i]; i++) {
         const uint8_t *rec; int w, h, yoff, iw; uint32_t po;
         int g;
@@ -4549,8 +4562,8 @@ static void menu_text(uint8_t *fb, int W, int H, const char *s,
                 int X = x + gx, Y = y + yoff + gy;
                 if (fb[0] || 1) {                    /* (keep fb used) */
                     if (font_load[po + gy * divy * w + gx * div] &&
-                        X >= 0 && X < W && Y >= 0 && Y < H)
-                        fb[Y * W + X] = idx;
+                        X >= 0 && X < CW && Y >= 0 && Y < H)
+                        fb[Y * W + X] = idx;   /* stride W, clip CW */
                 }
             }
         x += iw + 2;
@@ -10546,7 +10559,11 @@ bootvid_entry:
                 ring_render(pfb, g_ringA, g_ringspin);
                 /* label under the selected item, centred-ish and well left of
                    x~240 (menu_text does not display past there) */
-                menu_text(pfb, RENDER_W, RENDER_H, rlbl[rsel], 130, 96, 1, 2, 255);
+                /* ☠ x was a hard 130, chosen against a 320-wide view. Scaled
+                   by the visible width so it keeps its position proportionally:
+                   130 at 320, 65 at 160. A no-op when VIEW_W == RENDER_W. */
+                menu_text(pfb, RENDER_W, RENDER_H, rlbl[rsel],
+                          130 * VIEW_W / RENDER_W, 96, 1, 2, 255);
                 menu_text(pfb, RENDER_W, RENDER_H, "PAUSED", 8, 8, 1, 2, 245);
             }
 #if defined(ENEMIES) && defined(HUDTEXT)
@@ -10611,7 +10628,12 @@ bootvid_entry:
             if (g_levcomplete) {
                 uint8_t *cfb = (uint8_t *)video_backbuffer();
                 const char *msg = "LEVEL COMPLETE";
-                int tw = menu_text_width(msg, 1), cx = (RENDER_W - tw) / 2;
+                /* ☠ Centre on the VISIBLE width, not the stride. RENDER_W is
+                   the 320-byte row pitch; under HRESN only VIEW_W columns are
+                   fetched, so centring on 320 put the card half off-screen --
+                   reported from the TV as "the YOU DIED letters aren't right".
+                   Identical at 320, where VIEW_W == RENDER_W. */
+                int tw = menu_text_width(msg, 1), cx = (VIEW_W - tw) / 2;
                 if (cx < 0) cx = 0;
                 menu_text(cfb, RENDER_W, RENDER_H, msg, cx, 22, 1, 1, 240);
             }
