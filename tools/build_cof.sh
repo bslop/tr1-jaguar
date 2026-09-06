@@ -92,6 +92,30 @@ else
     esac
 fi
 
+# HRES=<N>: the HORIZONTAL dial (2026-09-05).  Render only the leftmost N
+# columns and widen the VMODE pixel clock (PWIDTH) so they fill the active
+# line.  Composes with RES/QUALITY -- they pick the LINE COUNT, this picks the
+# COLUMN COUNT.
+#   docker: ... -e RES=120 -e HRES=160     -> 160x120, the measured ship config
+# ☠ NOT the OP horizontal scaler, which starves the bus ~15-20x and blacks the
+# display.  PWIDTH is the opposite and is a bus WIN.  [HW] jag_quake ships
+# VMODE=$0EC7.  Measured on silicon 2026-09-05 (jobs #2538/#2539):
+#   320x120  6.450 fps (9.30 fields)   ->   160x120  7.500 fps (8.00 fields), +16.3%
+# ★ 160x120 lands on EXACTLY 8.00 fields/frame, so it is repeatable across rig
+# turns rather than the bimodal coin flip a field-straddling build gives.
+# ☠ The ladder is closed: the Blitter width field encodes only 2^e x (4+m)/4,
+# so 160 and 80 are expressible and e.g. 72 is NOT -- and it fails SILENTLY.
+if [ -n "${HRES:-}" ]; then
+    case "$HRES" in
+        320)     : ;;                                  # full width, no flag
+        160|80)  QUALITY_FLAGS="$QUALITY_FLAGS HRESN=$HRES" ;;
+        *) echo "error: HRES must be one of 320 160 80 (the Blitter width field encodes" >&2
+           echo "       only 2^e x (4+m)/4; anything else fails SILENTLY on hardware)" >&2
+           exit 2 ;;
+    esac
+    echo "   width: ${HRES} render columns (PWIDTH-stretched to the full line)"
+fi
+
 # ☠️ THE SHIPPING FLAG SET.  This used to read
 #   MULTIROOM=1 LOWRES=1 CFLAGS_EXTRA=-DJERRYPOSE
 # which had drifted years behind the game: no entities, no doors, no enemies,
