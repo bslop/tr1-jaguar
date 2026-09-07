@@ -1146,6 +1146,16 @@ vcf9:
 	cmpq	#0,r29
 	jr	PL,vc_sxp
 	nop
+	.if DIVSAFE=1
+	; ☠ DIVIDE-SHADOW FIX (jas warns on every build): the div above writes
+	; r0 LATE, and the scoreboard does NOT interlock a read-modify-write of
+	; the destination -- so the divide's write can land AFTER this neg and
+	; discard it, turning a negative slope positive. A scoreboarded READ
+	; stalls correctly (jas: "move r0,rT stalls correctly"), so this forces
+	; the divide to retire first. r1 is overwritten just below, and the
+	; flags are dead here because the branch has already resolved.
+	move	r0,r1
+	.endif
 	neg	r0
 vc_sxp:
 	movei	#CENTER_X,r1
@@ -1176,6 +1186,16 @@ vcf10:
 	cmpq	#0,r29
 	jr	PL,vc_syp
 	nop
+	.if DIVSAFE=1
+	; ☠ DIVIDE-SHADOW FIX (jas warns on every build): the div above writes
+	; r0 LATE, and the scoreboard does NOT interlock a read-modify-write of
+	; the destination -- so the divide's write can land AFTER this neg and
+	; discard it, turning a negative slope positive. A scoreboarded READ
+	; stalls correctly (jas: "move r0,rT stalls correctly"), so this forces
+	; the divide to retire first. r1 is overwritten just below, and the
+	; flags are dead here because the branch has already resolved.
+	move	r0,r1
+	.endif
 	neg	r0
 vc_syp:
 	movei	#CENTER_Y,r1
@@ -3948,6 +3968,16 @@ uv_edge:
 	movei	#uve_us_pos,r22
 	jump	PL,(r22)
 	nop
+	.if DIVSAFE=1
+	; ☠ DIVIDE-SHADOW FIX (jas warns on every build): the div above writes
+	; r1 LATE, and the scoreboard does NOT interlock a read-modify-write of
+	; the destination -- so the divide's write can land AFTER this neg and
+	; discard it, turning a negative slope positive. A scoreboarded READ
+	; stalls correctly (jas: "move r0,rT stalls correctly"), so this forces
+	; the divide to retire first. r2 is overwritten just below, and the
+	; flags are dead here because the branch has already resolved.
+	move	r1,r2
+	.endif
 	neg	r1
 uve_us_pos:
 	move	r7,r2
@@ -3985,6 +4015,16 @@ uve_u_ret:
 	movei	#uve_vs_pos,r22
 	jump	PL,(r22)
 	nop
+	.if DIVSAFE=1
+	; ☠ DIVIDE-SHADOW FIX (jas warns on every build): the div above writes
+	; r1 LATE, and the scoreboard does NOT interlock a read-modify-write of
+	; the destination -- so the divide's write can land AFTER this neg and
+	; discard it, turning a negative slope positive. A scoreboarded READ
+	; stalls correctly (jas: "move r0,rT stalls correctly"), so this forces
+	; the divide to retire first. r2 is overwritten just below, and the
+	; flags are dead here because the branch has already resolved.
+	move	r1,r2
+	.endif
 	neg	r1
 uve_vs_pos:
 	move	r7,r2
@@ -4116,6 +4156,16 @@ gw_sign:
 	movei	#gw_pos,r26
 	jump	PL,(r26)
 	nop
+	.if DIVSAFE=1
+	; ☠ DIVIDE-SHADOW FIX (jas warns on every build): the div above writes
+	; r1 LATE, and the scoreboard does NOT interlock a read-modify-write of
+	; the destination -- so the divide's write can land AFTER this neg and
+	; discard it, turning a negative slope positive. A scoreboarded READ
+	; stalls correctly (jas: "move r0,rT stalls correctly"), so this forces
+	; the divide to retire first. r23 is overwritten just below, and the
+	; flags are dead here because the branch has already resolved.
+	move	r1,r23
+	.endif
 	neg	r1
 gw_pos:
 	move	r1,r23			; slope
