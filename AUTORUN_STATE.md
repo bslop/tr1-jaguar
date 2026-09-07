@@ -13,6 +13,62 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+### ☠☠☠☠ SEVEN DIVIDE-SHADOW HAZARDS IN THE SHIPPING KERNEL — jas has been reporting them all along
+Found 2026-09-06 by reading the assembler's own output instead of the tagged gcc
+warnings. **`jas` emits these on every build and nobody had read them:**
+
+    gpu_geotex.gas:3951: warning: r1 is read-modify-written inside the DIVIDE
+    shadow from line 3946 — its operand is the destination field, which the
+    scoreboard does not interlock, so the divide's late write can land AFTER
+    this one and discard the result
+    [HW: seen on silicon, invisible in emulation]
+      fix: read the quotient into a scratch first (`move r0,rT` stalls
+           correctly), operate on that, then write it back
+
+**Seven live sites in `gpu_geotex.gas`** (the shipping renderer), each a `div`
+whose DESTINATION register is read-modify-written inside its latency shadow:
+
+    site  divide                                        dest
+    1149  1145  div r25,r0                               r0
+    1179  1175  div r25,r0                               r0
+    2512  ~2456 div r7,r28 / r0                          r0
+    2524  ~2515 div r7,r27 / r0                          r0
+    3951  3946  div r23,r1   (|duint|<<16)/dy            r1
+    3988  3983  div r23,r1   (|dvint|<<16)/dy            r1
+    4119  4113  div r0,r1    (ua<<16)/dy  [16.16]        r1
+
+☠ THE MECHANISM, at 3946 — and it is not subtle:
+    3946  div  r23,r1      ; quotient lands LATE in r1
+    3949  jump PL,(r22)    ; skipped when the slope is POSITIVE
+    3951  neg  r1          ; RMW of r1 inside the shadow
+    3955  store r1,(r2)    ; USL = uslope
+If the divide's late write lands after `neg r1`, the negated value is replaced
+by the raw quotient: **a negative U slope silently becomes positive**, reversing
+texture stepping across that span. `neg` runs only on negative-slope spans, so
+it corrupts SOME faces and not others — partial, orientation-dependent,
+silicon-only.
+
+⭐⭐ **THIS IS A STRONG A1 CANDIDATE.** A1 ("Lara's head: two notches /
+see-through") is silicon-only, drops/misplaces FACES, has survived 12 flashes,
+and its own ledger says the remaining candidates are HAZARDS, not arithmetic —
+naming bug 25 (DIV re-issued while busy) and bug 13 (WAW). This is precisely
+that family, it is in the per-span U/V gradient path, and it is invisible to
+every offline oracle. ⚠ CANDIDATE, not proven: A1 has killed three metrics and
+two theories already. Do not record it as the cause without a silicon A/B.
+
+⬜ NEXT: fix per jas's own advice (quotient -> scratch, operate, write back).
+Kernel budget is ~200 B free of 3680, seven sites at ~3 instructions each fits.
+☠ Verify: kernel must still assemble under the ceiling, ROM byte-compare with
+the fix OFF must be identical, then a silicon A/B judged against SNOW (the ledger
+says the cave wall hides A1).
+★ Other kernels carry the same warnings (gpu_bltex, gpu_textured, gpu_geomdirect,
+gpu_geomwalk, gpu_geomxform) but are NOT in the shipping path — fix the shipping
+one first.
+
+★★★★★ METHOD NOTE: 516 warning lines per build, of which only 59 carry a `[-W]`
+tag. The other 457 are the assembler's, and that is where the silicon hazards
+live. Grepping for `[-W` misses them entirely.
+
 ### ★★★★★ THE BRIDGES ARE THE ROOM — user's hunch confirmed, already measured in-repo (2026-09-06)
 User: *"I have a feeling it's the bridges."* They were right, and the number was
 already sitting in `main.c` unreferenced by any campaign doc.
