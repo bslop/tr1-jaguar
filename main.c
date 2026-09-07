@@ -10631,7 +10631,7 @@ bootvid_entry:
                 /* ☠ Centre on the VISIBLE width, not the stride. RENDER_W is
                    the 320-byte row pitch; under HRESN only VIEW_W columns are
                    fetched, so centring on 320 put the card half off-screen --
-                   reported from the TV as "the YOU DIED letters aren't right".
+                   This is the LEVEL COMPLETE banner; the death card is below.
                    Identical at 320, where VIEW_W == RENDER_W. */
                 int tw = menu_text_width(msg, 1), cx = (VIEW_W - tw) / 2;
                 if (cx < 0) cx = 0;
@@ -10642,7 +10642,13 @@ bootvid_entry:
             else if (g_dead) {
                 uint8_t *dfb = (uint8_t *)video_backbuffer();
                 const char *msg = "YOU DIED";
-                int tw = menu_text_width(msg, 1), cx = (RENDER_W - tw) / 2;
+                /* ☠ Centre on the VISIBLE width. Identical at 320.
+                   ☠☠ THIS is the card the user reported. The comment above
+                   the LEVEL COMPLETE banner claimed to fix it and did not:
+                   the two centring lines are BYTE-IDENTICAL, and a
+                   replace-first-occurrence patch silently took the wrong
+                   one. Both need VIEW_W; both now have it. */
+                int tw = menu_text_width(msg, 1), cx = (VIEW_W - tw) / 2;
                 if (cx < 0) cx = 0;
                 menu_text(dfb, RENDER_W, RENDER_H, msg, cx, 22, 1, 1, 255);
             }
