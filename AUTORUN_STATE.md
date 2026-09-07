@@ -13,6 +13,34 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+#### ⬜ WHAT A VALID A1 TEST ACTUALLY REQUIRES — established 2026-09-07, before spending a turn
+Tried to redo the DIVSAFE A/B in a better scene. Rotating the level-start spawn
+180° (`SPAWNAT_ROOM=0 X=75264 Y=3072 Z=3584 YAW=32768`) puts her crown against a
+lit corridor instead of the black cave mouth — but measured, the backdrop band
+around the crown is **mean luma 45, and 49% of it is still darker than 40**.
+Not good enough; half of it would still hide the notches. Did NOT flash it.
+
+☠☠ **AND THE METRIC WAS WRONG ANYWAY, WHICH MATTERS MORE THAN THE SCENE.** The
+whole-frame pixel diff I used on #2726/#2727 has a noise floor of **585..1182
+differing px** (same arm, consecutive frames). Two notches in a crown are a
+handful of pixels — they sit UNDER that floor in any composition. A perfect
+scene would still have returned "no difference".
+⇒ `OPEN_ISSUES.md` A1 already says this: three metrics have failed on this bug
+(cream-threshold, neck-confound, fill-holes), and *"any future A1 metric must be
+a silhouette/convex-deficiency measure"*. My pixel diff is a fourth instance of
+the same mistake.
+
+⬜ A VALID A1 TEST NEEDS ALL THREE, and none is expensive on its own:
+  1. a scene where the crown sits against a genuinely BRIGHT backdrop (target:
+     <10% of the band below luma 40, vs 49% at the rotated spawn);
+  2. a SILHOUETTE / convex-deficiency metric over the head region — a notch is a
+     boundary concavity, which is why hole-counting and pixel-diffing both read
+     zero whatever the truth is;
+  3. both arms in ONE rig turn, which #2726/#2727 already did correctly.
+★ Build 1 and 2 OFFLINE first — jagemu renders the head solid (A1 is
+silicon-only), so the emulator cannot validate the metric's verdict, but it CAN
+validate the composition and exercise the metric's plumbing for free.
+
 #### ⬜ DIVSAFE ON SILICON — jobs #2726/#2727 — FIX VERIFIED FREE, A1 VERDICT NOT AVAILABLE
 Both arms in one turn, single variable confirmed on the assembler command line
 (`DIVSAFE=0` 31 shadow warnings / `DIVSAFE=1` 21), 4 stills each, Lara idle
