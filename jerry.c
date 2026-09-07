@@ -15,7 +15,16 @@
 
 /* [0] pose/overlay done magic, [3] published voice count (see jerry_v0_ncnt),
    [4..7] OVERLAY params - see the warning in the JOVL block below. */
-static volatile uint32_t dsp_mailbox[8] __attribute__((aligned(16)));
+/* ☠☠ SIZED 10, NOT 8. The overlay protocol uses slots 0..9: OVL_M_PROBE is
+   mailbox[8] and OVL_M_NPROBE is mailbox[9] (see the defines below), and the
+   DSP side reads exactly those offsets — dsp_ovl_ent.das:181 `addq #32,r0`
+   and :183 `addq #4,r0`. Declared [8], the four C writes at OVL_M_PROBE /
+   OVL_M_NPROBE landed PAST THE END of the array and the DSP read them back
+   from that same out-of-bounds memory. It worked only because whatever the
+   linker placed next in BSS was being used consistently by both sides.
+   gcc had been reporting it all along: "array subscript 8 is above array
+   bounds of volatile uint32_t[8]", four times per build. */
+static volatile uint32_t dsp_mailbox[10] __attribute__((aligned(16)));
 
 extern const uint8_t dsp_kernel[], dsp_kernel_end[];
 
