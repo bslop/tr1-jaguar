@@ -13,6 +13,32 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+#### ⬜ DIVSAFE ON SILICON — jobs #2726/#2727 — FIX VERIFIED FREE, A1 VERDICT NOT AVAILABLE
+Both arms in one turn, single variable confirmed on the assembler command line
+(`DIVSAFE=0` 31 shadow warnings / `DIVSAFE=1` 21), 4 stills each, Lara idle
+under PADMUTE.
+
+    NOISE FLOOR  same arm, consecutive frames:  585 .. 1182 differing px
+    CROSS-ARM    DIVSAFE off vs on:             314 ..  519 differing px
+
+**The two builds differ LESS than consecutive frames of the SAME build.** The
+cross-arm delta is under the capture chain's own noise, and the differing pixels
+are a wide scatter (x 167..505, sx=118 sy=96), not a cluster at her crown.
+
+☠☠ **BUT THE SCENE WAS WRONG, SO THIS IS NOT AN A1 RESULT.** The capture shows
+Lara from behind with her head against the DARK CAVE MOUTH. `OPEN_ISSUES.md` A1
+says in terms: *"Judge it against SNOW; the cave wall hides it."* That is
+precisely the background here. The null is about THIS SCENE and says nothing
+about A1.
+⇒ ESTABLISHED: the fix is free, byte-identical with the flag off, and changes
+nothing visible at the spawn.
+⇒ NOT ESTABLISHED: whether it fixes A1. Needs a capture with her crown against a
+LIGHT background before any verdict.
+
+★ Fourth time today that verifying the measurement WINDOW before trusting the
+number prevented a wrong claim — and the first three were mine catching mine.
+Here the repo's own ledger had already written down the precondition I skipped.
+
 ### ☠☠☠☠ SEVEN DIVIDE-SHADOW HAZARDS IN THE SHIPPING KERNEL — jas has been reporting them all along
 Found 2026-09-06 by reading the assembler's own output instead of the tagged gcc
 warnings. **`jas` emits these on every build and nobody had read them:**
