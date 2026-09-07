@@ -145,7 +145,21 @@ static uint16_t a_vdb_g, a_vde_g;   /* active vertical window (VC half-lines) */
 volatile uint32_t frame_count;
 
 FLIPSTATIC fbpix *draw_buf;               /* CPU renders here                    */
-OPSTATIC uint32_t front_fb;           /* what the OP displays                */
+/* ☠☠ A9: MUST BE volatile. It is written by the VBLANK ISR (startup.S:251,
+   and video.c's own flip paths) and read from C here -- the textbook case.
+   Its immediate neighbours frame_count and pending_fb are both volatile
+   already; this one was simply missed.
+   The sharp site is video_two_buf():
+       while (pending_fb) ;                                  <- spin on volatile
+       draw_buf = ((uint32_t)fb0 != front_fb) ? fb0 : fb1;   <- read non-volatile
+   Nothing the compiler can see writes front_fb inside that loop, so it may
+   hoist the read ABOVE the spin and use the value from before the ISR update
+   the spin exists to wait for.
+   ★ It has never bitten only because video.c is built by jcc68k, which keeps
+   every local in memory. That is luck, and it is also a CONSTRAINT ON THE
+   TOOLCHAIN: any improvement to jcc68k's register allocation breaks this
+   project. Fixing the source removes that landmine from under cobweb. */
+OPSTATIC volatile uint32_t front_fb;  /* what the OP displays                */
 OPSTATIC volatile uint32_t pending_fb;/* buffer the ISR should show, 0=none  */
 /* VIDEO PLAYER PRESENTATION SCHEDULE (2026-08-06): the ISR performs a
    pending flip only once frame_count reaches this field. Zero = always
