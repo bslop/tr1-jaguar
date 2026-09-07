@@ -122,7 +122,8 @@ fbpix *const crash_fbs[3] = { fb0, fb1, fb2 };
 
 
 /* DEFINED BY THE LINKER SCRIPT (jaguar.ld), 32-byte aligned by construction. */
-extern uint32_t op_list[16];
+extern volatile uint32_t op_list[16];   /* A9-class: DMA — the OP reads this
+                                           asynchronously, startup.S writes it */
 /* ☠️☠️☠️ 32, NOT 16 (2026-08-26). The OP fetches a SCALED (TYPE-1) object as ONE
    4-phrase = 32-BYTE burst and DIES if it straddles a 32-byte boundary: black
    first field, wedged machine. aligned(16) let the linker put us at 16 mod 32
@@ -144,7 +145,11 @@ static uint16_t a_vdb_g, a_vde_g;   /* active vertical window (VC half-lines) */
 
 volatile uint32_t frame_count;
 
-FLIPSTATIC fbpix *draw_buf;               /* CPU renders here                    */
+FLIPSTATIC fbpix * volatile draw_buf;     /* CPU renders here. ☠ VOLATILE POINTER,
+                                             not pointer-to-volatile: cpu68k.S
+                                             reads AND writes this pointer, but the
+                                             PIXELS are not async — qualifying them
+                                             would make every render store volatile */
 /* ☠☠ A9: MUST BE volatile. It is written by the VBLANK ISR (startup.S:251,
    and video.c's own flip paths) and read from C here -- the textbook case.
    Its immediate neighbours frame_count and pending_fb are both volatile
@@ -185,7 +190,8 @@ OPSTATIC volatile uint32_t op_fix0;            /* phrase 0 for front_fb  */
 static volatile uint32_t op_fix1;
 OPSTATIC volatile uint32_t pend_fix0;          /* phrase 0 for pending_fb */
 static volatile uint32_t pend_fix1;
-FLIPSTATIC uint32_t op_link;                       /* link field, set at build */
+FLIPSTATIC volatile uint32_t op_link;              /* link field, set at build;
+                                                      cpu68k.S reads it (A9-class) */
 
 #ifdef OPDBL
 /* ---- OP-LIST DOUBLE BUFFER (2026-08-02) -------------------------------
@@ -254,11 +260,11 @@ static volatile int op_cur;            /* list the OP is using this field    */
  * call, no arithmetic, no OLP write (OLP is not destroyed — the plain path has
  * never rewritten it per field). Only phrase 0's data pointer varies per flip;
  * phrases 1 and 2 are build-time constants. */
-uint32_t fs_ph1, fs_ph2, fs_ph3;          /* constant longs of the scaled object */
+volatile uint32_t fs_ph1, fs_ph2, fs_ph3;  /* A9-class: startup.S READS these */          /* constant longs of the scaled object */
 /* op_list[5] (VSCALE|HSCALE) for the ISR's fast repair. It used to be a literal
    #0x4020 in startup.S, which overrode whatever C put there - see the note in
    the ISR. Owned here so the two paths cannot disagree. */
-uint32_t fs_ph5 = ((uint32_t)FS_VSCALE << 8) | (uint32_t)FS_HSCALE;
+volatile uint32_t fs_ph5 = ((uint32_t)FS_VSCALE << 8) | (uint32_t)FS_HSCALE;
 /* #define LOWRES_DIAG_PLAIN 1 -- ISOLATION TEST (HW-verified 2026-07-08): with
  * this defined, LOWRES displays the 320x120 fb as a PLAIN bitmap (no scale) and
  * the room renders CORRECTLY in the top 120 lines -> kernel+fb are FINE; the
@@ -506,8 +512,8 @@ void video_set_disp240(int on)
  * failed to link.  The plain object is UNSCALED, so VSCALE=HSCALE=0x20 (1.0x)
  * rather than the LOWRES 2.0x/4.0x.  Values are filled in by
  * build_object_list below, exactly as the scaled path does. */
-uint32_t fs_ph1, fs_ph2, fs_ph3;
-uint32_t fs_ph5 = 0x2020u;      /* 1.0x vertical, 1.0x horizontal */
+volatile uint32_t fs_ph1, fs_ph2, fs_ph3;  /* A9-class: startup.S READS these */
+volatile uint32_t fs_ph5 = 0x2020u;      /* 1.0x vertical, 1.0x horizontal */
 
 static void build_object_list(uint32_t fb_addr)
 {
