@@ -526,19 +526,20 @@ static const uint8_t *lev_blob(int i)
 }
 #endif  /* LEVSD */
 
-#define WARM_MAGIC 0x57524D42u                  /* 'WRMB' */
-extern volatile uint32_t warm_cookie[2];        /* placed past __bss_end in
-                                                   jaguar.ld - see there for
-                                                   why that is the point */
 static void soft_reboot(void)
 {
     extern void _start(void);
-    /* ☠️ LEAVE THE COOKIE BEFORE MASKING INTERRUPTS AND HALTING THE COPROS.
-       User asked for * + # to come back to the Menu/Title screen, not to the
-       logos. This stays a REAL reset - Tom and Jerry stopped, .bss cleared -
-       and the only thing carried across is a request to skip the front-end
-       clips, in the one place a .bss clear cannot reach. */
-    warm_cookie[0] = WARM_MAGIC;
+    /* ☠️ A FULL COLD BOOT, DELIBERATELY - logos, attract clip, then the ring
+       (user, 2026-09-08). An earlier version carried a cookie past __bss_end
+       to skip the front end and land straight on the ring; it restarted to a
+       BLACK SCREEN, because jumping over the video block also jumps over the
+       framebuffer clears and the gpu_jvdec_done() that restores the kernel
+       params that block borrowed. Re-entering _start plainly needs none of
+       that reasoning: _start masks interrupts and suppresses VI itself, as its
+       first two instructions, so it does not inherit anything from here.
+       ★ It had never run on silicon before 2026-09-08 - * + # could not fire
+       while the keypad row order was inverted - so its first real execution
+       was also the first test of the shortcut, and the shortcut lost. */
     __asm__ __volatile__("move.w #0x2700,%sr");     /* no interrupts from here */
     *(volatile uint32_t *)0xF02114u = 0;            /* G_CTRL: halt Tom  */
     *(volatile uint32_t *)0xF1A114u = 0;            /* D_CTRL: halt Jerry */
@@ -5455,14 +5456,6 @@ int main(void)
              here with introplay=1 to stream INTRO.JV, then falls
              through to the game (bv_done). */
           introplay = 0;
-          /* WARM RESTART (* + #): skip EIDOS/CORE and land on the ring.
-             ☠️ CHECK THE MAGIC, NOT A FLAG. A cold power-on leaves this DRAM
-             as garbage, and "non-zero" would then mean "skip the logos" on a
-             random fraction of real boots - a bug that would look exactly
-             like the intermittent boot faults this project has chased before.
-             Cleared here so the NEXT boot is a cold one again. */
-          { if (warm_cookie[0] == WARM_MAGIC) { warm_cookie[0] = 0;
-                                                goto bv_ring; } }
 bootvid_entry:
           /* BOOT LOGOS (2026-08-05, user: "have this video load after the
              game is booted"): stream EIDOS.JV then CORE.JV (PS1 order) from
@@ -6541,9 +6534,6 @@ bootvid_entry:
                                        (mailbox ptr) the video block used */
           }
           if (introplay) goto bv_done;   /* Start Game: intro played, go */
-bv_ring: ;                         /* warm restart lands here: no clips, and
-                                      introplay is 0, so it falls through to
-                                      the title splash and the ring below */
 #endif
           /* PS1 ORDER: the disc shows its title splash with a filling
              progress bar between the attract videos and the title menu, and
