@@ -481,8 +481,8 @@ static int lev_load(int set)
     /* the music path proves both spellings are needed: some BIOS builds want
        the leading slash and some do not, so try each. */
     static const char *const nm[2][2] = {
-        { "/OL/CAVES.LEV", "OL/CAVES.LEV" },
-        { "/OL/GYM.LEV",   "OL/GYM.LEV"   },
+        { "/OLCAVES.LEV", "OLCAVES.LEV" },
+        { "/OLGYM.LEV",   "OLGYM.LEV"   },
     };
     int h = -1, i, sz;
     unsigned got = 0, need;
@@ -6688,8 +6688,31 @@ bv_ring: ;                         /* warm restart lands here: no clips, and
                           mfo += step;
                           if (mfo >= mfgoal) {
                               extern void jerry_sfx_queue(const void*, uint32_t);
+                              extern uint32_t jerry_v0_cnt(void);
                               mlq[mfdead] = mfgoal; mleft -= mfgoal;
-                              jerry_sfx_queue(mbuf[mfdead], (uint32_t)mfgoal);
+                              /* ☠️☠️ A QUEUE NEVER RESTARTS AN IDLE VOICE. That
+                                 law is stated in this file (the clip decoder's
+                                 copy, ~5900) and was implemented ONLY there:
+                                 this path queued unconditionally, so once the
+                                 menu music was starved past the DSP's buffered
+                                 audio the voice died and STAYED dead - no
+                                 amount of correctly refilled buffers could
+                                 bring it back. User, twice: "a skip in the
+                                 music when moving between menu options", then
+                                 "pops and stops". The stop is this; the pop is
+                                 the drain that precedes it.
+                                 ⭐ Changing a menu item is the heaviest frame in
+                                 the ring - it redraws and fires SFX_MENU_SPIN -
+                                 which is why the starve happens exactly when
+                                 you press a direction and not at rest.
+                                 A dead voice reads CNT==0, so re-arm; anything
+                                 else (including the 0xFFFFFFFF stale sentinel,
+                                 which is != 0) queues exactly as before, so
+                                 this cannot regress the healthy path. */
+                              if (jerry_v0_cnt() == 0)
+                                  jerry_sfx(0, mbuf[mfdead], (uint32_t)mfgoal, 0);
+                              else
+                                  jerry_sfx_queue(mbuf[mfdead], (uint32_t)mfgoal);
                                 /* ☠️ STAMP AFTER THE WRITE, or the next
                                    jerry_v0_ncnt() can return a PRE-WRITE value
                                    and we re-queue the slot we just armed. The
