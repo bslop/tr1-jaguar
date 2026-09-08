@@ -55,6 +55,22 @@ SECTIONS
     . = ALIGN(4);
     __bss_end = .;
 
+    /* WARM-BOOT COOKIE - deliberately AFTER __bss_end, which is what makes it
+       work: startup.S clears exactly __bss_start..__bss_end, so anything past
+       that survives soft_reboot()'s re-entry into _start. The user asked for
+       * + # to restart to the Menu/Title screen rather than sit through the
+       logos, and the reset has to stay a real reset (Tom and Jerry halted,
+       .bss cleared) -- so the request to skip the front end cannot live in a
+       variable the reset destroys.
+       ☠️ A cold power-on leaves DRAM as garbage, so the reader MUST check the
+       magic and never merely a non-zero flag.
+       ⚠ This sits above __bss_end, so the Makefile's DRAM guard - which
+       measures headroom from __bss_end - now reports 8 bytes more than is
+       really free. Of ~102 KB. */
+    . = ALIGN(4);
+    warm_cookie = .;
+    . += 8;
+
     /DISCARD/ : {
         *(.comment)
         *(.note*)
