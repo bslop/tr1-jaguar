@@ -2,6 +2,18 @@
  * and sector blobs. Phrase-aligned (Blitter atlas + GPU DRAM reads). */
 	.section .rodata
 	.balign 8
+/* LEVSD=1: BOTH level sets live on the CARD, not in the image.
+   ☠️ GYMSD below moves only the mansion, and on its own that is a NET-ZERO
+   DRAM WIN: you delete 254 KB of rodata and then need a 254 KB buffer to load
+   it into, and the Caves cannot be that buffer because they are ROM-resident
+   and cannot be reclaimed. The saving only exists when BOTH sets are on the
+   card sharing one arena sized for the larger - 754,400 B - which frees the
+   smaller, 254,400 B, and takes ~1 MB out of the ROM image.
+   ★ That ROM saving stands on its own: `jaggd -ux` was measured failing at
+   about 1.6 MB and this ROM is 1.47 MB, which is why the GameDrive wedges on
+   roughly every other flash. ~0.5 MB clears the cliff.
+   ☠️ mrt_lskin is DELIBERATELY OUTSIDE this guard - see its note below. */
+#ifndef LEVSD
 	.globl mrt_index
 mrt_index:
 	.incbin "disc/mrt.bin"
@@ -26,6 +38,33 @@ mrt_pal:
 mrt_lara:
 	.incbin "disc/mrt_lara.bin"
 	.balign 8
+#else
+	.balign 8
+	.globl mrt_index
+mrt_index:
+	.long 0
+	.globl mrt_geom
+mrt_geom:
+	.long 0
+	.globl mrt_sect
+mrt_sect:
+	.long 0
+	.globl mrt_atlas
+mrt_atlas:
+	.long 0
+	.globl mrt_pal
+mrt_pal:
+	.long 0
+	.globl mrt_lara
+mrt_lara:
+	.long 0
+	.balign 8
+#endif
+/* ☠️ mrt_lskin STAYS RESIDENT UNDER LEVSD. It is Lara's skeleton - level
+   independent - and gym_lskin is a .set alias onto it, so putting it in a
+   per-level card image would duplicate 110,016 B into BOTH images and then
+   load whichever copy happened to be current. It is shared data; it does not
+   belong in a per-level arena. */
 	.globl mrt_lskin
 mrt_lskin:
 	.incbin "disc/mrt_lskin.bin"
@@ -134,7 +173,7 @@ cavesload_pal:
    over all session (the wolf fur, the medikit sprites, the collapsing floor
    and a gun model, several times over). The GameDrive is a mass storage
    device; treat it like one. */
-#ifndef GYMSD
+#if !defined(GYMSD) && !defined(LEVSD)
 	.globl gym_index
 gym_index:
 	.incbin "disc/gym.bin"
@@ -173,10 +212,20 @@ gym_atlas:
 gym_pal:
 	.long 0
 #endif
+/* ☠️ gym_lara used to sit OUTSIDE the GYMSD guard entirely, so a build that
+   stubbed the rest of the mansion still carried its 8,568 B. Gated now. */
+#ifndef LEVSD
 	.globl gym_lara
 gym_lara:
 	.incbin "disc/gym_lara.bin"
 	.balign 8
+#else
+	.balign 8
+	.globl gym_lara
+gym_lara:
+	.long 0
+	.balign 8
+#endif
 /* ☠️☠️ gym_lskin USED TO .incbin ITS OWN 110,016 B COPY - AND IT SAT OUTSIDE
  * THE GYMSD #endif, so every shipping ROM carried it even though GYMSD stubs
  * out the rest of the mansion. It is a pure duplicate: _lskin is "skeleton +

@@ -1248,6 +1248,28 @@ CXXFLAGS += -DGYMSD
 ASFLAGS  += -DGYMSD
 endif
 
+# LEVSD=1: BOTH level sets on the card, sharing one arena. This is the one that
+# actually frees DRAM.
+# ☠️ GYMSD ALONE IS NET-ZERO. Deleting the mansion's 254 KB of rodata means
+# needing a 254 KB buffer to load it into, and the Caves cannot serve as that
+# buffer because they are ROM-resident and cannot be reclaimed. Only when both
+# sets are on the card can one arena, sized for the LARGER (754,400 B), hold
+# whichever is live - which frees the smaller, 254,400 B, and takes ~1,008,800 B
+# out of the ROM image.
+# ★ The ROM half stands on its own: `jaggd -ux` was measured failing at about
+# 1.6 MB (0 of 6 at or above, 203 of 327 below) and this ROM is 1.47 MB, 92% of
+# that cliff - which is why the GameDrive wedges on roughly every other flash
+# and needs a power cycle. ~0.5 MB clears it.
+# ☠️ ASFLAGS IS LOAD-BEARING: the stubs live in mrt_data.S, which is ASSEMBLED.
+# Without it the C would take the arena path while the blobs stayed linked -
+# a build that is both bigger AND broken, and whose ROM would still differ, so
+# "the flag landed" would read true.
+ifdef LEVSD
+CFLAGS   += -DLEVSD
+CXXFLAGS += -DLEVSD
+ASFLAGS  += -DLEVSD
+endif
+
 # GUNS=1: Lara draws pistols (PAD_Z). The gun HANDS are LARA_PISTOLS' meshes
 # 10/13, hung off the hand matrices the skinner already computes - her skin,
 # face grouping and baked LPLANES are untouched. Assets: MRT_GUNPATCH=1
