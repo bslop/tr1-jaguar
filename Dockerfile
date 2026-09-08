@@ -33,15 +33,32 @@ FROM rust:1-slim-bookworm AS cobweb
 # cobweb was current when the layer was first built - this build failed on four
 # hazard errors that had already been fixed upstream. A real revision both busts
 # the cache and makes the image reproducible.
-# 2026-08-26: 59e5896 -> 9da2f99. Two jas fixes the shipping ROM needs:
-#   ba9c680  a memory-to-memory MOVE dropped its DESTINATION relocation
+# 2026-08-26: two jas fixes the shipping ROM needs, and it is pinned at the
+# second of them:
+#   f86794a  a memory-to-memory MOVE dropped its DESTINATION relocation
 #            (every global-to-global copy in a jcc68k TU stored into the 68000
 #            exception vectors; 4 sites in the last container ROM, 24 in a
 #            default local build)
-#   9da2f99  object-mode .align is SECTION-relative and raises sh_addralign
+#   98a9822  object-mode .align is SECTION-relative and raises sh_addralign
 #            (the A10 boot lottery; jaguar.ld places op_list regardless)
 # Every ROM measured on silicon on 2026-08-26 was built with this revision.
-ARG COBWEB_REV=9da2f99
+#
+# ☠️ 2026-09-07: THESE HASHES ARE NOT THE ONES THIS FILE USED TO NAME. cobweb's
+# history was rewritten upstream (it went public/MIT), and the pin it carried --
+# `9da2f99` -- no longer resolves: `git fetch origin 9da2f99` returns "couldn't
+# find remote ref". The pin was DEAD, and it failed in the worst possible way:
+# every build kept working, because Docker had the compiled jas/jcc68k layers
+# cached from 2026-08-26 and never re-ran the clone. The next machine, or the
+# next `--no-cache`, would have been the first to find out. A pin is only
+# reproducible if you check that it still RESOLVES; a cached layer will hide a
+# dead one indefinitely. Re-pinned to the same COMMITS by their post-rewrite
+# hashes (matched by subject line and 2026-08-26 date), so the toolchain is
+# byte-for-byte the intent it always was -- this is a repair, not a bump.
+# ★ A DELIBERATE bump to the current tip is a separate change and wants its own
+# A/B: the tip additionally carries e86d294 (2026-09-01), which SCOPES the
+# .align fix above to relocatable objects only. That is a correction to the very
+# behaviour the A10 boot lottery turned on, so it is not a free upgrade.
+ARG COBWEB_REV=98a9822
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 RUN git clone https://github.com/bslop/cobweb.git /cobweb \
