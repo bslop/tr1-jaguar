@@ -5792,6 +5792,7 @@ bootvid_entry:
                       ? 1 : -1];
                   int8_t *aring = (int8_t *)((uint8_t *)rblob + VID_ARING_OFF);
                   int acc = 0, wslot = 0, rslot = 0, pend = 0, astarted = 0;
+                  int vskip = 0;      /* the clip was SKIPPED, not ended */
                   int alen[6];
                 { int kfonly = (vnf >> 16) & 1; vnf &= 0xFFFF;
                 for (fi = 0; fi < vnf; fi++) {
@@ -6395,13 +6396,41 @@ bootvid_entry:
                                                t0 + (uint32_t)tgt);
                         } } }
                     { uint32_t vp2 = joypad_read();
-                      if (vp2 & ~vpp & (PAD_A | PAD_B | PAD_C)) { VP_EXIT(5); break; }
+                      if (vp2 & ~vpp & (PAD_A | PAD_B | PAD_C)) { VP_EXIT(5); vskip = 1; break; }
                       vpp = vp2; }
                 }
                 }
                 /* end-of-clip flush: close the partial slot, then drain
                    the ring - blocking is fine here, the clip is over */
-                if (g_sfx_ok) {
+                if (g_sfx_ok && vskip) {
+                    /* ☠️☠️ A SKIP MUST DISCARD THE RING, NOT DRAIN IT. The flush
+                       below is correct for a clip that ENDED - the ring is
+                       nearly empty and it plays out the last fragment. On a
+                       SKIP the ring is FULL: six 4KB slots read ahead, ~2.2
+                       SECONDS of audio, and draining it dumps all of that into
+                       voice 0 as fast as the DSP accepts it, blocking. That is
+                       the loud burst the user hears on skipping a clip (A13).
+                       The comment on that flush - "blocking is fine here, the
+                       clip is over" - is true when the clip ended and FALSE
+                       when the player asked it to stop; one exit was reasoned
+                       about and the other inherited its code.
+                       ⭐ Only a HUMAN could have found this: the rig has no
+                       hands, so every automated capture ever taken exercised
+                       the graceful exit and never this one.
+                       Un-arm the queued slot FIRST - otherwise the DSP can
+                       promote it between the two writes and start a buffer we
+                       are trying to abandon - then CNT=0 to silence voice 0,
+                       then stamp, because the mailbox still holds pre-write
+                       values and the music-engine law says a reader that
+                       believes them will re-arm what we just killed. */
+                    volatile uint32_t *ncnt = (volatile uint32_t *)0xF1C378u;
+                    extern void jerry_audio_stale(void);
+                    *ncnt = 0;
+                    jerry_sfx(0, aring, 0, 0);
+                    jerry_audio_stale();
+                    pend = 0; acc = 0;
+                }
+                else if (g_sfx_ok) {
                     volatile uint32_t *ncnt = (volatile uint32_t *)0xF1C378u;
                     extern void jerry_sfx_queue(const void*, uint32_t);
                     if (acc && pend < 5) {
