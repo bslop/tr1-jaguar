@@ -67,6 +67,39 @@ LIGHT background before any verdict.
 number prevented a wrong claim — and the first three were mine catching mine.
 Here the repo's own ledger had already written down the precondition I skipped.
 
+### ✅ A5 REPRODUCES OFFLINE — recipe + metric, no rig needed (2026-09-07)
+A5 ("black polygon at the cave mouth") was rig-bound and un-iterable. It now
+reproduces deterministically in jagemu:
+
+    # arm: ship flags + FASTBOOT=1, NO PADMUTE (it zeroes the injected pad word)
+    jagemu video a5_walk/OPENLARA.COF --press up --press-after 380 \
+        --start 380 --count 24 --every 6 --cols 6 --dir OUT -o strip.png
+
+☠ `--press` is NOT in `jagemu`'s usage text for `video`/`run`, but both call
+`press_args`, so it works. Buttons: up/down/left/right/a/b/c/option/start.
+
+**MEASURED CHARACTER OF THE DEFECT** (160x120 view, largest connected component
+of luma<=6, excluding the letterbox bands at y<6 and y>117):
+
+    frame  2   180 px   x67..82  y37..51   75% bbox fill
+    frame 10   219 px   same region
+    frame 20   304 px   x64..83  y34..52   80% bbox fill
+
+⇒ dense, compact, **pure luma 0**, at a FIXED world position, GROWING with
+perspective as she approaches. That is a solid polygon on a world surface — not
+cave darkness (the surrounding cave texels are luma 31/40/48/55, plainly varied)
+and not a coverage hole. Consistent with the ledger's standing suspect: **a face
+sampling black atlas texels (extractor UV issue)**.
+
+⬜ NEXT, all offline and cheap now that there is a metric:
+  · the blob-size number above IS the regression metric — bisect against it.
+  · candidate discriminators: does it survive with SHADEPASS off? does the atlas
+    contain a black region the UVs could land in? does the face's UV rect fall
+    outside the packed cell?
+  · only once a candidate fix moves that number does the rig matter.
+★ The reproduction is the deliverable here, not a fix: A5 was previously
+"OPEN, hopcap and shade-pass eliminated" with no way to iterate.
+
 ### ☠☠☠☠ SEVEN DIVIDE-SHADOW HAZARDS IN THE SHIPPING KERNEL — jas has been reporting them all along
 Found 2026-09-06 by reading the assembler's own output instead of the tagged gcc
 warnings. **`jas` emits these on every build and nobody had read them:**
