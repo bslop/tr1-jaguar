@@ -1228,6 +1228,23 @@ CFLAGS   += -DNOENTDRAW
 CXXFLAGS += -DNOENTDRAW
 endif
 
+# ENEMYPREVIEW=1: draw ONE wolf and ONE bear at a fixed spot ~900 units in front
+# of Lara, ignoring entities, AI and every gate. main.c has had this since the
+# enemy models landed - and it was NEVER MAPPED HERE, so `make ENEMYPREVIEW=1`
+# produced a BYTE-IDENTICAL ROM and the block had never once been compiled in.
+# Found the way the ENTLISTS ghost should have been: by diffing the two arms
+# before spending a rig turn on them. Both "arms" were the same 1,533,036 B ROM.
+# ★ This is the cleanest enemy-cost A/B available. Against a PADMUTE'd still
+# scene the two arms differ by EXACTLY one wolf plus one bear - no AI, so no
+# frame-rate-coupled divergence, which is what makes a real-play enemy A/B
+# untrustworthy: the arms stop rendering the same scene the moment they run at
+# different speeds.
+# ☠️ NEVER SHIP IT.
+ifdef ENEMYPREVIEW
+CFLAGS   += -DENEMYPREVIEW
+CXXFLAGS += -DENEMYPREVIEW
+endif
+
 ifdef GYMTEST
 CFLAGS   += -DGYMTEST
 CXXFLAGS += -DGYMTEST
