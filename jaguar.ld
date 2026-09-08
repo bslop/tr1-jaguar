@@ -26,8 +26,11 @@ SECTIONS
 
     .data : {
         . = ALIGN(4);
+        __data_start = .;
         *(.data)
         *(.data.*)
+        . = ALIGN(4);
+        __data_end = .;
     }
 
     . = ALIGN(4);
@@ -54,6 +57,21 @@ SECTIONS
     }
     . = ALIGN(4);
     __bss_end = .;
+
+    /* PRISTINE .data SNAPSHOT - deliberately AFTER __bss_end, which is what
+       makes it work: startup.S clears exactly __bss_start..__bss_end, so
+       anything past that survives a soft reboot.
+       ☠ WHY THIS EXISTS. _start clears .bss and CANNOT restore .data. A soft
+       reboot re-enters it with .data still holding the previous run's values -
+       516 bytes of function statics that are caches and "already done"
+       trackers - so they end up pointing into a .bss that was just zeroed. The
+       renderer then skips work it believes is staged, and assets disappear,
+       worse on every restart (user, 2026-09-08: the loading picture went, then
+       the world, then the palette). Snapshot on the first boot, restore on
+       every later one. Sized from the section itself so it cannot go stale. */
+    . = ALIGN(4);
+    __data_save = .;
+    . += 4 + (__data_end - __data_start);
 
 
     /DISCARD/ : {

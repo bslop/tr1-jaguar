@@ -40,6 +40,40 @@ _start:
 	clr.l	(%a0)+
 	bra.s	1b
 2:
+
+	| .data SNAPSHOT / RESTORE - runs here on purpose, after the .bss clear
+	| and before ANY C has touched a static.
+	| _start clears .bss and CANNOT restore .data.  A soft reboot re-enters
+	| here with .data still holding the PREVIOUS run's values: 516 bytes of
+	| function statics that are caches and "already done" trackers, now
+	| pointing into a .bss that was just zeroed.  The renderer then skips work
+	| it believes is already staged, so assets vanish - and worse on every
+	| restart, because each one leaves more stale state than the last.
+	| Measured 2026-09-08: .data 516 B / 25 symbols (prevfr, previd, cached_a,
+	| camyaw8, mfo, g_camcut ...) against .bss 418,728 B.  The user watched it
+	| degrade in that exact order: loading picture, then the world, then the
+	| palette.  Lara survived throughout because she is rebuilt every frame.
+	| Snapshot on the FIRST boot, restore on every later one - restoring the
+	| REAL initial values, not zeroing and hoping zero was right for all 25.
+	| A cold power-on leaves this DRAM as garbage, so the cookie is checked as
+	| a MAGIC and never as a bare flag: a flag would restore nonsense over
+	| .data on some random fraction of real boots.
+	lea	__data_save,%a0
+	lea	__data_start,%a1
+	lea	__data_end,%a2
+	cmp.l	#0x44415441,(%a0)	| 'DATA' - snapshot already taken?
+	beq.s	8f
+	move.l	#0x44415441,(%a0)+	| COLD: take it
+5:	cmp.l	%a2,%a1
+	bhs.s	9f
+	move.l	(%a1)+,(%a0)+
+	bra.s	5b
+8:	addq.l	#4,%a0			| WARM: put it back
+6:	cmp.l	%a2,%a1
+	bhs.s	9f
+	move.l	(%a0)+,(%a1)+
+	bra.s	6b
+9:
 #if defined(HANGDIAG) || defined(BOOTMARK)
 | ONE instruction, the earliest possible place, the smallest perturbation this
 | fault can be probed with: RED border means _start completed and main() was
