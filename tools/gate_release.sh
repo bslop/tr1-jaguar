@@ -40,39 +40,19 @@ ncc=0
 [ -n "$LOG" ] && [ -f "$LOG" ] && ncc=$(grep -cE 'gcc |jcc68k |jas ' "$LOG" || true)
 
 echo
-echo "[1] HRESN on all three define paths"
-if [ -n "$LOG" ] && [ -f "$LOG" ]; then
-    if [ "$ncc" -lt 10 ]; then
-        say "SKIP" "log has only $ncc compile lines - it is not a verbose build log"
-        skip=$((skip+1))
-    else
-    gccn=$(grep -E '(^| )m68k[^ ]*gcc | gcc .*-c ' "$LOG" | grep -c 'DHRESN=160' || true)
-    jccn=$(grep -E 'jcc68k' "$LOG" | grep -c 'HRESN=160' || true)
-    jasn=$(grep -E ' jas | jas$' "$LOG" | grep -c 'HRESN=160' || true)
-    hqn=$(grep -E 'gpu_geotex_hq|GEOTEX_HQ' "$LOG" | grep -c 'HRESN' || true)
-    say "gcc"    "$gccn compile lines carry -DHRESN=160"
-    say "jcc68k" "$jccn lines carry HRESN=160"
-    say "jas"    "$jasn lines carry HRESN=160"
-    say "HQ"     "$hqn HQ-kernel lines carry HRESN (must be 0)"
-    [ "$gccn" -gt 0 ] && [ "$jccn" -gt 0 ] && [ "$jasn" -gt 0 ] && [ "$hqn" -eq 0 ] || {
-        echo "  !!! HRESN did not reach every path (or leaked into the HQ kernel)"; fail=1; }
-    fi
-else
-    say "SKIP" "no build log given - cannot verify the compile lines"; skip=$((skip+1))
-fi
-
-echo
-echo "[2] debug flags"
 if [ -n "$LOG" ] && [ -f "$LOG" ] && [ "$ncc" -ge 10 ]; then
-    bad=""
-    for f in FPSBEACON PADMUTE FASTBOOT AUTOSTART SPAWNAT DBGROOM HOLEVIS GUNDIAG \
-             CRUMB ROOMTOUR OTLIST NOFILL NOCLEAR HALFW; do
-        if grep -qE "[-D ]$f=1|[-D ]$f\b" "$LOG" 2>/dev/null; then bad="$bad $f"; fi
-    done
-    if [ -n "$bad" ]; then say "FAIL" "debug flags present:$bad"; fail=1
-    else say "ok" "none of the 14 instrument flags appear on any compile line"; fi
+    # Checks [1] and [2] both parse the compile lines, so they live together in
+    # tools/gate_flags.py -- see its header for the three regex-vs-reality bugs
+    # that made the shell version answer all three of its questions wrongly on
+    # its first real build.
+    python3 "$(dirname "$0")/gate_flags.py" "$LOG" --width "${WIDTH:-160}" || fail=1
 else
-    say "SKIP" "no verbose build log - an absent flag and an absent log read alike"; skip=$((skip+1))
+    echo "[1] HRESN on all three define paths"
+    say "SKIP" "no verbose build log ($ncc compile lines) - cannot read the compile line"
+    echo
+    echo "[2] instrument flags"
+    say "SKIP" "no verbose build log - an absent flag and an absent log read alike"
+    skip=$((skip+2))
 fi
 
 echo
