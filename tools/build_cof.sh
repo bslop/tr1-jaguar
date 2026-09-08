@@ -279,22 +279,14 @@ say "Patching collision coverage (standable cells with no mesh)"
 # mansion spots where Lara fell instead of climbing (room 8 held 76 of its 84).
 python3 tools/floor_coverage.py --faces --patch 2>&1 | tail -2 \
     || echo "   note: floor_coverage patch failed"
-# ☠️ LARA'S HOME NEEDS IT TOO, AND NEVER GOT IT. The mansion has 160 of 1285
-# walkable cells (12.5%) with no mesh over them - the same wall-border ring as
-# the Caves - because this pass only ever ran on the `mrt` prefix. Room 0's
-# share of them is where a driven sweep found a 97%-black standing spot.
-# Runs unconditionally: under GYMSD the gym data is not linked, so patching its
-# sector file is harmless, and the moment GYMSD comes off it is already right.
-# ☠️ THE MANSION NEEDS THE BOUNDARY PATCH TOO, AND IT MUST RUN FIRST.
-# mrt_boundary_audit.py was Caves-only purely because its paths were hardcoded;
-# --prefix gym + TRLEVEL=GYM.PSX audits Lara's Home and finds 102 phantom seam
-# floors of 182 seam cells. ORDER IS LOAD-BEARING: this pass creates 0x7FFE
-# OPENING doorcells and the coverage pass deliberately skips those, so running
-# coverage first would wall real doorways and seal the mansion.
-TRLEVEL="$PSX/GYM.PSX" python3 tools/mrt_boundary_audit.py --prefix gym --patch 2>&1 \
-    | tail -1 || echo "   note: gym boundary patch failed"
-python3 tools/floor_coverage.py --prefix gym --faces --patch 2>&1 | tail -1 \
-    || echo "   note: floor_coverage gym patch failed"
+# ☠️☠️ THE MANSION'S THREE COLLISION PASSES USED TO LIVE HERE AND COULD
+# NEVER HAVE WORKED. They ran at this point in the script, and Lara's Home is
+# not extracted until the `case` further down -- so every one of them opened
+# `disc/gym*.bin` before anything had written it, printed a FileNotFoundError
+# and a "note: ... failed", and the build carried on and shipped the mansion
+# with UNPATCHED collision. Even had the files existed from a previous run, the
+# extraction below would have overwritten the patches minutes later.
+# They now run immediately AFTER that extraction; see "Lara's Home collision".
 
 # ☠️☠️☠️ PORTAL OPENINGS - RUN LAST, AND NEVER SKIP IT.
 # Without this the CAVES ARE NOT WALKABLE PAST ROOM 0: 25 of 38 rooms had ZERO
@@ -311,10 +303,10 @@ python3 tools/floor_coverage.py --prefix gym --faces --patch 2>&1 | tail -1 \
 # back, because *_sect.bin is GITIGNORED and regenerated - an asset fix that is
 # not in this script does not exist.
 say "Opening portal cells (room-to-room walking)"
-for _pfx in mrt gym; do
-    python3 tools/portal_open.py --prefix $_pfx --patch 2>&1 | tail -2 \
-        || echo "   note: portal_open $_pfx failed"
-done
+# ☠️ gym is NOT in this loop: its data does not exist yet at this point in the
+# script. Lara's Home gets the identical pass after its extraction, below.
+python3 tools/portal_open.py --prefix mrt --patch 2>&1 | tail -2 \
+    || echo "   note: portal_open mrt failed"
 
 say "Atlas patches (doors, pickups, pistols, enemy skins)"
 for patch in MRT_DOORPATCH MRT_PICKPATCH MRT_GUNPATCH; do
@@ -371,6 +363,41 @@ case "$BUILD_FLAGS" in
      env $MRTENV_NOSTATICS TEXSCALE=4 TRLEVEL="$PSX/GYM.PSX" TRPREFIX=gym \
          python3 tools/tr2jag_multiroom.py ;;
 esac
+
+# ☠️☠️☠️ LARA'S HOME COLLISION - AND IT HAS TO BE HERE, AFTER THE EXTRACTION.
+# These three passes used to sit ~250 lines earlier, next to the Caves ones, and
+# they could never have done anything: the gym data does not exist until the
+# `case` above has run. Each printed a FileNotFoundError and a "note: ... failed"
+# and the build shipped the mansion with raw extractor collision -- which is
+# exactly the symptom the Caves comment above describes, "NOT WALKABLE PAST
+# ROOM 0". User, 2026-09-07, playing demo34: "I can't seem to get to the
+# obstacle course or the pool."
+# ★ Same lesson as the portal note above, one level up: an asset fix that is not
+# in this script does not exist -- and one that runs BEFORE the asset does not
+# exist either, while looking in the log almost exactly like one that ran.
+#
+# ORDER IS LOAD-BEARING, and it is the same order the Caves use:
+#   1. boundary  creates 0x7FFE OPENING doorcells
+#   2. coverage  walls standable cells with no mesh, and deliberately SKIPS the
+#                0x7FFE cells pass 1 wrote -- run first, it would seal doorways
+#   3. portals   runs LAST, only ever turns 0x7FFF into 0x7FFE, so it must see
+#                the walls the first two leave behind. Idempotent.
+say "Lara's Home collision (boundary -> coverage -> portals)"
+gym_fail=0
+TRLEVEL="$PSX/GYM.PSX" python3 tools/mrt_boundary_audit.py --prefix gym --patch 2>&1 \
+    | tail -1 || gym_fail=1
+python3 tools/floor_coverage.py --prefix gym --faces --patch 2>&1 | tail -1 \
+    || gym_fail=1
+python3 tools/portal_open.py --prefix gym --patch 2>&1 | tail -2 \
+    || gym_fail=1
+# ☠️ FAIL LOUDLY. The old code wrote "   note: ... failed" and carried on, which
+# is how an unwalkable mansion shipped for as long as the mansion has shipped.
+# A collision pass that cannot run is not a note, it is a broken level.
+if [ "$gym_fail" -ne 0 ]; then
+    echo "!!! Lara's Home collision patching FAILED - the mansion would ship" >&2
+    echo "!!! unwalkable (rooms with no portal openings). Refusing to continue." >&2
+    exit 1
+fi
 # ☠️ GUARD FOR THE gym_lskin ALIAS. mrt_data.S no longer .incbin's a second
 # copy of Lara's skeleton for the mansion - gym_lskin is a .set alias onto
 # mrt_lskin, which saves 110,016 B in EVERY ROM (the old copy sat outside the
