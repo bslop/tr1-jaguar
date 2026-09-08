@@ -13,6 +13,47 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+#### ☠️☠️ THE COBWEB PIN WAS DEAD AND THE DOCKER CACHE HID IT — 2026-09-07
+`ARG COBWEB_REV=9da2f99` in the Dockerfile no longer resolves: cobweb's history
+was rewritten upstream when it went public/MIT, and `git fetch origin 9da2f99`
+returns *couldn't find remote ref*. **Every build kept working anyway** — Docker
+had `jas` and `jcc68k` cached as layers from 2026-08-26 (`docker history` says
+"12 days ago" while the image manifest says today), so the `RUN` that clones and
+checks out has not executed since. A clean machine or one `--no-cache` would
+have been the first to find out, weeks after the cause.
+
+Re-pinned to the **same commits** by post-rewrite hash, matched on subject line
+and date: `ba9c680 → f86794a` (mem-to-mem MOVE dropped its DEST reloc) and
+`9da2f99 → 98a9822` (object-mode `.align` is section-relative). Verified the new
+pin is an ancestor of `origin/main` — the assertion the old pin would have
+failed. `cbb22a1`. Written back to `jaguar-shared` as the sixth stale-build
+mechanism (`04b6f62`): the first five are a stale *artefact*, this is a stale
+*reference*, and **a reference consumed only from a cache stops being validated**.
+
+⚠ **The tip is NOT a free upgrade and demo34 was not built with it.** cobweb tip
+additionally carries `e86d294` (2026-09-01) which *scopes* that `.align` fix to
+relocatable objects only — a correction to the very behaviour the A10 boot
+lottery turns on. demo34 is built by the cached Aug-26 toolchain, i.e. the exact
+one behind every silicon-verified ROM. Bumping to the tip is a deliberate change
+that wants its own A/B, and it will cost a full cobweb rebuild because the pin
+edit busts the layer cache.
+
+#### ☠️ TWO CONTAINERS WERE BUILDING INTO THE SAME `/out` — 2026-09-07
+`docker ps` found **two** `tr-jaguar` containers, started 3m 49s apart, both
+mounting `demo34/` as `/out` and both in the video stage. Killed the newer; the
+survivor then exited **1** with `--rm` already having taken its logs, and
+`demo34/` was empty. Rebuilt as a single container with the log teed to a file —
+which is the actual lesson: **`docker run --rm` in the background leaves you
+with an exit code and no way to ask why.** The rebuild script lives in the
+session scratchpad and pins `BUILD_FLAGS` explicitly rather than relying on
+`build_cof.sh`'s default, so the flag set is in the log too.
+
+★ Added `tools/gate_release.sh` — the four cheap pre-rig checks (HRESN on all
+three define paths and *absent* from the HQ kernel · zero instrument flags ·
+no `move.l abs.l,abs.l` below `$4000` · DRAM headroom). ☠️ It counts SKIPs and
+exits 2 with **GATES INCOMPLETE**: the first draft printed GATES PASS having run
+one check of four.
+
 #### ⬜ WHAT A VALID A1 TEST ACTUALLY REQUIRES — established 2026-09-07, before spending a turn
 Tried to redo the DIVSAFE A/B in a better scene. Rotating the level-start spawn
 180° (`SPAWNAT_ROOM=0 X=75264 Y=3072 Z=3584 YAW=32768`) puts her crown against a
