@@ -13,6 +13,35 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+#### ✅ `* + #` RESTART WORKS ON SILICON — 2026-09-08, attempt FOUR
+User: "The * + # works for restarting now." demo56, job #2857. Restarts through
+EIDOS → CORE → attract → ring with assets intact across repeated restarts.
+
+The three failed attempts and why, kept because each refutation was expensive:
+1. **Keypad decode** — `* + #` could not fire at all: the keypad row order was
+   inverted (PADPROBE on hardware: `*`=bit16 not 19, `#`=bit0 not 3). `*` was
+   read as ACTION, `#` as WALK. So `soft_reboot()` had NEVER run on silicon.
+2. **Warm-boot cookie shortcut** (skip the logos, land on the ring) — black
+   screen. Removing it changed nothing, which retired it.
+3. **Unparked Object Processor** (VMODE=0 before the .bss clear) — reasoned,
+   plausible, no effect on the symptom. Left in; harmless.
+4. ✅ **`.data` is never restored.** `size -A`: `.data` 516 B / 25 symbols
+   (prevfr, previd, cached_a, camyaw8, mfo, g_camcut…) vs `.bss` 418,728 B.
+   `_start` clears only `.bss`; a re-entry runs `main` with every cache still
+   pointing into a buffer just zeroed → renderer skips "already staged" work →
+   loading picture gone, then the world (only Lara, rebuilt every frame,
+   survived), then the palette — WORSE each restart. Fix: snapshot `.data` on
+   first boot past `__bss_end` (which the clear loop's `bhs` stops AT), restore
+   on every later boot, magic-checked. `startup.S` + `jaguar.ld`, `86539bd`/
+   `216611b`/next. ★ **The first attempt backed by a measurement was the one
+   that worked.** The symptom ORDER (Lara survives) was the tell.
+
+Also landed on the way: **keypad 2/3 (jump/walk) were never wired** —
+`ACT_JUMP`/`ACT_WALK` defined in joypad.h and consumed NOWHERE; jump tested raw
+PAD_A, walk raw PAD_C at 9 sites. `main.c:9607` records the same bug fixed once
+for ACT_ACTION only. Wired 11 sites. 9 of 12 keypad keys measured on hardware,
+remaining 3 forced by elimination within confirmed nibbles.
+
 #### ▶ RIG JOB #2783 — demo34 IS RUNNING ON THE BOARD RIGHT NOW (2026-09-07 20:17)
 `jagq run demo34/OPENLARA.COF --no-reboot` — **upload exit 0**, 45 s capture,
 board LEFT RUNNING for a hands-on start-to-finish playthrough. `jagq focus 45m`
