@@ -6485,6 +6485,26 @@ bootvid_entry:
                  phantom-selecting page 0 right after the settle window). */
               uint32_t p = joypad_read();
               uint32_t edge;
+              /* SOFT REBOOT (* + # held ~0.5s). joypad.h has documented this as
+                 "the Jaguar convention" since the keypad was decoded, but
+                 soft_reboot() had exactly ONE call site - the game loop - so it
+                 did nothing on the title ring, which is where a player reaching
+                 for a restart usually is. User asked for it 2026-09-07.
+                 ☠️ Timed on frame_count (60Hz FIELDS), not on loop iterations:
+                 this loop is not vblank-locked, it spins at whatever rate the
+                 SD music service leaves it, so an iteration count would mean a
+                 different duration in every build. The game loop's copy uses
+                 g_ticks for the same reason.
+                 Read off the RAW pad, before the debounce below and before any
+                 menu consumer, exactly as the game loop does - a 30-field hold
+                 cannot be a pad glitch, so debouncing it would only add lag. */
+              { extern volatile uint32_t frame_count;
+                static uint32_t rb_since; static int rb_on;
+                if ((p & PAD_KSTAR) && (p & PAD_KHASH)) {
+                    if (!rb_on) { rb_on = 1; rb_since = frame_count; }
+                    else if ((uint32_t)(frame_count - rb_since) >= 30)
+                        soft_reboot();
+                } else rb_on = 0; }
 #ifndef NO_GAMEDRIVE
               /* stream service: when the playing buffer drains, arm the
                  other IMMEDIATELY (audio first), then refill the drained
