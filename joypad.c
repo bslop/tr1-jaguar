@@ -29,18 +29,30 @@
 /* Keypad: strobes 1/2/3 each contribute four ROW bits that were discarded.
    Column 1 -> 19:16, column 2 -> 7:4, column 3 -> 3:0. Row order within a
    column is the standard layout and is UNVERIFIED HERE. */
-#define RAW_K1     (1u << 16)
-#define RAW_K4     (1u << 17)
-#define RAW_K7     (1u << 18)
-#define RAW_KSTAR  (1u << 19)
-#define RAW_K2     (1u << 4)
-#define RAW_K5     (1u << 5)
-#define RAW_K8     (1u << 6)
-#define RAW_K0     (1u << 7)
-#define RAW_K3     (1u << 0)
-#define RAW_K6     (1u << 1)
-#define RAW_K9     (1u << 2)
-#define RAW_KHASH  (1u << 3)
+/* ✅ MEASURED ON HARDWARE 2026-09-08 (PADPROBE, fingers on a real controller).
+   The row order within each column runs HIGH bit = top row, and the guess here
+   had it the other way up. Read off the raw matrix word:
+       *  -> 0x00010000  (bit 16), not the assumed bit 19
+       #  -> 0x00000001  (bit 0),  not the assumed bit 3
+   Both are the BOTTOM row of their column and both landed on the LOWEST bit of
+   its nibble, which fixes the direction for every row.
+   ☠️ WHAT THIS WAS DOING: under the old table `*` asserted bit 16 = K1 = ACTION
+   and `#` asserted bit 0 = K3 = WALK. So the keypad was not dead - it was
+   ROTATED, every key doing another key's job, which is far harder to notice
+   than nothing happening. It surfaced only because * + # was asked to do
+   something (soft reboot) that no other binding does. */
+#define RAW_K1     (1u << 19)
+#define RAW_K4     (1u << 18)
+#define RAW_K7     (1u << 17)
+#define RAW_KSTAR  (1u << 16)
+#define RAW_K2     (1u << 7)
+#define RAW_K5     (1u << 6)
+#define RAW_K8     (1u << 5)
+#define RAW_K0     (1u << 4)
+#define RAW_K3     (1u << 3)
+#define RAW_K6     (1u << 2)
+#define RAW_K9     (1u << 1)
+#define RAW_KHASH  (1u << 0)
 
 static inline uint32_t ror32(uint32_t v, int n)
 {

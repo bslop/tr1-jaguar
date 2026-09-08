@@ -30,8 +30,17 @@
    when the Pro pad's X/Y/Z are not there. The matrix already scans them: each
    strobe returns FOUR row bits, and only strobe 0's four are used (the dpad).
    Strobes 1/2/3 carry the keypad columns and were being thrown away.
-   ☠️ WHICH row is which KEY is the standard layout, NOT something this project
-   has confirmed - build PADPROBE=1 and press them. Same caution as X/Y/Z. */
+   ✅ MEASURED 2026-09-08 with PADPROBE and fingers on a real controller, and
+   the standard-layout guess was UPSIDE DOWN: `*` reads 0x00010000 (bit 16) and
+   `#` reads 0x00000001 (bit 0), i.e. the BOTTOM row sits on the LOWEST bit of
+   its column nibble. Corrected in joypad.c.
+   ☠️ The old table did not make the keypad dead, it made it ROTATED - `*` was
+   read as K1 (ACTION) and `#` as K3 (WALK) - which is why years of play never
+   flagged it. It only surfaced when * + # was given a job (soft reboot) that no
+   other key does.
+   ⬜ Confirmed for 2 of 12 keys, both bottom-row, columns 1 and 3. The reversal
+   is applied to all three columns on the strength of those two agreeing; column
+   2 (2/5/8/0) has no measurement yet. X/Y/Z remain UNVERIFIED. */
 #define PAD_K1     0x00001000u
 #define PAD_K2     0x00002000u
 #define PAD_K3     0x00004000u
