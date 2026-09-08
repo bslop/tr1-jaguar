@@ -13,6 +13,48 @@ Every 25 runs the script prints a PROGRESS REPORT DUE banner — the user review
 direction at that point and decides whether it is still valid. **Do not
 summarise that checkpoint away.**
 
+#### ▶ RIG JOB #2783 — demo34 IS RUNNING ON THE BOARD RIGHT NOW (2026-09-07 20:17)
+`jagq run demo34/OPENLARA.COF --no-reboot` — **upload exit 0**, 45 s capture,
+board LEFT RUNNING for a hands-on start-to-finish playthrough. `jagq focus 45m`
+held until **20:57** so no other session reboots it mid-play. Capture at
+`/home/jvilla/.jagq/jobs/2783/capture.mkv`.
+
+**Confirmed from the capture and a live grab:** EIDOS clip streams → intro
+cutscene streams → **title ring, full 320 wide**, "A Select / Sound" laid out
+correctly. So the `g_disp240` phase-dependence is right on silicon: the game
+kernel is HRESN=160 and the HQ title kernel is HRESN=0, and the title is not
+narrowed. The `.JV` clips are already on the card and correct — nothing needed
+pushing.
+
+☠️ **#2781, the first attempt, died `LIBUSB_ERROR_TIMEOUT` / exit -6** on the
+bulk transfer. That is the documented wedge; the power cycle fixed it and the
+retry uploaded 1.47 MB first time. See the jagpower note below.
+
+☠️ **`jagpower cycle` EXITED 1 ON A CYCLE THAT WORKED.** It printed its
+confirmation line and recorded `GameDrive before: 1:59`, then exited 1 — but
+`lsusb` right after showed device **60**, i.e. the number changed, which is its
+own success criterion. Its window (released after 10 s) is shorter than this
+doc's own ~6 s off + ~10 s re-enumeration budget. **Read the device number, not
+the exit status.** Written back to `jaguar-shared/hw/POWER.md` (`f4dd3b7`) as the
+mirror of the false-positive already recorded there.
+★ `kasa.conf` is NOT in this repo — `export KASA_CONF=/home/jvilla/Documents/Git/_archive/jag_openlara-2026-09-04/kasa.conf`.
+
+#### ⬜ THE SD CARD NAMESPACE CONTRACT AND WE ARE NOT KEEPING IT — 2026-09-07
+`jaguar-shared/hw/SD_LAYOUT.md` assigns this project the tag **`OL`** and its
+examples are literally `OLMUSIC.PCM`, `OLINPUT.BIN`, `OLINTRO.JV`. Our payload
+ships **untagged**: `MUSIC.PCM`, `INTRO.JV`, `EIDOS.JV`, `CORE.JV`, `CAVES.JV`,
+`CAVSLOAD.DAT`, `GYMLOAD.DAT`. The card is shared with `jag_quake`,
+`jag_resident`, `jag_viewpoint` and `jag_s3k`, and that doc already names
+`INPUT.BIN` as *"the concrete live hazard today"* because we read it every frame
+in `gd_input.c` and any other project writing that name feeds us garbage pad
+state **silently**.
+⚠ Not a playthrough-time fix: the names are hard-coded in the `GD_FOpen` calls,
+so renaming is a source change plus a card rewrite. But `MUSIC.PCM` is about as
+collidable as a name gets.
+★ Also from that doc: **`jaggd -ux` uploads fail at about 1.6 MB** (0 of 6 at or
+above, 203 of 327 below). Our COF is **1.47 MB — 92% of the measured ceiling**,
+which is worth knowing before anything else is added to the ROM.
+
 #### ☠️☠️ THE COBWEB PIN WAS DEAD AND THE DOCKER CACHE HID IT — 2026-09-07
 `ARG COBWEB_REV=9da2f99` in the Dockerfile no longer resolves: cobweb's history
 was rewritten upstream when it went public/MIT, and `git fetch origin 9da2f99`
