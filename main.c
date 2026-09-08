@@ -5173,7 +5173,7 @@ int main(void)
                  slower-and-readable; these are deliberately below TR1.
                  Also EASE IN over TURN_RAMP ticks so the first frame of a turn
                  is not a snap — that is most of what "smoother" means here. */
-              { int tr8 = (pad & PAD_C) ? TURN_WALK_TR1 : TURN_RUN_TR1;
+              { int tr8 = (pad & ACT_WALK) ? TURN_WALK_TR1 : TURN_RUN_TR1;
                 int turning = (pad & (PAD_LEFT|PAD_RIGHT)) ? 1 : 0;
                 int ramp = (g_turnf < TURN_RAMP) ? (g_turnf + 1) : TURN_RAMP;
                 int step = (tr8 * (g_tturn >> 1) * ramp) / (8 * TURN_RAMP);
@@ -8947,7 +8947,7 @@ bootvid_entry:
                       g_climbf = 0; g_climby0 = g_lay;
                       g_climbx0 = g_lax; g_climbz0 = g_laz;
                       /* TR1: WALK held during the pull-up = HANDSTAND */
-                      g_climbanim = (pad & PAD_C) ? LANIM_HANDSTAND
+                      g_climbanim = (pad & ACT_WALK) ? LANIM_HANDSTAND
                                                   : LANIM_HANGUP;
                   } else {
                       lanim_set(LANIM_HANG);
@@ -9041,8 +9041,8 @@ bootvid_entry:
                   if (pad & PAD_RIGHT) g_layaw += 3;
 #endif
                   if (pad & PAD_UP)    fwd = 1;
-                  if (pad & PAD_A)     g_lay -= 20;      /* rise   */
-                  if (pad & PAD_C)     g_lay += 20;      /* dive   */
+                  if (pad & ACT_JUMP)  g_lay -= 20;      /* rise   */
+                  if (pad & ACT_WALK)  g_lay += 20;      /* dive   */
                   if (fwd) {
                       int nx = g_lax + (int)(((int32_t)SIN(g_layaw)*28)>>16);
                       int nz = g_laz + (int)(((int32_t)COS(g_layaw)*28)>>16);
@@ -9124,7 +9124,7 @@ bootvid_entry:
 #ifdef MV_SIDE
               /* SIDESTEP owns LEFT/RIGHT while WALK is held (undo the turn
                  the two lines above already applied). */
-              side = ((pad & PAD_C) && (pad & (PAD_LEFT|PAD_RIGHT)) && !mv)
+              side = ((pad & ACT_WALK) && (pad & (PAD_LEFT|PAD_RIGHT)) && !mv)
                      ? ((pad & PAD_LEFT) ? -1 : 1) : 0;
 #ifdef TIMESTEP
               if (side) g_layaw = (g_layaw + (side < 0 ? (3*g_tturn)>>1 : -((3*g_tturn)>>1))) & 255;
@@ -9133,12 +9133,12 @@ bootvid_entry:
 #endif
 #endif
               /* FAST_BACK ramps from rest; the slow WALK-back does not */
-              if (mv < 0 && !(pad & PAD_C)) g_backf += g_ticks >> 1;
+              if (mv < 0 && !(pad & ACT_WALK)) g_backf += g_ticks >> 1;
               else                          g_backf = 0;
               if (mv) {
-                  int spd = (pad & PAD_C) ? WALK_SPEED_TR1 : RUN_SPEED_TR1;
+                  int spd = (pad & ACT_WALK) ? WALK_SPEED_TR1 : RUN_SPEED_TR1;
                   if (mv < 0) {
-                      if (pad & PAD_C) spd = BACK_SPEED_TR1;   /* anim 38 */
+                      if (pad & ACT_WALK) spd = BACK_SPEED_TR1;   /* anim 38 */
                       else {                                   /* anim 88 */
                           spd = (FASTBACK_ACC_N * g_backf) / FASTBACK_ACC_D;
                           if (spd > FASTBACK_MAX) spd = FASTBACK_MAX;
@@ -9688,7 +9688,7 @@ bootvid_entry:
                 static uint32_t jprev; static int jprep;
                 uint32_t jedge = pad & ~jprev;
                 jprev = pad;
-                if (((jedge & PAD_A) || g_autoj) && grounded && !jprep)
+                if (((jedge & ACT_JUMP) || g_autoj) && grounded && !jprep)
                     jprep = 2;
                 if (jprep && grounded) {
                     if (--jprep == 0) {
@@ -9717,7 +9717,7 @@ bootvid_entry:
                         g_jumped = 1;
                         g_lavy = -(g_lajf ? JUMP_VEL_FWD : JUMP_VEL_UP);
                         g_jfwd = !g_lajf ? 0
-                               : ((g_jdir == 0 && !(pad & PAD_C)) ? JUMP_FWD_RUN
+                               : ((g_jdir == 0 && !(pad & ACT_WALK)) ? JUMP_FWD_RUN
                                                                   : JUMP_FWD_STAND);
                         }
                     }
@@ -9970,7 +9970,7 @@ bootvid_entry:
                        replace both with TR1's own anim SOUND COMMANDS, which
                        carry the exact frames (the extractor skips that array
                        today). */
-                    lanim_set((pad & PAD_C) ? LANIM_WALK : LANIM_RUN);
+                    lanim_set((pad & ACT_WALK) ? LANIM_WALK : LANIM_RUN);
                     lanim_step(1, 2);
                     lara_footstep(rd16(g_sk_anims + g_lanim_id * 6 + 2),
                                   g_lanim_fr, g_lanim_id);
@@ -9978,7 +9978,7 @@ bootvid_entry:
                     /* TR1 has two retreats: the measured BACK step-back, and
                        FAST_BACK (anim 88) when she is hurrying. Running back
                        (no WALK modifier) gets the fast one. */
-                    lanim_set((pad & PAD_C) ? LANIM_BACK : LANIM_FASTBACK);
+                    lanim_set((pad & ACT_WALK) ? LANIM_BACK : LANIM_FASTBACK);
                     lanim_step(1, 2);
                     lara_footstep(rd16(g_sk_anims + g_lanim_id*6 + 2),
                                   g_lanim_fr, g_lanim_id);
