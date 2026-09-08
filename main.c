@@ -11159,6 +11159,9 @@ bv_ring: ;                         /* warm restart lands here: no clips, and
                 { int e, na = 0;
                   ENT_SCAN(bat, 39) {
                       if (g_useset) break;
+#ifdef NOENTDRAW
+                      continue;   /* MEASUREMENT ARM - see the Makefile */
+#endif
                       if (!ent_is_bat(mrt_ent[e].type)) continue;
                       /* a DEAD enemy keeps drawing while it sinks */
                       if (g_batdead[e] && !g_endying[e]) continue;
@@ -11181,6 +11184,9 @@ bv_ring: ;                         /* warm restart lands here: no clips, and
                 { int e, na = 0;
                   ENT_SCAN(wolf, 39) {
                       if (g_useset) break;
+#ifdef NOENTDRAW
+                      continue;   /* MEASUREMENT ARM - see the Makefile */
+#endif
                       if (!ent_is_wolf(mrt_ent[e].type)) continue;
                       /* a DEAD enemy keeps drawing while it sinks */
                       if (g_batdead[e] && !g_endying[e]) continue;
@@ -11207,6 +11213,9 @@ bv_ring: ;                         /* warm restart lands here: no clips, and
                 { int e, na = 0;
                   ENT_SCAN(bear, 39) {
                       if (g_useset) break;
+#ifdef NOENTDRAW
+                      continue;   /* MEASUREMENT ARM - see the Makefile */
+#endif
                       if (!ent_is_bear(mrt_ent[e].type)) continue;
                       /* a DEAD enemy keeps drawing while it sinks */
                       if (g_batdead[e] && !g_endying[e]) continue;

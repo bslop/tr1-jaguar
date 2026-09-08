@@ -1210,6 +1210,24 @@ CFLAGS   += -DPHRASECLEAR
 CXXFLAGS += -DPHRASECLEAR
 endif
 
+# NOENTDRAW=1: MEASUREMENT ARM. Skip DRAWING bats, wolves and the bear - the
+# blob build and the displist entry both - while leaving their AI, movement and
+# collision running untouched (those live in the entity update, not the draw
+# pass). This is the CEILING of "turn every enemy into a sprite": a billboard
+# costs 1 face against the wolf's 251, so no sprite scheme can beat the frame
+# time this arm reports, and it costs no art pipeline to find out.
+# ☠️ Two priors say do NOT skip this measurement and go straight to sprites:
+#   1. Flat-merge cut room 34's faces by 36% for ZERO fps - face count alone is
+#      not automatically the lever here.
+#   2. The believed "25% enemy cost" turned out to be EIGHT GLYPHS of 68k HUD
+#      text hiding behind the same `#ifdef ENEMIES`, so no enemy A/B ever
+#      separated them. Removing that text alone was worth +56%.
+# ☠️ NEVER SHIP IT. Enemies are invisible but still bite.
+ifdef NOENTDRAW
+CFLAGS   += -DNOENTDRAW
+CXXFLAGS += -DNOENTDRAW
+endif
+
 ifdef GYMTEST
 CFLAGS   += -DGYMTEST
 CXXFLAGS += -DGYMTEST
