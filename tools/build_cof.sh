@@ -491,6 +491,27 @@ fi
 # (that overflows the 2MB budget). This matches the shipped build.
 printf '\0\0\0\0' > music.bin
 
+# ── 2b. card images for the level sets ───────────────────────────────────────
+# Both level sets are linked into every ROM and only one is ever live. Packing
+# them for the card is the first half of moving them there; nothing in the ROM
+# changes yet, so this step is free and can be verified on its own.
+# ☠️ MUST RUN AFTER EVERY PATCH PASS. It snapshots the .bin files, and the
+# boundary/coverage/portal passes and the four atlas patches all REWRITE them
+# in place. Packed before those, the card would carry the level the extractor
+# emitted rather than the level the ROM ships - and the two would differ in
+# exactly the collision cells that decide whether a room is walkable.
+say "Level card images (both sets - only one is ever live)"
+mkdir -p "$OUT/OL"
+python3 tools/make_levpack.py mrt disc "$OUT/OL/CAVES.LEV" || {
+    echo "!!! could not pack the Caves for the card" >&2; exit 1; }
+python3 tools/make_levpack.py gym disc "$OUT/OL/GYM.LEV" || {
+    echo "!!! could not pack Lara's Home for the card" >&2; exit 1; }
+{ set -- "$OUT/OL/CAVES.LEV" "$OUT/OL/GYM.LEV"
+  c=$(stat -c%s "$1"); g=$(stat -c%s "$2")
+  big=$c; [ "$g" -gt "$c" ] && big=$g
+  echo "   shared arena would need $big B; both resident today costs $((c+g)) B"
+  echo "   => frees $((c+g-big)) B of DRAM, and takes $((c+g)) B out of the ROM"; }
+
 # ── 3. build the ROM ─────────────────────────────────────────────────────────
 say "Compiling for Atari Jaguar ($QUALITY)"
 make clean >/dev/null
