@@ -541,6 +541,19 @@ static void soft_reboot(void)
        while the keypad row order was inverted - so its first real execution
        was also the first test of the shortcut, and the shortcut lost. */
     __asm__ __volatile__("move.w #0x2700,%sr");     /* no interrupts from here */
+    /* ☠️☠️ PARK THE OBJECT PROCESSOR FIRST. Halting Tom's GPU does NOT stop the
+       OP: it is driven by the video timing generator, not by G_CTRL, and it
+       keeps fetching op_list - which lives in .bss - all the way through
+       _start's .bss clear. That is a live DMA engine reading a buffer being
+       zeroed underneath it, and the symptom is a dead display on every warm
+       restart while a cold boot is fine (a cold boot has no OP running yet).
+       Disabling video stops the fetch; video_init re-asserts VMODE on the way
+       back up, so nothing downstream needs to know.
+       ⚠ HYPOTHESIS UNDER TEST, not a confirmed diagnosis - the BOOTMARK border
+       probe could not discriminate here, because the marker sets the border red
+       and then falls straight into main(), which reprograms the video registers
+       and overwrites it. */
+    *(volatile uint16_t *)0xF00028u = 0;            /* VMODE: video off  */
     *(volatile uint32_t *)0xF02114u = 0;            /* G_CTRL: halt Tom  */
     *(volatile uint32_t *)0xF1A114u = 0;            /* D_CTRL: halt Jerry */
     *(volatile uint16_t *)0xF0004Eu = 0xFFFF;       /* VI off */
