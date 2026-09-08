@@ -30,9 +30,22 @@ COF=$(ls "$DIR"/*.COF "$DIR"/*.cof 2>/dev/null | head -1) || true
 [ -n "${COF:-}" ] || { echo "!!! no .COF in $DIR"; exit 1; }
 echo "ROM: $COF ($(stat -c%s "$COF") B)"
 
+# ☠️ ESTABLISH THE LOG HAS COMPILE LINES BEFORE GREPPING IT FOR FLAGS. If make
+# ran quietly, "the flag is missing" and "there is nothing to look at" produce
+# the identical verdict, in BOTH directions: check [1] reads a missing HRESN and
+# check [2] reads a clean absence of debug flags. Two opposite conclusions from
+# the same empty file is the null-state trap, and this gate exists to not have
+# one.
+ncc=0
+[ -n "$LOG" ] && [ -f "$LOG" ] && ncc=$(grep -cE 'gcc |jcc68k |jas ' "$LOG" || true)
+
 echo
 echo "[1] HRESN on all three define paths"
 if [ -n "$LOG" ] && [ -f "$LOG" ]; then
+    if [ "$ncc" -lt 10 ]; then
+        say "SKIP" "log has only $ncc compile lines - it is not a verbose build log"
+        skip=$((skip+1))
+    else
     gccn=$(grep -E '(^| )m68k[^ ]*gcc | gcc .*-c ' "$LOG" | grep -c 'DHRESN=160' || true)
     jccn=$(grep -E 'jcc68k' "$LOG" | grep -c 'HRESN=160' || true)
     jasn=$(grep -E ' jas | jas$' "$LOG" | grep -c 'HRESN=160' || true)
@@ -43,13 +56,14 @@ if [ -n "$LOG" ] && [ -f "$LOG" ]; then
     say "HQ"     "$hqn HQ-kernel lines carry HRESN (must be 0)"
     [ "$gccn" -gt 0 ] && [ "$jccn" -gt 0 ] && [ "$jasn" -gt 0 ] && [ "$hqn" -eq 0 ] || {
         echo "  !!! HRESN did not reach every path (or leaked into the HQ kernel)"; fail=1; }
+    fi
 else
     say "SKIP" "no build log given - cannot verify the compile lines"; skip=$((skip+1))
 fi
 
 echo
 echo "[2] debug flags"
-if [ -n "$LOG" ] && [ -f "$LOG" ]; then
+if [ -n "$LOG" ] && [ -f "$LOG" ] && [ "$ncc" -ge 10 ]; then
     bad=""
     for f in FPSBEACON PADMUTE FASTBOOT AUTOSTART SPAWNAT DBGROOM HOLEVIS GUNDIAG \
              CRUMB ROOMTOUR OTLIST NOFILL NOCLEAR HALFW; do
@@ -58,7 +72,7 @@ if [ -n "$LOG" ] && [ -f "$LOG" ]; then
     if [ -n "$bad" ]; then say "FAIL" "debug flags present:$bad"; fail=1
     else say "ok" "none of the 14 instrument flags appear on any compile line"; fi
 else
-    say "SKIP" "no build log given"; skip=$((skip+1))
+    say "SKIP" "no verbose build log - an absent flag and an absent log read alike"; skip=$((skip+1))
 fi
 
 echo
