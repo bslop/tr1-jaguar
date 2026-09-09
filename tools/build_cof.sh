@@ -500,13 +500,18 @@ printf '\0\0\0\0' > music.bin
 # in place. Packed before those, the card would carry the level the extractor
 # emitted rather than the level the ROM ships - and the two would differ in
 # exactly the collision cells that decide whether a room is walkable.
+# ☠️ ROOT, NOT /OL/. These were written to /OL/ first, which is where
+# SD_LAYOUT.md puts bulk assets - and that made them UNDEPLOYABLE: `jaggd -wf`
+# can only write the card ROOT (open_jaggd/fileio.c:PrepFile sends the basename
+# and the protocol has no destination-path argument), so a subdirectory needs
+# the card physically mounted on a PC. Root with the project's `OL` tag,
+# 8.3-clean, keeps the namespace contract AND can be pushed over USB.
 say "Level card images (both sets - only one is ever live)"
-mkdir -p "$OUT/OL"
-python3 tools/make_levpack.py mrt disc "$OUT/OL/CAVES.LEV" || {
+python3 tools/make_levpack.py mrt disc "$OUT/OLCAVES.LEV" || {
     echo "!!! could not pack the Caves for the card" >&2; exit 1; }
-python3 tools/make_levpack.py gym disc "$OUT/OL/GYM.LEV" || {
+python3 tools/make_levpack.py gym disc "$OUT/OLGYM.LEV" || {
     echo "!!! could not pack Lara's Home for the card" >&2; exit 1; }
-{ set -- "$OUT/OL/CAVES.LEV" "$OUT/OL/GYM.LEV"
+{ set -- "$OUT/OLCAVES.LEV" "$OUT/OLGYM.LEV"
   c=$(stat -c%s "$1"); g=$(stat -c%s "$2")
   big=$c; [ "$g" -gt "$c" ] && big=$g
   echo "   shared arena needs $big B; both resident today costs $((c+g)) B"

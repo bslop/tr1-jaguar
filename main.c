@@ -2661,6 +2661,11 @@ static int  g_health = 1000;             /* TR1 full health              */
 static uint32_t wolf_sig[ENT_WOLF_MAXDRAW];
 static uint32_t bear_sig[ENT_BEAR_MAXDRAW];
 #endif
+/* Title music double-buffer size in bytes. See mbuf's comment for why 12288
+   and not 5120. Overridable from the Makefile (MUSBUF=...) for the A/B. */
+#ifndef MUSBUF
+#define MUSBUF 12288
+#endif
 /* ★★★ THE ENEMY BLOBS COST NOTHING - they share the TITLE SCREEN's arena.
  * Plumbing ENEMIES for the first time overflowed BSS by 52,368 bytes, and the
  * enemy blobs are 39,424 of that.  But their lifetime is DISJOINT from the two
@@ -2687,13 +2692,26 @@ static uint32_t bear_sig[ENT_BEAR_MAXDRAW];
 static union {
     struct {                                   /* TITLE / MENU only */
         uint8_t rblob[6][MRT_RBLOB_SZ];
-        /* 5120, from 12288. Title music double-buffer: 0.46s per swap at
-           11025Hz s8, and it shipped at 4096 historically ("4KB = 0.37s per
-           swap"), so this stays well clear of the size that was proven to
-           stream. The title side sets the arena size, so this is the single
-           biggest lever available. ☠️ If the title music stutters, THIS is
-           the first thing to put back. */
-        int8_t  mbuf[2][5120];
+        /* ✅ BACK TO 12288 (2026-09-08) - this comment's own instruction,
+           followed. It was shrunk 12288 -> 6144 -> 5120 for arena space when
+           ENEMIES and GUNS landed (3fe0893, e9f567a), and the first "music
+           cuts out when stepping between ring options" report is dated eight
+           days AFTER that (A12, 2026-08-19). The old text under this line said
+           "if the title music stutters, THIS is the first thing to put back".
+           WHY THE SIZE DECIDES IT: the ring loop refills once per ITERATION,
+           and a selection change forces SIX full-repaint iterations (3 slew +
+           3 landing) of ~20 fields each - five 68k bakes, five gpu_sync'd
+           kernel runs and a 320x240 blit per iteration. A refill is polled in
+           one iteration and lands in the next, so promotion->queue is up to
+           ~40 fields during a tap. 5120 B is 27.9 fields of audio: the voice
+           runs dry, and the 09-07 re-arm restarts it - the audible skip.
+           12288 B is 66.8 fields, which tolerates ~33-field iterations.
+           ☠️ MUSDIAG's note that "it cannot be the fill rate" was right about
+           SD bandwidth and wrong about time: it equated an iteration with a
+           1/60 s frame, and a slew iteration is twenty of them.
+           MUSBUF is a build define so the two sizes can be A/B'd on the rig
+           with the VIDPANEL readout; it defaults to 12288 in this file. */
+        int8_t  mbuf[2][MUSBUF];
         uint8_t fscr[160*QREC];   /* ring face-sort scratch, title only */
     } t;
     struct {                                   /* IN-GAME only */
@@ -6600,6 +6618,14 @@ bootvid_entry:
              separates them is the whole remaining fault. */
           if (g_jvdmask & 1024u) { introplay = 1; goto bootvid_entry; }
 #endif
+#ifdef VIDPANEL
+          /* MUSDIAG counters live in crash scratch ($8A8..$8BB), which nothing
+             zeroes (startup.S clears .bss only; the .data snapshot does not
+             cover it), so they start as whatever DRAM held - and a running
+             MAXIMUM seeded with garbage never updates again. Zero at ring
+             entry so the reading is THIS session's. */
+          { int z8; for (z8 = 10; z8 < 15; z8++) VPC[z8] = 0; }
+#endif
           for (;;) {
               /* PHYSICAL PAD ONLY, DEBOUNCED: a bit counts only when TWO
                  consecutive reads agree (single-frame pad glitches were
@@ -6629,7 +6655,8 @@ bootvid_entry:
 #ifndef NO_GAMEDRIVE
               /* stream service: when the playing buffer drains, arm the
                  other IMMEDIATELY (audio first), then refill the drained
-                 one from SD (~8KB = 0.74s of headroom per swap). EOF =
+                 one from SD (MUSBUF bytes = 12288 -> 1.11 s / 66.8 fields of
+                 headroom per swap; it was 0.46 s at 5120, see A12). EOF =
                  close+reopen: the theme loops. */
               if (mh >= 0 && g_sfx_ok && g_musvol && mkick) {
                   /* UNMUTE: both buffers drained during the mute - re-prime
@@ -6670,7 +6697,9 @@ bootvid_entry:
                      which read as PAD LAG, and starves the DSP's sample
                      fetches, which read as CHOPPY MUSIC (both user). 2KB
                      per frame keeps every stall short; the queue headroom
-                     is 0.74s and the spread fill finishes in ~4 frames. */
+                     is MUSBUF/11025 s (1.11 s at 12288; the 0.74 s this used
+                     to claim was the 8 KB era) and the spread fill finishes in
+                     exactly two ITERATIONS - not frames: see mbuf's note. */
                     /* ☠️☠️ THIS WAS `*(volatile uint32_t *)0xF1C378u` - JERRY'S
                        LOCAL SRAM. main.c's own sfx path states the law: "the 68k
                        cannot read a running JRISC honestly ... a spurious zero
@@ -6714,7 +6743,12 @@ bootvid_entry:
 #endif
                   if (mfo >= 0) {
                       int step = mfgoal - mfo;
-                      if (step > 4096) step = 4096;
+                      /* half a buffer per iteration: a refill is ALWAYS two
+                         iterations whatever MUSBUF is (5120 -> 2560+2560, the
+                         same two iterations 4096+1024 used to take; 12288 ->
+                         6144+6144, not three). One more iteration would eat
+                         a third of the headroom the bigger buffer just bought. */
+                      if (step > (MUSBUF / 2)) step = (MUSBUF / 2);
                       if (gd_fread((unsigned)mh, mbuf[mfdead] + mfo,
                                    (unsigned)step, GD_FREAD_CPU) == 0) {
                           mfo += step;
@@ -7382,6 +7416,29 @@ bootvid_entry:
                                 lb, (320 - ln*8)/2, 200, 2, 2, 0);   /* 213 collided with the art's baked TM line */
                       menu_text((fbpix *)tfb, RENDER_W, 240,
                                 "A Select", 10, 200, 2, 2, 0);
+#ifdef VIDPANEL
+                      /* MUSDIAG IN THE RING - no clip needed. L = worst loop
+                         iteration, G = worst arm->requeue gap, F = fills, all
+                         in 60Hz fields; a G at or above MUSBUF/11025*60 (66 at
+                         12288, 28 at 5120) means the voice ran dry. The label
+                         band is restored from the art every frame, so this
+                         never lingers. Same ink/row/scale as "A Select". */
+                      { char ms9[24]; int mp = 0, k9; uint32_t mv9[3];
+                        mv9[0] = vp_musloop; mv9[1] = vp_musgap; mv9[2] = vp_musfill;
+                        for (k9 = 0; k9 < 3; k9++) {
+                            uint32_t v = mv9[k9]; char d[8]; int nd = 0;
+                            if (v > 99999u) v = 99999u;
+                            ms9[mp++] = "LGF"[k9];
+                            if (!v) d[nd++] = '0';
+                            while (v) { d[nd++] = (char)('0' + v % 10u); v /= 10u; }
+                            while (nd) ms9[mp++] = d[--nd];
+                            ms9[mp++] = ' ';
+                        }
+                        ms9[mp] = 0;
+                        menu_text((fbpix *)tfb, RENDER_W, 240, ms9,
+                                  320 - 10 - menu_text_width(ms9, 2), 200, 2, 2, 0);
+                      }
+#endif
                   }
                   /* CONTROLS PAGE (2026-08-01) - an OVERLAY on the dimmed
                      title, which is exactly what the original does: the logo,
@@ -7578,7 +7635,11 @@ bootvid_entry:
                   else if ((edge & PAD_LEFT)  && *vp > 0)  { (*vp)--;
                       sfx_play(1, SFX_MENU_SPIN); }
                   else if ((edge & PAD_RIGHT) && *vp < 10) {
-                      if (*vp == 0 && !srow) mkick = 1;   /* music unmute */
+                      if (*vp == 0 && !srow) { mkick = 1;   /* music unmute */
+#ifdef VIDPANEL
+                          vp_musprev = 0;   /* the muted span is not a stall */
+#endif
+                      }
                       (*vp)++;
                       sfx_play(1, SFX_MENU_SPIN); }
               }
@@ -8611,10 +8672,11 @@ bootvid_entry:
               uint32_t pmedge = pad & ~pmprev; pmprev = pad;
               if (pmedge & PAD_PAUSE) {
                   g_pause ^= 1; g_pausesel = 0;
-                  /* ☠️ RESTAGE ON OPEN. rblob is g_arena's TITLE side and the
-                     ENEMY blobs have been overwriting it all level - the
-                     title's staging is long gone. */
-                  if (g_pause) { ring_stage(); g_ringA = 0; g_ringspin = 0; }
+                  /* Restaging moved to the overlay paint (see "PAUSE OVERLAY
+                     ENTRY"): rblob is g_arena's TITLE side and OVERLAYS the
+                     enemy blobs, and here - before the PIPELINE collect - Tom
+                     may still be reading those for the previous frame. */
+                  if (g_pause) { g_ringA = 0; g_ringspin = 0; }
               }
               if (g_pause) {
                   /* LEFT/RIGHT rotate the ring one item per press */
@@ -10735,6 +10797,50 @@ bootvid_entry:
                Painted after gpu_sync (Tom idle) and before the flip, like
                DBGROOM - plain 68k stores into a finished buffer, no Blitter,
                so it cannot race the kernel. */
+            /* PAUSE OVERLAY ENTRY / EXIT - both edges handled HERE, after the
+               PIPELINE collect, because this is the one place Tom is idle.
+               ☠️ THREE THINGS THE OLD PATH GOT WRONG (2026-09-08 audit):
+               (1) ring_stage() ran in the pad handler, BEFORE the collect, and
+                   rblob overlays the wolf/bear blobs Tom was still reading for
+                   the previous frame - a torn render, blacked by the overlay
+                   so never seen, but a kernel walking a half-written header.
+                   And BLOBCACHE then kept the displist pointing at memory
+                   that now held ring geometry after close: a garbage wolf
+                   until it moved. The sigs are invalidated on both edges.
+               (2) The ring was drawn with the TITLE atlases (indices into
+                   title_pal) through the LEVEL palette: black outlines came
+                   out white, greys came out as Lara's skin and pickup gold.
+                   This predates HRESN; it was wrong on every build. The CLUT
+                   is swapped to title_pal for the overlay and restored on exit
+                   with the same four pokes the level entry makes.
+               (3) "PAUSED" was drawn in slot 245 = Lara's lightest skin tone.
+               title_pal[0] (the title's text ink) is near-black, and 245..254
+               are the items' grey ramp, so the text gets its OWN slot: 254 is
+               poked white for the overlay (the items lose one ramp grey), and
+               the backdrop clears to 255 = the title's black, not CLEAR_IDX,
+               which is white in-game. */
+            { static int pause_on;
+              if (g_pause && !pause_on) {
+                  extern const uint16_t title_pal[];
+                  volatile uint16_t *clut = (volatile uint16_t *)0xF00400u;
+                  int k;
+                  ring_stage();                          /* Tom is idle: safe */
+                  for (k = 0; k < ENT_WOLF_MAXDRAW; k++) wolf_sig[k] = 0;
+                  for (k = 0; k < ENT_BEAR_MAXDRAW; k++) bear_sig[k] = 0;
+                  video_set_clut(title_pal);
+                  clut[254] = 0xFFFFu;                   /* overlay text ink */
+                  pause_on = 1;
+              } else if (!g_pause && pause_on) {
+                  volatile uint16_t *clut = (volatile uint16_t *)0xF00400u;
+                  int k;
+                  for (k = 0; k < ENT_WOLF_MAXDRAW; k++) wolf_sig[k] = 0;
+                  for (k = 0; k < ENT_BEAR_MAXDRAW; k++) bear_sig[k] = 0;
+                  video_set_clut(S_pal);                 /* exactly the level entry's set */
+                  clut[254] = 0x0000u; clut[255] = 0xFFFFu;
+                  clut[g_pickidx] = 0xFA37u; clut[g_dooridx] = 0x6296u;
+                  pause_on = 0;
+              }
+            }
             if (g_pause) {
                 /* THE 3D RING. Tom is idle here (after gpu_sync, before the
                    flip), which is exactly the window ring_render needs - it
@@ -10748,16 +10854,18 @@ bootvid_entry:
                     { "GAME", "DETAIL", "SOUND", "CONTROLS", "HOME" };
                 uint8_t *pfb = (uint8_t *)video_backbuffer();
                 int rsel = ((g_ringA * RG_N + 2048) / 4096) % RG_N;
-                blit_band(pfb, 0, RENDER_H, CLEAR_IDX);
+                /* ☠ glyphs are authored for 320x240. div/divy DOWNSAMPLE them
+                   to the buffer: at 320x120 that was (1,2); under HRESN=160
+                   every fb column is 2 display px, so div doubles too. Only
+                   the x was made HRESN-aware before - the text was 2x wide. */
+                int dvx = RENDER_W / VIEW_W, dvy = 240 / RENDER_H;
+                int lw = menu_text_width(rlbl[rsel], dvx);
+                blit_band(pfb, 0, RENDER_H, 255);       /* title black */
                 ring_render(pfb, g_ringA, g_ringspin);
-                /* label under the selected item, centred-ish and well left of
-                   x~240 (menu_text does not display past there) */
-                /* ☠ x was a hard 130, chosen against a 320-wide view. Scaled
-                   by the visible width so it keeps its position proportionally:
-                   130 at 320, 65 at 160. A no-op when VIEW_W == RENDER_W. */
                 menu_text(pfb, RENDER_W, RENDER_H, rlbl[rsel],
-                          130 * VIEW_W / RENDER_W, 96, 1, 2, 255);
-                menu_text(pfb, RENDER_W, RENDER_H, "PAUSED", 8, 8, 1, 2, 245);
+                          (VIEW_W - lw) / 2, 96 * RENDER_H / 120, dvx, dvy, 254);
+                menu_text(pfb, RENDER_W, RENDER_H, "PAUSED",
+                          8 * VIEW_W / RENDER_W, 8 * RENDER_H / 120, dvx, dvy, 254);
             }
 #if defined(ENEMIES) && defined(HUDTEXT)
             /* ☠️☠️ THIS IS 68000 PIXELS, EVERY FRAME.  menu_text stores one
@@ -10800,20 +10908,32 @@ bootvid_entry:
               menu_text(hfb, RENDER_W, RENDER_H, hs, 4, 14, 1, 2, 255); }
 #endif
 #ifdef ENEMIES
-            /* HEALTH BAR — flat, UNCONDITIONAL (not behind HUDTEXT), no 68k
-               text pixels: a 102x6 top-left bar of direct byte stores, painted
-               after gpu_sync (Tom idle) so it costs ~nothing.  White fill
-               scaling with g_health; the low-health slice flips to gold (240). */
-            { uint8_t *hb = (uint8_t *)video_backbuffer();
-              int hh = g_health > 0 ? (g_health > 1000 ? 1000 : g_health) : 0;
-              int w  = (hh * 100) / 1000;            /* filled px, 0..100 */
-              int fillc = (hh <= 300) ? 240 : 255;   /* gold when low, else white */
-              int y, x;
-              for (y = 2; y < 8; y++) {
-                  uint8_t *row = hb + y * RENDER_W + 3;
-                  for (x = 0; x < 102; x++)
-                      row[x] = (x == 0 || x == 101) ? 255            /* border */
-                             : (x - 1 < w ? (uint8_t)fillc : 0);     /* fill/empty */
+            /* HEALTH BAR - flat, no 68k text pixels: a top-left bar of direct
+               byte stores, painted after gpu_sync (Tom idle) so it costs
+               ~nothing. White fill scaling with g_health; the low-health slice
+               flips to gold (240).
+               ☠️ THIS WAS A11 - "a solid white bar across the top of the
+               picture" (user, 2026-09-07, then seen in the Caves too). It was
+               102 px laid out for a 320-column view and drawn UNCONDITIONALLY:
+               under HRESN=160 those 102 fb px are two thirds of the visible
+               line, PWIDTH doubles them, and at full health with nothing
+               drawn it read as an unexplained white slab. Now sized by the
+               visible width (identical at 320), and shown the way TR1 shows
+               it - while hurt or while the pistols are out - so a full-health,
+               holstered Lara has a clean screen. */
+            { int hh = g_health > 0 ? (g_health > 1000 ? 1000 : g_health) : 0;
+              if (hh < 1000 || g_guns) {
+                  uint8_t *hb = (uint8_t *)video_backbuffer();
+                  int bx = 3 * VIEW_W / RENDER_W, bw = 102 * VIEW_W / RENDER_W;
+                  int w  = (hh * (bw - 2)) / 1000;      /* filled px */
+                  int fillc = (hh <= 300) ? 240 : 255;  /* gold when low, else white */
+                  int y, x;
+                  for (y = 2; y < 8; y++) {
+                      uint8_t *row = hb + y * RENDER_W + bx;
+                      for (x = 0; x < bw; x++)
+                          row[x] = (x == 0 || x == bw - 1) ? 255         /* border */
+                                 : (x - 1 < w ? (uint8_t)fillc : 0);    /* fill/empty */
+                  }
               }
             }
 #endif

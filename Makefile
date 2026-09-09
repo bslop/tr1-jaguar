@@ -1228,6 +1228,16 @@ CFLAGS   += -DNOENTDRAW
 CXXFLAGS += -DNOENTDRAW
 endif
 
+# MUSBUF=<bytes>: title-music double-buffer size (main.c defaults to 12288).
+# Exists for the A12 A/B on the rig: MUSBUF=5120 rebuilds the buffer that was
+# shrunk for arena space and produced the skip; the default is the size the
+# service was written for. main.c is a gcc TU, so CFLAGS is the path.
+# ☠️ Verify it landed by ROM diff, not by faith - see the ENTLISTS ghost.
+ifdef MUSBUF
+CFLAGS   += -DMUSBUF=$(MUSBUF)
+CXXFLAGS += -DMUSBUF=$(MUSBUF)
+endif
+
 # ENEMYPREVIEW=1: draw ONE wolf and ONE bear at a fixed spot ~900 units in front
 # of Lara, ignoring entities, AI and every gate. main.c has had this since the
 # enemy models landed - and it was NEVER MAPPED HERE, so `make ENEMYPREVIEW=1`
