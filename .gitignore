@@ -103,3 +103,44 @@ wolf_*/
 *.elf
 *.DAT
 *.JV
+
+# ☠ DISC-DERIVED CAPTURES AND GOLDENS — origin is PUBLIC (bslop/tr1-jaguar).
+# A capture of the running engine is the disc's art on a screen, and a decoded
+# framebuffer golden is a frame of the disc's FMV. Neither is ours to publish.
+# 29 MB of climb-harness video and 157 extracted frames were tracked from
+# 2026-08-16 until 2026-09-10; they now live in the private jaguar-evidence
+# repo, which is where jaguar-shared/case-studies/EVIDENCE.md says ROM-derived
+# material goes ("everything else is ROM-derived and lives in the private
+# jaguar-evidence repo").
+# ★ ctrl_geom.bin / ctrl_atlas.bin are NOT covered: tools/gen_jagpad.py
+# generates them to REPLACE the PSX controller item, so they are our own work.
+climbmatrix/
+*.golden
+*.mkv
+*.mp4
+*.wav
+noname.o
+
+# ☠☠ BUILD OUTPUT IS DISC-DERIVED. A built ROM contains the level geometry,
+# atlas and audio EXTRACTED from the disc — publishing OPENLARA.COF publishes
+# the game's art. On 2026-09-10 there were 262 MB of these sitting untracked
+# and UNIGNORED (demo34..demo62 plus the a1_/a5_/a9_/br2_/ds_ experiment arms),
+# one `git add -A` from origin, which is public.
+# ★ Ignored by PAYLOAD TYPE as well as by directory prefix, following this
+# file's own rule above: the next arm will have a name nobody has thought of
+# yet, but it will still contain a .COF.
+# ☠ Deliberately NOT *.bin — ctrl_geom.bin / ctrl_atlas.bin are ours
+# (tools/gen_jagpad.py builds the Jaguar pad that REPLACES the PSX item).
+*.COF
+*.cof
+*.PCM
+*.LEV
+demo*/
+a[0-9]_*/
+br[0-9]_*/
+ds_*/
+mb_*/
+play_*/
+vol_*/
+yd*/
+_openlara_evidence/
