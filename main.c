@@ -6796,8 +6796,22 @@ bootvid_entry:
                   }
               }
 #endif
-              stable = p & praw;        /* 2-frame agreement */
-              praw = p;
+              /* ☠️ THE AGREEMENT PAIR IS NOW TIGHT, NOT AN ITERATION APART.
+                 `praw` used to be THIS sample from the PREVIOUS iteration, so a
+                 bit only counted when it was set at two moments >=1 iteration
+                 apart. The ring iteration is >=6 fields (the 100 ms pace floor
+                 below) and ~20 fields through the six full-repaint iterations
+                 that follow every move - so a press had to be HELD ~200 ms at
+                 rest and ~670 ms right after a move, and an ordinary tap was
+                 simply never seen. That is the "takes a few presses to move one
+                 item" the user reported 2026-09-10.
+                 `praw` is now sampled just before the flip (see the end of this
+                 loop), a few ms before this read rather than a whole iteration,
+                 so the two agreeing reads are effectively ONE sampling instant.
+                 A press no longer needs a minimum HOLD - it only needs to
+                 coincide with an instant - while the pair still rejects the
+                 single-read pad phantom the agreement was added for. */
+              stable = p & praw;        /* tight 2-read agreement */
               if (armed < 6) {          /* fixed short blind window at boot:
                                            swallows single-frame pad phantoms
                                            WITHOUT punishing early presses
@@ -7557,6 +7571,13 @@ bootvid_entry:
                     uint32_t pg = 0;
                     while (frame_count - pacef < 6 && ++pg < 400000u) ;
                     pacef = frame_count; }
+                  /* SECOND HALF OF THE DEBOUNCE PAIR. Taken here, at the very
+                     end of the iteration, so it sits a few ms before the next
+                     iteration's read instead of a whole iteration before it -
+                     see the note at `stable = p & praw`. Sampling it AFTER the
+                     pace spin (not before) is what makes the pair tight: the
+                     spin is most of a rest-iteration's 100 ms. */
+                  praw = joypad_read();
                   video_flip();
                   video_wait_vblank();
               }
@@ -10823,10 +10844,20 @@ bootvid_entry:
               if (g_pause && !pause_on) {
                   extern const uint16_t title_pal[];
                   volatile uint16_t *clut = (volatile uint16_t *)0xF00400u;
-                  int k;
                   ring_stage();                          /* Tom is idle: safe */
-                  for (k = 0; k < ENT_WOLF_MAXDRAW; k++) wolf_sig[k] = 0;
-                  for (k = 0; k < ENT_BEAR_MAXDRAW; k++) bear_sig[k] = 0;
+                  /* ☠️☠️ DO NOT INVALIDATE THE ENEMY SIGS HERE. Doing it on
+                     THIS edge black-screened the machine (2026-09-10, demo59):
+                     the enemy draw scan runs LATER in the same frame than this
+                     block, and it is NOT skipped while paused (ent_paused only
+                     skips AI). Zeroing the sig makes blob_hit miss, so
+                     build_ent_wolf rebuilds into g_arena.g.wolf - the SAME
+                     memory ring_stage just filled with ring geometry. Next
+                     frame the ring kernel walks a corrupted blob, hangs, and
+                     gpu_sync spins forever: dead video, black border.
+                     The old code's not invalidating here is what made the
+                     stale cache load-bearing - it kept build_ent_wolf from
+                     running while paused. Invalidate on the EXIT edge only,
+                     which is where the blobs are genuinely stale. */
                   video_set_clut(title_pal);
                   clut[254] = 0xFFFFu;                   /* overlay text ink */
                   pause_on = 1;
