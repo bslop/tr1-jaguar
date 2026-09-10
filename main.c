@@ -10013,8 +10013,20 @@ bootvid_entry:
                     if (lanim_done()) {
                         static int death_hold = 0;   /* BSS: zeroed by the reboot */
                         if (++death_hold > 30) {     /* ~a few seconds of YOU DIED */
-                            extern void _start(void);
-                            _start();                /* -> attract (Eidos) */
+                            /* ☠️ soft_reboot(), NOT a bare _start(). This called
+                               _start() directly and died on a BLACK SCREEN
+                               (user, 2026-09-10). A naked re-entry leaves TOM
+                               AND JERRY RUNNING and interrupts unmasked while
+                               _start clears .bss underneath them - two live
+                               coprocessors reading a buffer being zeroed. That
+                               is the same fault that took four attempts to fix
+                               for * + #; soft_reboot() masks interrupts, parks
+                               the OP (VMODE=0), halts G_CTRL and D_CTRL and
+                               only then re-enters, and it is proven on silicon.
+                               It also restores the .data snapshot on the way
+                               back up, which a bare _start() would equally
+                               need and which is what the caches depend on. */
+                            soft_reboot();           /* -> attract (Eidos) */
                         }
                     }
                 } else if (!grounded) {
