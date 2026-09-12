@@ -58,10 +58,30 @@ FROM rust:1-slim-bookworm AS cobweb
 # A/B: the tip additionally carries e86d294 (2026-09-01), which SCOPES the
 # .align fix above to relocatable objects only. That is a correction to the very
 # behaviour the A10 boot lottery turned on, so it is not a free upgrade.
-ARG COBWEB_REV=98a9822
+# ☠☠☠ 2026-09-11: THIS PIN HAS NOW DIED THREE TIMES TO THREE REWRITES.
+#   ba9c680 -> f86794a -> 5194a0f   (mem-to-mem MOVE dropped its DEST reloc)
+#   9da2f99 -> 98a9822 -> beaa186   (object-mode .align is section-relative)
+# Same two commits throughout; only the hashes moved. cobweb's history is
+# rewritten periodically (public/MIT relicense, then a contributor scrub, then a
+# path scrub), and EVERY rewrite invalidates every hash anyone has written down.
+# ⇒ A BARE HASH PIN AGAINST THIS REPO IS NOT DURABLE. What survives a rewrite is
+# the SUBJECT LINE and the author date, which is how all three recoveries were
+# actually done. The hash below is the current address of a commit identified by
+# "jas: object-mode .align is SECTION-relative and raises sh_addralign".
+# ★ And the reason it kept going unnoticed: Docker caches the compiled
+# jas/jcc68k layers, so the clone+checkout never re-runs and a dead pin produces
+# correct builds indefinitely. The RUN below now ASSERTS the pin resolves before
+# using it, so the next rewrite fails loudly here instead of on some future
+# clean machine weeks later.
+ARG COBWEB_REV=beaa186
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 RUN git clone https://github.com/bslop/cobweb.git /cobweb \
+    && ( git -C /cobweb cat-file -e "$COBWEB_REV^{commit}" \
+         || ( echo "!!! COBWEB_REV=$COBWEB_REV does not resolve - cobweb was" \
+                   "rewritten again. Re-map by SUBJECT LINE, not by hash:" >&2; \
+              echo "!!!   git -C /cobweb log --oneline --grep='object-mode .align'" >&2; \
+              exit 1 ) ) \
     && git -C /cobweb checkout $COBWEB_REV \
     && cargo build --release --manifest-path /cobweb/sim/Cargo.toml \
     && strip /cobweb/sim/target/release/jas /cobweb/sim/target/release/jcc68k || true

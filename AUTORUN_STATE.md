@@ -720,7 +720,7 @@ Tree had NO assets (`disc/` did not exist) and no ROM. Full path, ~15 min:
       -e DISC_NAME="Tomb Raider (USA) (v1.6).cue" -e QUALITY=playable -e VIDEO=0 \
       -e BUILD_FLAGS="<the 109-117 flags> AUTOSTART=1 PADMUTE=1" tr-jaguar
     cobweb/sim/target/release/jagemu run out_auto/OPENLARA.COF --frames {600,900} --fidelity silicon
-★ `COBWEB_REV` stays pinned at **9da2f99** deliberately — that is the toolchain every
+★ ☠ THE HASHES BELOW ARE DEAD (rewrite #3, 2026-09-11) — kept as narrative, not as addresses. `COBWEB_REV` was pinned at **9da2f99** deliberately — that is the toolchain every
 silicon-measured ROM used; bumping it re-rolls A10 and changes the ROM. Local cobweb
 (03b4ef5) is used only to MEASURE.
 ☠️ **`AUTOSTART=1` is mandatory or you profile the TITLE RING** — a plain release ROM

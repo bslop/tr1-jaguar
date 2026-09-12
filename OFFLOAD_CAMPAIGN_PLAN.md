@@ -214,7 +214,7 @@ Present, side by side, on the TV: `320×60` (today's `playable`), `160×120` (sa
 - **jagemu ignores PWIDTH entirely** — `VM_PWIDTH_SHIFT`/`MASK` are defined at `mem.rs:116-117` and referenced nowhere. A PWIDTH8 build renders perfectly offline no matter what silicon's pixel clock does. This is the one part that is 100% silicon-only, and the mitigation is the peer existence proof (jag_quake ships `VMODE=$EC1`).
 - `tools/overdraw.py` and `fps_offline.py` remain broken (`fps_offline.py` launches `jagemu serve` with **no `--fidelity`** and discards the warning — every number it has produced is from the functional timeline). Do not use either.
 
-**Process risk.** `build_cof.sh` was unable to build a ROM for 9 days (`54e55a6`→`fb2b316`) and **exited 0** the whole time. Before any arm: confirm a ROM exists and screenshot the measurement window. `COBWEB_REV` stays pinned at `9da2f99` for builds — bumping it re-rolls A10; local cobweb (`03b4ef5`, 1 commit) is for **measuring only**.
+**Process risk.** `build_cof.sh` was unable to build a ROM for 9 days (`54e55a6`→`fb2b316`) and **exited 0** the whole time. Before any arm: confirm a ROM exists and screenshot the measurement window. `COBWEB_REV` stays pinned for builds — bumping it re-rolls A10; local cobweb is for **measuring only**. ☠ The hashes this line used to name (`9da2f99` build, `03b4ef5` measure) are BOTH DEAD: cobweb's history has been rewritten three times and every written-down hash died with it. The build pin now lives only in the Dockerfile, which asserts it resolves; identify cobweb commits by SUBJECT LINE, not by hash.
 
 ---
 
